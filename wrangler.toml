@@ -1,0 +1,13 @@
+name = "multi-chain-rpc-proxy"
+main = "src/worker.js"
+compatibility_date = "2024-01-01"
+
+[[rpc_urls]]
+solana = ["https://api.mainnet-beta.solana.com", "https://rpc.ankr.com/solana", "https://solana-rpc.publicnode.com", "https://1rpc.io/solana"]
+ethereum = ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth", "https://ethereum.publicnode.com", "https://1rpc.io/eth"]
+bsc = ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.binance.org", "https://rpc.ankr.com/bsc", "https://1rpc.io/bnb"]
+polygon = ["https://polygon-rpc.com", "https://rpc.ankr.com/polygon", "https://polygon-bor-rpc.publicnode.com", "https://1rpc.io/matic"]
+arbitrum = ["https://arb1.arbitrum.io/rpc", "https://rpc.ankr.com/arbitrum", "https://arbitrum-one-rpc.publicnode.com", "https://1rpc.io/arb"]
+base = ["https://mainnet.base.org", "https://rpc.ankr.com/base", "https://base-rpc.publicnode.com", "https://1rpc.io/base"]
+avalanche = ["https://api.avax.network/ext/bc/C/rpc", "https://rpc.ankr.com/avalanche", "https://avalanche-c-chain-rpc.publicnode.com", "https://1rpc.io/avax"]
+optimism = ["https://mainnet.optimism.io", "https://rpc.ankr.com/optimism", "https://optimism-rpc.publicnode.com", "https://1rpc.io/op"]
