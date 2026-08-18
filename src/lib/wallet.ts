@@ -4,7 +4,7 @@ import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.j
 import { ethers } from 'ethers';
 import { encrypt, decrypt } from './encryption';
 import { generateId, getTimestamp, madarCreate, madarRead, madarUpdate } from './madarTech';
-import { AccountManager } from './accounts'; // ✅ إضافة استيراد AccountManager
+import { AccountManager } from './accounts';
 
 // ============ الأنواع ============
 
@@ -29,10 +29,9 @@ export interface TradeResult {
 
 // ============ Worker Proxy (حل مشكلة CORS) ============
 
-// ✅ استخدام Worker Proxy بدلاً من RPC مباشر
 const WORKER_URL = 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 
-// ============ RPC URLs مع Fallback (احتياطي) ============
+// ============ RPC URLs احتياطي (في حال فشل Worker) ============
 
 const RPC_URLS = [
   'https://api.mainnet-beta.solana.com',
@@ -76,11 +75,11 @@ export function createWallet(network: string): { address: string; privateKey: st
   return createEvmWallet();
 }
 
-// ============ جلب الرصيد (مع Worker Proxy) ============
+// ============ جلب الرصيد (عبر Worker Proxy) ============
 
 export async function getSolanaBalance(address: string): Promise<number> {
   try {
-    // ✅ استخدام Worker Proxy أولاً
+    // ✅ استخدام Worker Proxy
     const response = await fetch(`${WORKER_URL}/solana`, {
       method: 'POST',
       headers: {
@@ -101,7 +100,7 @@ export async function getSolanaBalance(address: string): Promise<number> {
     return 0;
   } catch (error) {
     console.warn('⚠️ Worker Proxy فشل، جاري التبديل إلى RPC مباشر:', error);
-    // ✅ إذا فشل الـ Worker، استخدم RPC مباشر
+    // ✅ في حال فشل Worker، استخدم RPC مباشر
     return getSolanaBalanceDirect(address);
   }
 }
@@ -126,36 +125,42 @@ export async function getSolanaBalanceDirect(address: string): Promise<number> {
   }
 }
 
-export async function getEvmBalance(address: string, rpcUrl: string): Promise<number> {
+// ============ جلب رصيد EVM (عبر Worker Proxy) ============
+
+export async function getEvmBalance(address: string, network: string): Promise<number> {
   try {
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const balance = await provider.getBalance(address);
-    return parseFloat(ethers.formatEther(balance));
+    // ✅ استخدام Worker Proxy
+    const response = await fetch(`${WORKER_URL}/${network}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'eth_getBalance',
+        params: [address, 'latest'],
+      }),
+    });
+
+    const data = await response.json();
+    if (data.result) {
+      return parseInt(data.result, 16) / 1e18;
+    }
+    return 0;
   } catch (error) {
-    console.error('EVM balance error:', error);
+    console.warn(`⚠️ Worker Proxy فشل لـ ${network}:`, error);
     return 0;
   }
 }
 
+// ============ جلب رصيد أي شبكة ============
+
 export async function getWalletBalance(network: string, address: string): Promise<number> {
-  const rpcUrls: Record<string, string> = {
-    solana: getWorkingRpcUrl(),
-    ethereum: 'https://eth.llamarpc.com',
-    bsc: 'https://bsc-dataseed.binance.org',
-    polygon: 'https://polygon-rpc.com',
-    base: 'https://mainnet.base.org',
-    arbitrum: 'https://arb1.arbitrum.io/rpc',
-    avalanche: 'https://api.avax.network/ext/bc/C/rpc',
-    optimism: 'https://mainnet.optimism.io',
-    robinhood: 'https://eth.llamarpc.com',
-  };
-
-  const rpc = rpcUrls[network] || rpcUrls.ethereum;
-
   if (network === 'solana') {
     return getSolanaBalance(address);
   }
-  return getEvmBalance(address, rpc);
+  return getEvmBalance(address, network);
 }
 
 // ============ ParaSwap API (لـ EVM) ============
@@ -483,11 +488,8 @@ export class BotWalletManager {
     }
   }
 
-  // ============ ✅ دالة جديدة للوضع المنفرد ============
+  // ============ دالة للوضع المنفرد ============
 
-  /**
-   * تنفيذ شراء من محفظة مستخدم معين (الوضع المنفرد)
-   */
   async executeBuyForUser(params: {
     userId: string;
     tokenAddress: string;
@@ -499,13 +501,11 @@ export class BotWalletManager {
     try {
       const network = params.network || 'solana';
       
-      // ✅ جلب محفظة المستخدم من AccountManager
       const userWallet = await AccountManager.getUserWallet(params.userId, network);
       if (!userWallet) {
         throw new Error(`لا توجد محفظة للمستخدم ${params.userId} على ${network}`);
       }
 
-      // ✅ تنفيذ الصفقة
       if (network === 'solana') {
         const result = await executeJupiterSwap({
           tokenAddress: params.tokenAddress,
@@ -518,7 +518,6 @@ export class BotWalletManager {
           return { success: false, error: result.error, amount: params.amount, tokenAddress: params.tokenAddress };
         }
 
-        // ✅ تحديث رصيد المستخدم
         await AccountManager.getUserWalletBalance(params.userId, network);
 
         return {
@@ -530,7 +529,6 @@ export class BotWalletManager {
         };
       }
 
-      // ✅ EVM
       const result = await executeParaSwapTrade({
         network,
         tokenAddress: params.tokenAddress,
@@ -544,7 +542,6 @@ export class BotWalletManager {
         return { success: false, error: result.error, amount: params.amount, tokenAddress: params.tokenAddress };
       }
 
-      // ✅ تحديث رصيد المستخدم
       await AccountManager.getUserWalletBalance(params.userId, network);
 
       return {
@@ -559,9 +556,6 @@ export class BotWalletManager {
     }
   }
 
-  /**
-   * تنفيذ بيع من محفظة مستخدم معين (الوضع المنفرد)
-   */
   async executeSellForUser(params: {
     userId: string;
     tokenAddress: string;
@@ -573,13 +567,11 @@ export class BotWalletManager {
     try {
       const network = params.network || 'solana';
       
-      // ✅ جلب محفظة المستخدم
       const userWallet = await AccountManager.getUserWallet(params.userId, network);
       if (!userWallet) {
         throw new Error(`لا توجد محفظة للمستخدم ${params.userId} على ${network}`);
       }
 
-      // ✅ تنفيذ البيع
       const txHash = `0x${generateId()}${generateId()}`;
       await AccountManager.getUserWalletBalance(params.userId, network);
 
