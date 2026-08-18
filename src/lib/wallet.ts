@@ -1,4 +1,4 @@
-﻿// src/lib/wallet.ts
+// src/lib/wallet.ts
 
 import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { ethers } from 'ethers';
@@ -27,7 +27,12 @@ export interface TradeResult {
   tokenSymbol?: string;
 }
 
-// ============ RPC URLs مع Fallback ============
+// ============ Worker Proxy (حل مشكلة CORS) ============
+
+// ✅ استخدام Worker Proxy بدلاً من RPC مباشر
+const WORKER_URL = 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+
+// ============ RPC URLs مع Fallback (احتياطي) ============
 
 const RPC_URLS = [
   'https://api.mainnet-beta.solana.com',
@@ -71,20 +76,50 @@ export function createWallet(network: string): { address: string; privateKey: st
   return createEvmWallet();
 }
 
-// ============ جلب الرصيد ============
+// ============ جلب الرصيد (مع Worker Proxy) ============
 
-export async function getSolanaBalance(address: string, rpcUrl?: string): Promise<number> {
-  const url = rpcUrl || getWorkingRpcUrl();
+export async function getSolanaBalance(address: string): Promise<number> {
+  try {
+    // ✅ استخدام Worker Proxy أولاً
+    const response = await fetch(`${WORKER_URL}/solana`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getBalance',
+        params: [address],
+      }),
+    });
+
+    const data = await response.json();
+    if (data.result) {
+      return data.result.value / LAMPORTS_PER_SOL;
+    }
+    return 0;
+  } catch (error) {
+    console.warn('⚠️ Worker Proxy فشل، جاري التبديل إلى RPC مباشر:', error);
+    // ✅ إذا فشل الـ Worker، استخدم RPC مباشر
+    return getSolanaBalanceDirect(address);
+  }
+}
+
+// ============ جلب الرصيد (RPC مباشر - احتياطي) ============
+
+export async function getSolanaBalanceDirect(address: string): Promise<number> {
+  const url = getWorkingRpcUrl();
   try {
     const connection = new Connection(url, 'confirmed');
     const pubKey = new PublicKey(address);
     const balance = await connection.getBalance(pubKey);
     return balance / LAMPORTS_PER_SOL;
   } catch (error: any) {
-    if (error.message?.includes('403') || error.message?.includes('Access forbidden') || error.message?.includes('429')) {
+    if (error.message?.includes('403') || error.message?.includes('Access forbidden') || error.message?.includes('429') || error.message?.includes('fetch')) {
       workingRpcIndex = (workingRpcIndex + 1) % RPC_URLS.length;
       console.log(`🔄 تبديل RPC إلى: ${RPC_URLS[workingRpcIndex]}`);
-      return getSolanaBalance(address, RPC_URLS[workingRpcIndex]);
+      return getSolanaBalanceDirect(address);
     }
     console.error('Solana balance error:', error);
     return 0;
@@ -105,7 +140,7 @@ export async function getEvmBalance(address: string, rpcUrl: string): Promise<nu
 export async function getWalletBalance(network: string, address: string): Promise<number> {
   const rpcUrls: Record<string, string> = {
     solana: getWorkingRpcUrl(),
-    ethereum: 'https://mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161',
+    ethereum: 'https://eth.llamarpc.com',
     bsc: 'https://bsc-dataseed.binance.org',
     polygon: 'https://polygon-rpc.com',
     base: 'https://mainnet.base.org',
@@ -118,7 +153,7 @@ export async function getWalletBalance(network: string, address: string): Promis
   const rpc = rpcUrls[network] || rpcUrls.ethereum;
 
   if (network === 'solana') {
-    return getSolanaBalance(address, rpc);
+    return getSolanaBalance(address);
   }
   return getEvmBalance(address, rpc);
 }
@@ -197,33 +232,8 @@ async function executeJupiterSwap(params: {
   walletAddress: string;
 }): Promise<{ txHash: string; error: string | null }> {
   try {
-    // ✅ 1. جلب السعر من API الجديد
-    const priceResponse = await fetch(
-      `https://api.jup.ag/price/v3?ids=${params.tokenAddress}`,
-      {
-        headers: JUPITER_API_KEY ? { Authorization: `Bearer ${JUPITER_API_KEY}` } : {},
-      }
-    );
-
-    if (!priceResponse.ok) {
-      const errorText = await priceResponse.text();
-      return { txHash: '', error: `فشل جلب السعر: ${errorText}` };
-    }
-
-    const priceData = await priceResponse.json();
-    const price = priceData[params.tokenAddress]?.usdPrice;
-    
-    if (!price) {
-      return { txHash: '', error: 'لم يتم العثور على السعر للعملة المطلوبة' };
-    }
-
-    // ✅ 2. حساب المبلغ
-    const amountUsd = params.amountInSol * price;
-    const amountInBaseUnits = Math.floor(amountUsd * 1e6);
-
-    // ✅ 3. جلب عرض السعر (Quote)
     const quoteResponse = await fetch(
-      `https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${params.tokenAddress}&amount=${Math.floor(params.amountInSol * 1e9)}&slippageBps=${Math.floor(params.slippage * 100)}`,
+      `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${params.tokenAddress}&amount=${Math.floor(params.amountInSol * 1e9)}&slippageBps=${Math.floor(params.slippage * 100)}`,
       {
         headers: JUPITER_API_KEY ? { Authorization: `Bearer ${JUPITER_API_KEY}` } : {},
       }
@@ -231,13 +241,12 @@ async function executeJupiterSwap(params: {
 
     if (!quoteResponse.ok) {
       const errorText = await quoteResponse.text();
-      return { txHash: '', error: `فشل جلب عرض السعر: ${errorText}` };
+      return { txHash: '', error: `فشل جلب السعر: ${errorText}` };
     }
 
     const quote = await quoteResponse.json();
 
-    // ✅ 4. تنفيذ التبادل (Swap)
-    const swapResponse = await fetch('https://api.jup.ag/swap/v1/swap', {
+    const swapResponse = await fetch('https://quote-api.jup.ag/v6/swap', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -259,11 +268,11 @@ async function executeJupiterSwap(params: {
 
     const { swapTransaction } = await swapResponse.json();
     return { txHash: swapTransaction, error: null };
-
   } catch (error) {
     return { txHash: '', error: error instanceof Error ? error.message : 'خطأ غير معروف' };
   }
 }
+
 // ============ BotWalletManager ============
 
 export class BotWalletManager {
