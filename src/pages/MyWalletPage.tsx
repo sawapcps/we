@@ -4,7 +4,27 @@ import { useState, useEffect } from "react";
 import { useApp } from "../context/AppContext";
 import { AccountManager } from "../lib/accounts";
 import { formatUsd } from "../lib/format";
-import { Wallet, Copy, Check, TrendingUp, Coins, DollarSign, ArrowUpRight, History, Shield } from "lucide-react";
+import { 
+  Wallet, Copy, Check, TrendingUp, Coins, DollarSign, 
+  ArrowUpRight, History, Shield, Save, AlertCircle, Trash2 
+} from "lucide-react";
+
+// ✅ ثوابت MadarTech API
+const MADARTECH_API_URL = import.meta.env.VITE_MADARTECH_API_URL || 'https://cloud.madartech.uk/api/v1';
+const MADARTECH_DB_ID = import.meta.env.VITE_MADARTECH_DB_ID || 'mt_live_AZyHOq0IztD6H5gsSafGbpjo00kDcKAPRDh0Gcob';
+const MADARTECH_API_KEY = 'mt_live_uqkE8sldXpFASeV51lIyVghJQKs4hZTheAbyAaJh';
+// ✅ قائمة الشبكات المدعومة
+const SUPPORTED_NETWORKS = [
+  { id: 'solana', name: 'Solana', icon: '🟣' },
+  { id: 'ethereum', name: 'Ethereum', icon: '🔵' },
+  { id: 'bsc', name: 'BNB Chain', icon: '🟡' },
+  { id: 'polygon', name: 'Polygon', icon: '🟣' },
+  { id: 'arbitrum', name: 'Arbitrum', icon: '🔷' },
+  { id: 'base', name: 'Base', icon: '🔷' },
+  { id: 'avalanche', name: 'Avalanche', icon: '🔴' },
+  { id: 'optimism', name: 'Optimism', icon: '🔴' },
+  { id: 'robinhood', name: 'Robinhood', icon: '🦊' },
+];
 
 export function MyWalletPage() {
   const { user, addLog } = useApp();
@@ -13,42 +33,145 @@ export function MyWalletPage() {
   const [totalFees, setTotalFees] = useState(0);
   const [totalDeposited, setTotalDeposited] = useState(0);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [userWallets, setUserWallets] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [withdrawAddress, setWithdrawAddress] = useState("");
+  const [selectedNetwork, setSelectedNetwork] = useState("solana");
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
       loadUserData();
+      loadUserWallets();
     }
   }, [user]);
+
+  // ✅ جلب userId من قاعدة البيانات
+  const getUserId = async (): Promise<string | null> => {
+    try {
+      const email = user?.email || 'admin@cryptobot.com';
+      const result = await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `SELECT id FROM users WHERE email = ?`,
+          dbId: MADARTECH_DB_ID,
+          params: [email]
+        })
+      });
+      const data = await result.json();
+      
+      if (data.success && data.data && data.data.length > 0) {
+        const userId = String(data.data[0].id);
+        console.log('✅ userId المستخدم:', userId);
+        return userId;
+      }
+      
+      console.log('⚠️ لم يتم العثور على المستخدم');
+      return null;
+    } catch (error) {
+      console.error("خطأ في جلب userId:", error);
+      return null;
+    }
+  };
+
+  // ✅ جلب محافظ المستخدم
+  const loadUserWallets = async () => {
+    try {
+      const userId = await getUserId();
+      if (!userId) {
+        console.log('⚠️ لا يوجد userId، لا يمكن جلب المحافظ');
+        setUserWallets([]);
+        return;
+      }
+
+      const result = await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `SELECT * FROM user_wallets WHERE userId = ? ORDER BY createdAt DESC`,
+          dbId: MADARTECH_DB_ID,
+          params: [userId]
+        })
+      });
+      const data = await result.json();
+      
+      console.log('📋 محافظ المستخدم:', data);
+      
+      if (data.success && data.data) {
+        setUserWallets(data.data);
+        if (data.data.length > 0) {
+          const defaultWallet = data.data[0];
+          setWithdrawAddress(defaultWallet.address);
+          setSelectedNetwork(defaultWallet.network);
+        }
+      } else {
+        setUserWallets([]);
+      }
+    } catch (error) {
+      console.error("فشل جلب محافظ المستخدم:", error);
+      setUserWallets([]);
+    }
+  };
 
   const loadUserData = async () => {
     setIsLoading(true);
     setError(null);
+    setSuccess(null);
     try {
-      // ✅ إذا كان المستخدم أدمن مدمج (غير موجود في قاعدة البيانات)
-      if (user.email === 'admin@cryptobot.com') {
-        setBalance(0);
-        setTotalProfit(0);
-        setTotalFees(0);
-        setTotalDeposited(0);
-        setTransactions([]);
+      const userId = await getUserId();
+      if (!userId) {
         setIsLoading(false);
         return;
       }
 
-      // ✅ للمستخدمين العاديين (الموجودين في قاعدة البيانات)
-      const stats = await AccountManager.getUserStats(user.id);
-      setBalance(stats.netBalance || 0);
-      setTotalProfit(stats.totalProfit || 0);
-      setTotalFees(stats.totalFees || 0);
-      setTotalDeposited(stats.totalDeposited || 0);
+      const result = await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `SELECT balance, totalProfit, totalFees, totalDeposited FROM users WHERE id = ?`,
+          dbId: MADARTECH_DB_ID,
+          params: [userId]
+        })
+      });
+      const data = await result.json();
+      
+      if (data.success && data.data && data.data.length > 0) {
+        const userData = data.data[0];
+        setBalance(userData.balance || 0);
+        setTotalProfit(userData.totalProfit || 0);
+        setTotalFees(userData.totalFees || 0);
+        setTotalDeposited(userData.totalDeposited || 0);
+      }
 
-      const txs = await AccountManager.getTransactions(user.id);
-      setTransactions(txs.slice(0, 10));
+      const txsResult = await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `SELECT * FROM transactions WHERE userId = ? ORDER BY createdAt DESC LIMIT 10`,
+          dbId: MADARTECH_DB_ID,
+          params: [userId]
+        })
+      });
+      const txsData = await txsResult.json();
+      if (txsData.success && txsData.data) {
+        setTransactions(txsData.data);
+      }
     } catch (error) {
       console.error("خطأ في تحميل البيانات:", error);
       setError("فشل تحميل بيانات المحفظة");
@@ -57,31 +180,188 @@ export function MyWalletPage() {
     }
   };
 
-  const handleWithdraw = async () => {
-    const amount = parseFloat(withdrawAmount);
-    if (!amount || amount <= 0) {
-      setError("الرجاء إدخال مبلغ صحيح");
-      return;
-    }
-    if (amount > balance) {
-      setError("الرصيد غير كافٍ");
-      return;
-    }
-    if (!withdrawAddress) {
-      setError("الرجاء إدخال عنوان محفظتك الشخصية");
+  // ✅ حفظ عنوان المحفظة
+  const saveWithdrawAddress = async () => {
+    if (!withdrawAddress || withdrawAddress.trim() === "") {
+      setError("❌ الرجاء إدخال عنوان محفظتك");
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    try {
-      const password = prompt("أدخل كلمة المرور لتأكيد السحب");
-      if (!password) return;
+    setSuccess(null);
 
-      await AccountManager.withdraw(user.id, amount, password);
-      addLog("SUCCESS", `✅ تم سحب $${amount.toFixed(2)}`);
+    try {
+      const userId = await getUserId();
+      if (!userId) {
+        throw new Error('لا يمكن تحديد هوية المستخدم');
+      }
+
+      console.log('✅ حفظ المحفظة للمستخدم:', userId);
+
+      const checkResult = await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `SELECT * FROM user_wallets WHERE userId = ? AND network = ?`,
+          dbId: MADARTECH_DB_ID,
+          params: [userId, selectedNetwork]
+        })
+      });
+      const checkData = await checkResult.json();
+      
+      if (checkData.success && checkData.data && checkData.data.length > 0) {
+        setError(`❌ توجد محفظة بالفعل لشبكة ${selectedNetwork}`);
+        setIsLoading(false);
+        return;
+      }
+
+      await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `INSERT INTO user_wallets (userId, network, address, encryptedPrivateKey, balance, createdAt, updatedAt) 
+                VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'))`,
+          dbId: MADARTECH_DB_ID,
+          params: [
+            userId, 
+            selectedNetwork, 
+            withdrawAddress,
+            'encrypted_' + Date.now()
+          ]
+        })
+      });
+
+      await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `UPDATE users SET walletAddress = ? WHERE id = ?`,
+          dbId: MADARTECH_DB_ID,
+          params: [withdrawAddress, userId]
+        })
+      });
+
+      setSuccess(`✅ تم حفظ محفظة ${selectedNetwork} بنجاح!`);
+      addLog("SUCCESS", `✅ تم حفظ محفظة ${selectedNetwork}: ${withdrawAddress}`);
+      
+      await loadUserWallets();
+      setWithdrawAddress("");
+      
+      setTimeout(() => setSuccess(null), 5000);
+    } catch (error) {
+      setError(String(error));
+      addLog("ERROR", "❌ فشل حفظ المحفظة: " + String(error));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ✅ حذف محفظة
+  const deleteWallet = async (walletId: string) => {
+    if (!confirm("هل أنت متأكد من حذف هذه المحفظة؟")) return;
+
+    setIsLoading(true);
+    try {
+      await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `DELETE FROM user_wallets WHERE id = ?`,
+          dbId: MADARTECH_DB_ID,
+          params: [walletId]
+        })
+      });
+
+      setSuccess("✅ تم حذف المحفظة بنجاح");
+      await loadUserWallets();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    const amount = parseFloat(withdrawAmount);
+    if (!amount || amount <= 0) {
+      setError("❌ الرجاء إدخال مبلغ صحيح");
+      return;
+    }
+    if (amount > balance) {
+      setError(`❌ الرصيد غير كافٍ. الرصيد المتاح: $${balance.toFixed(2)}`);
+      return;
+    }
+    if (!withdrawAddress) {
+      setError("❌ الرجاء اختيار محفظة للسحب");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const password = prompt("🔐 أدخل كلمة المرور لتأكيد السحب");
+      if (!password) {
+        setIsLoading(false);
+        return;
+      }
+
+      const userId = await getUserId();
+      if (!userId) {
+        throw new Error('لا يمكن تحديد هوية المستخدم');
+      }
+
+      await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `UPDATE users SET balance = balance - ? WHERE id = ?`,
+          dbId: MADARTECH_DB_ID,
+          params: [amount, userId]
+        })
+      });
+
+      await fetch(`${MADARTECH_API_URL}/sql`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MADARTECH_API_KEY}`
+        },
+        body: JSON.stringify({
+          sql: `INSERT INTO transactions (id, userId, type, amount, balanceAfter, description, status, createdAt) 
+                VALUES (?, ?, 'WITHDRAW', ?, ?, ?, 'completed', datetime('now'))`,
+          dbId: MADARTECH_DB_ID,
+          params: [
+            'tx_' + Date.now(),
+            userId,
+            amount,
+            balance - amount,
+            `💸 سحب $${amount.toFixed(2)} إلى ${selectedNetwork}`
+          ]
+        })
+      });
+
+      setSuccess(`✅ تم سحب $${amount.toFixed(2)} بنجاح إلى ${selectedNetwork}`);
       setWithdrawAmount("");
       await loadUserData();
+      setTimeout(() => setSuccess(null), 5000);
     } catch (error) {
       setError(String(error));
       addLog("ERROR", "❌ فشل السحب: " + String(error));
@@ -107,13 +387,35 @@ export function MyWalletPage() {
   return (
     <div className="space-y-6 max-w-4xl mx-auto p-6">
       <div>
-        <h1 className="text-2xl font-bold">💰 محفظتي</h1>
-        <p className="text-gray-500 dark:text-gray-400">إدارة أرباحك وعمليات السحب</p>
+        <h1 className="text-2xl font-bold text-white">💰 محفظتي</h1>
+        <p className="text-gray-400 text-sm mt-1">إدارة محافظك وعمليات السحب</p>
       </div>
 
+      {/* ✅ رسائل الخطأ والنجاح */}
       {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3">
-          <p className="text-red-400 text-sm">❌ {error}</p>
+        <div className="bg-red-500/20 border border-red-500 rounded-xl p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-red-400 font-medium text-sm">{error}</p>
+          </div>
+          <button 
+            onClick={() => setError(null)}
+            className="text-red-400 hover:text-red-300 text-sm ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {success && (
+        <div className="bg-emerald-500/20 border border-emerald-500 rounded-xl p-4 flex items-start gap-3">
+          <span className="text-emerald-400 text-sm flex-1">{success}</span>
+          <button 
+            onClick={() => setSuccess(null)}
+            className="text-emerald-400 hover:text-emerald-300 text-sm"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -124,136 +426,191 @@ export function MyWalletPage() {
           </div>
           <div>
             <h3 className="font-semibold text-emerald-400">نظام الأرباح: 85% لك</h3>
-            <p className="text-sm text-gray-400">
-              من كل ربح، تحصل على <span className="text-emerald-400 font-bold">85%</span> فوراً، 
-              و<span className="text-amber-400 font-bold">15%</span> تذهب لتطوير المنصة
-            </p>
+            <p className="text-sm text-gray-400">من كل ربح، تحصل على 85% فوراً، و15% تذهب لتطوير المنصة</p>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center gap-2 text-gray-500">
+        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-2 text-gray-400">
             <DollarSign size={18} />
             <span className="text-sm">الرصيد المتاح</span>
           </div>
-          <div className="text-2xl font-bold text-green-500">${balance.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-emerald-400">${balance.toFixed(2)}</div>
         </div>
-        <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center gap-2 text-gray-500">
+        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-2 text-gray-400">
             <TrendingUp size={18} />
             <span className="text-sm">إجمالي الأرباح</span>
           </div>
-          <div className="text-2xl font-bold text-blue-500">${totalProfit.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-blue-400">${totalProfit.toFixed(2)}</div>
         </div>
-        <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center gap-2 text-gray-500">
+        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-2 text-gray-400">
             <Coins size={18} />
             <span className="text-sm">العمولات (15%)</span>
           </div>
-          <div className="text-2xl font-bold text-amber-500">${totalFees.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-amber-400">${totalFees.toFixed(2)}</div>
         </div>
-        <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center gap-2 text-gray-500">
+        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-2 text-gray-400">
             <Wallet size={18} />
             <span className="text-sm">إجمالي الإيداع</span>
           </div>
-          <div className="text-2xl font-bold text-purple-500">${totalDeposited.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-purple-400">${totalDeposited.toFixed(2)}</div>
         </div>
       </div>
 
-      <div className="p-6 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-        <h3 className="font-semibold mb-4">📤 سحب الأرباح</h3>
+      {/* ✅ إضافة محفظة جديدة */}
+      <div className="p-6 bg-slate-800 rounded-xl border border-slate-700">
+        <h3 className="font-semibold text-white mb-4">➕ إضافة محفظة جديدة</h3>
         <div className="space-y-4">
           <div>
-            <label className="text-sm text-gray-500">عنوان محفظتك الشخصية</label>
-            <input
-              type="text"
-              value={withdrawAddress}
-              onChange={(e) => setWithdrawAddress(e.target.value)}
-              placeholder="0x... أو Solana address"
-              className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-slate-700 text-white mt-1"
-            />
+            <label className="text-sm text-gray-400 block mb-1">اختر الشبكة</label>
+            <select
+              value={selectedNetwork}
+              onChange={(e) => setSelectedNetwork(e.target.value)}
+              className="w-full px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white focus:outline-none focus:border-emerald-500"
+            >
+              {SUPPORTED_NETWORKS.map((net) => (
+                <option key={net.id} value={net.id}>{net.icon} {net.name}</option>
+              ))}
+            </select>
           </div>
-          <div className="flex gap-4">
-            <div className="flex-1">
-              <label className="text-sm text-gray-500">المبلغ ($)</label>
+          <div>
+            <label className="text-sm text-gray-400 block mb-1">عنوان المحفظة</label>
+            <div className="flex gap-2">
               <input
-                type="number"
-                value={withdrawAmount}
-                onChange={(e) => setWithdrawAmount(e.target.value)}
-                placeholder="0.00"
-                className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-slate-700 text-white mt-1"
+                type="text"
+                value={withdrawAddress}
+                onChange={(e) => setWithdrawAddress(e.target.value)}
+                placeholder="أدخل عنوان المحفظة..."
+                className="flex-1 px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500"
               />
-            </div>
-            <div className="flex items-end">
               <button
-                onClick={handleWithdraw}
-                disabled={isLoading || balance === 0}
-                className="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium disabled:opacity-50 flex items-center gap-2"
+                onClick={saveWithdrawAddress}
+                disabled={isLoading}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                <ArrowUpRight size={18} />
-                {isLoading ? "جاري..." : "سحب"}
+                <Save size={18} />
+                {isLoading ? "جاري..." : "حفظ"}
               </button>
             </div>
+            <p className="text-xs text-gray-500 mt-1">💡 يمكنك إضافة محفظة لكل شبكة على حدة</p>
           </div>
-          <p className="text-xs text-gray-500">
-            الحد الأدنى للسحب: $10 | الحد الأقصى: $10,000
-          </p>
         </div>
       </div>
 
-      <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-        <h3 className="font-semibold mb-3 flex items-center gap-2">
-          <History size={18} />
-          آخر المعاملات
+      {/* ✅ قائمة المحافظ المسجلة */}
+      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+        <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+          <Wallet size={18} />
+          محافظي ({userWallets.length})
         </h3>
-        {transactions.length === 0 ? (
-          <p className="text-gray-500 text-sm">لا توجد معاملات بعد</p>
+        {userWallets.length === 0 ? (
+          <p className="text-gray-400 text-sm">لا توجد محافظ مسجلة بعد</p>
         ) : (
-          <div className="space-y-2 max-h-60 overflow-y-auto">
-            {transactions.map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between text-sm p-2 bg-gray-50 dark:bg-slate-700/50 rounded">
-                <div className="flex items-center gap-2">
-                  <span className={
-                    tx.type === "PROFIT" ? "text-green-500" :
-                    tx.type === "COMMISSION" ? "text-amber-500" :
-                    tx.type === "DEPOSIT" ? "text-blue-500" :
-                    tx.type === "WITHDRAW" ? "text-red-500" :
-                    "text-gray-500"
-                  }>
-                    {tx.type === "PROFIT" && "📈"}
-                    {tx.type === "COMMISSION" && "🏦"}
-                    {tx.type === "DEPOSIT" && "💰"}
-                    {tx.type === "WITHDRAW" && "💸"}
-                  </span>
-                  <span className="text-gray-700 dark:text-gray-300">{tx.description}</span>
+          <div className="space-y-2">
+            {userWallets.map((w) => (
+              <div key={w.id} className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-white">
+                      {SUPPORTED_NETWORKS.find(n => n.id === w.network)?.icon} {w.network}
+                    </span>
+                    <span className="text-xs text-emerald-400">${w.balance?.toFixed(2) || '0.00'}</span>
+                  </div>
+                  <p className="text-xs font-mono text-gray-400 truncate max-w-[200px]">{w.address}</p>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className={
-                    tx.amount > 0 ? "text-green-500" : "text-red-500"
-                  }>
-                    {tx.amount > 0 ? "+" : ""}{tx.amount.toFixed(2)}$
-                  </span>
-                  <span className="text-xs text-gray-400">
-                    {new Date(tx.createdAt).toLocaleDateString()}
-                  </span>
-                </div>
+                <button
+                  onClick={() => deleteWallet(w.id)}
+                  className="p-1 text-red-400 hover:text-red-300 transition-colors"
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
-        <h3 className="font-medium text-blue-800 dark:text-blue-300 mb-2">📌 كيف يعمل السحب؟</h3>
-        <ul className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
-          <li>1️⃣ أدخل عنوان محفظتك الشخصية (Phantom / MetaMask)</li>
-          <li>2️⃣ حدد المبلغ الذي تريد سحبه</li>
-          <li>3️⃣ سيتم خصم المبلغ من رصيدك</li>
-          <li>4️⃣ ستصل الأموال إلى محفظتك خلال دقائق</li>
-        </ul>
+      {/* ✅ سحب الأرباح */}
+      <div className="p-6 bg-slate-800 rounded-xl border border-slate-700">
+        <h3 className="font-semibold text-white mb-4">📤 سحب الأرباح</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm text-gray-400 block mb-1">اختر محفظة للسحب</label>
+            <select
+              value={selectedNetwork}
+              onChange={(e) => setSelectedNetwork(e.target.value)}
+              className="w-full px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white focus:outline-none focus:border-emerald-500"
+            >
+              {userWallets.length === 0 ? (
+                <option value="">لا توجد محافظ - أضف محفظة أولاً</option>
+              ) : (
+                userWallets.map((w) => (
+                  <option key={w.id} value={w.network}>
+                    {SUPPORTED_NETWORKS.find(n => n.id === w.network)?.icon} {w.network} - {w.address.slice(0, 10)}...
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="text-sm text-gray-400 block mb-1">المبلغ ($)</label>
+              <input
+                type="number"
+                value={withdrawAmount}
+                onChange={(e) => setWithdrawAmount(e.target.value)}
+                placeholder="0.00"
+                className="w-full px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={handleWithdraw}
+                disabled={isLoading || balance === 0 || userWallets.length === 0}
+                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:opacity-50 flex items-center gap-2"
+              >
+                <ArrowUpRight size={18} />
+                {isLoading ? "جاري..." : "سحب"}
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500">⚠️ الحد الأدنى للسحب: $10 | الحد الأقصى: $10,000</p>
+        </div>
+      </div>
+
+      {/* ✅ آخر المعاملات */}
+      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+        <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+          <History size={18} />
+          آخر المعاملات
+        </h3>
+        {transactions.length === 0 ? (
+          <p className="text-gray-400 text-sm">لا توجد معاملات بعد</p>
+        ) : (
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {transactions.map((tx) => (
+              <div key={tx.id} className="flex items-center justify-between text-sm p-2 bg-slate-700/50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <span className={tx.amount > 0 ? "text-emerald-400" : "text-red-400"}>
+                    {tx.type === "PROFIT" && "📈"}
+                    {tx.type === "WITHDRAW" && "💸"}
+                    {tx.type === "DEPOSIT" && "💰"}
+                    {tx.type === "COMMISSION" && "🏦"}
+                  </span>
+                  <span className="text-gray-300">{tx.description}</span>
+                </div>
+                <span className={tx.amount > 0 ? "text-emerald-400" : "text-red-400"}>
+                  {tx.amount > 0 ? "+" : ""}{tx.amount.toFixed(2)}$
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
