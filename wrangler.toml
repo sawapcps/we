@@ -1,7 +1,9 @@
 name = "multi-chain-rpc-proxy"
 main = "src/worker.js"
 compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
 
+# ✅ RPC URLs (موجودة بالفعل)
 [[rpc_urls]]
 solana = ["https://api.mainnet-beta.solana.com", "https://rpc.ankr.com/solana", "https://solana-rpc.publicnode.com", "https://1rpc.io/solana"]
 ethereum = ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth", "https://ethereum.publicnode.com", "https://1rpc.io/eth"]
@@ -11,3 +13,17 @@ arbitrum = ["https://arb1.arbitrum.io/rpc", "https://rpc.ankr.com/arbitrum", "ht
 base = ["https://mainnet.base.org", "https://rpc.ankr.com/base", "https://base-rpc.publicnode.com", "https://1rpc.io/base"]
 avalanche = ["https://api.avax.network/ext/bc/C/rpc", "https://rpc.ankr.com/avalanche", "https://avalanche-c-chain-rpc.publicnode.com", "https://1rpc.io/avax"]
 optimism = ["https://mainnet.optimism.io", "https://rpc.ankr.com/optimism", "https://optimism-rpc.publicnode.com", "https://1rpc.io/op"]
+
+# ✅ إعدادات قاعدة البيانات D1 (جديد)
+[[d1_databases]]
+binding = "DB"
+database_name = "madartech_platform"
+database_id = "1e57a5a3-8705-4b28-ad17-7b7a1e5c7fa6"
+
+# ✅ تشغيل البوت كل 5 دقائق (جديد)
+[triggers]
+crons = ["*/5 * * * *"]
+
+# ✅ حدود الـ Worker
+[limits]
+cpu_ms = 50
