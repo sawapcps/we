@@ -49,6 +49,21 @@ export interface UserWallet {
   updatedAt: string;
 }
 
+// ✅ ✅ ✅ واجهة رمز البوت (جديدة)
+export interface BotToken {
+  id: string;
+  userId: string;
+  walletId: string;
+  network: string;        // solana, robinhood, ethereum, إلخ
+  token: string;          // رمز البوت الفريد
+  secretKey: string;      // المفتاح السري
+  status: 'active' | 'inactive' | 'revoked';
+  permissions: string[];  // ['trade', 'view', 'withdraw']
+  createdAt: string;
+  updatedAt?: string;
+  lastUsed?: string;
+}
+
 export interface Transaction {
   id: string;
   userId: string;
@@ -683,6 +698,227 @@ export class AccountManager {
         });
       }
     }
+  }
+
+  // ============================================================
+  // 🔑 🔑 🔑 إدارة رموز البوت (Bot Tokens) - الجديد
+  // ============================================================
+
+  /**
+   * إنشاء رمز بوت جديد لمستخدم على شبكة محددة
+   */
+  static async createBotToken(
+    userId: string, 
+    walletId: string, 
+    network: string
+  ): Promise<BotToken> {
+    
+    // التحقق من وجود المستخدم
+    const user = await this.getAccount(userId);
+    if (!user) throw new Error('المستخدم غير موجود');
+
+    // التحقق من وجود المحفظة
+    const wallet = await this.getUserWallet(userId, network);
+    if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على شبكة ${network}`);
+
+    // التحقق من عدم وجود رمز نشط لنفس الشبكة
+    const existing = await this.getBotToken(userId, network);
+    if (existing && existing.status === 'active') {
+      throw new Error(`يوجد رمز بوت نشط بالفعل لشبكة ${network}`);
+    }
+
+    // توليد رمز فريد
+    const token = this.generateBotToken(userId, network);
+    const secretKey = this.generateSecretKey();
+
+    const botToken: BotToken = {
+      id: generateId(),
+      userId,
+      walletId,
+      network,
+      token: `bot_${network}_${token}`,
+      secretKey: `sk_${secretKey}`,
+      status: 'active',
+      permissions: ['trade', 'view'],
+      createdAt: getTimestamp(),
+      updatedAt: getTimestamp(),
+    };
+
+    await madarCreate('bot_tokens', botToken);
+    
+    console.log(`✅ تم إنشاء رمز بوت للشبكة ${network}: ${botToken.token}`);
+    return botToken;
+  }
+
+  /**
+   * جلب رمز بوت لمستخدم على شبكة محددة
+   */
+  static async getBotToken(userId: string, network: string): Promise<BotToken | null> {
+    const result = await madarRead<BotToken>('bot_tokens', { 
+      userId, 
+      network,
+      status: 'active'
+    });
+    
+    if (result.success && result.data && result.data.length > 0) {
+      return result.data[0];
+    }
+    return null;
+  }
+
+  /**
+   * جلب جميع رموز البوت لمستخدم
+   */
+  static async getAllBotTokens(userId: string): Promise<BotToken[]> {
+    const result = await madarRead<BotToken>('bot_tokens', { userId });
+    if (result.success && result.data) {
+      return result.data;
+    }
+    return [];
+  }
+
+  /**
+   * جلب جميع رموز البوت النشطة لمستخدم
+   */
+  static async getActiveBotTokens(userId: string): Promise<BotToken[]> {
+    const result = await madarRead<BotToken>('bot_tokens', { 
+      userId,
+      status: 'active'
+    });
+    if (result.success && result.data) {
+      return result.data;
+    }
+    return [];
+  }
+
+  /**
+   * جلب رمز بوت بواسطة الرمز نفسه
+   */
+  static async getBotTokenByToken(token: string): Promise<BotToken | null> {
+    const result = await madarRead<BotToken>('bot_tokens', { token });
+    if (result.success && result.data && result.data.length > 0) {
+      return result.data[0];
+    }
+    return null;
+  }
+
+  /**
+   * التحقق من صحة رمز البوت
+   */
+  static async verifyBotToken(token: string, userId: string): Promise<boolean> {
+    const result = await madarRead<BotToken>('bot_tokens', { 
+      token,
+      userId,
+      status: 'active'
+    });
+    
+    if (!result.success || !result.data || result.data.length === 0) {
+      return false;
+    }
+
+    const botToken = result.data[0];
+    
+    // التحقق من الصلاحيات
+    if (!botToken.permissions.includes('trade')) {
+      return false;
+    }
+
+    // تحديث آخر استخدام
+    await this.updateBotTokenLastUsed(botToken.id);
+    
+    return true;
+  }
+
+  /**
+   * تحديث آخر استخدام لرمز البوت
+   */
+  static async updateBotTokenLastUsed(tokenId: string): Promise<void> {
+    await madarUpdate('bot_tokens', tokenId, {
+      lastUsed: getTimestamp(),
+      updatedAt: getTimestamp()
+    });
+  }
+
+  /**
+   * إلغاء رمز البوت
+   */
+  static async revokeBotToken(tokenId: string): Promise<void> {
+    await madarUpdate('bot_tokens', tokenId, {
+      status: 'revoked',
+      updatedAt: getTimestamp()
+    });
+  }
+
+  /**
+   * إلغاء جميع رموز البوت لمستخدم
+   */
+  static async revokeAllBotTokens(userId: string): Promise<void> {
+    const tokens = await this.getAllBotTokens(userId);
+    for (const token of tokens) {
+      await this.revokeBotToken(token.id);
+    }
+  }
+
+  /**
+   * تحديث صلاحيات رمز البوت
+   */
+  static async updateBotTokenPermissions(
+    tokenId: string, 
+    permissions: string[]
+  ): Promise<void> {
+    await madarUpdate('bot_tokens', tokenId, {
+      permissions: JSON.stringify(permissions),
+      updatedAt: getTimestamp()
+    });
+  }
+
+  /**
+   * التحقق من وجود رمز بوت لمستخدم على شبكة محددة
+   */
+  static async hasBotToken(userId: string, network: string): Promise<boolean> {
+    const token = await this.getBotToken(userId, network);
+    return token !== null && token.status === 'active';
+  }
+
+  /**
+   * إنشاء رمز بوت تلقائياً إذا لم يكن موجوداً
+   */
+  static async ensureBotToken(
+    userId: string, 
+    walletId: string, 
+    network: string
+  ): Promise<BotToken> {
+    const existing = await this.getBotToken(userId, network);
+    if (existing && existing.status === 'active') {
+      return existing;
+    }
+    return await this.createBotToken(userId, walletId, network);
+  }
+
+  // ============================================================
+  // 🔧 دوال مساعدة لتوليد الرموز
+  // ============================================================
+
+  /**
+   * توليد رمز بوت فريد
+   */
+  static generateBotToken(userId: string, network: string): string {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substring(2, 8);
+    const userPrefix = userId.slice(0, 6);
+    return `${network}_${userPrefix}_${timestamp}_${random}`;
+  }
+
+  /**
+   * توليد مفتاح سري
+   */
+  static generateSecretKey(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 24; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
   }
 }
 
