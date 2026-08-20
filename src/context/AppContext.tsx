@@ -25,21 +25,29 @@ import {
   getTimestamp,
 } from '../lib/madarTech';
 import { BotWalletManager, BotWalletData } from '../lib/wallet';
+import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/accounts';
 
 // ============ TYPES ============
 
 interface AppContextType {
-  // Wallet
+  // Wallet (المستخدم الحالي)
   wallet: WalletData | null;
   setWallet: (wallet: WalletData | null) => void;
   loadWallet: (address: string) => Promise<void>;
   createWallet: (network: string) => Promise<WalletData>;
   
-  // ✅ محافظ متعددة
+  // ✅ محافظ البوت (المركزية - للأدمن)
   botWallets: BotWalletData[];
   loadBotWallets: () => Promise<void>;
   getBotWallet: (network: string) => BotWalletData | null;
   refreshBotBalance: (network: string) => Promise<number>;
+
+  // ✅ محافظ المستخدم (الفردية)
+  userWallets: UserWallet[];
+  loadUserWallets: () => Promise<void>;
+  createUserWallet: (network: string) => Promise<UserWallet>;
+  refreshUserBalance: (network: string) => Promise<number>;
+  getUserWallet: (network: string) => UserWallet | null;
 
   // Bot Config
   botConfig: BotConfigData | null;
@@ -78,11 +86,27 @@ interface AppContextType {
   updateBotState: (isRunning: boolean, networks?: string[]) => Promise<void>;
   
   // User
-  user: any;
-  setUser: (user: any) => void;
+  user: UserAccount | null;
+  setUser: (user: UserAccount | null) => void;
   isAdmin: boolean;
   setIsAdmin: (isAdmin: boolean) => void;
   logout: () => void;
+  
+  // ✅ إحصائيات المستخدم
+  userStats: {
+    totalProfit: number;
+    totalFees: number;
+    totalDeposited: number;
+    totalWithdrawn: number;
+    netBalance: number;
+    tradesCount: number;
+  } | null;
+  loadUserStats: () => Promise<void>;
+  
+  // ✅ المعاملات
+  transactions: Transaction[];
+  loadTransactions: () => Promise<void>;
+  addTransaction: (transaction: Omit<Transaction, 'id' | 'createdAt'>) => Promise<void>;
 }
 
 // ============ DEFAULT VALUES ============
@@ -113,6 +137,7 @@ export function AppProvider({ children }: AppProviderProps) {
   // State
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [botWallets, setBotWallets] = useState<BotWalletData[]>([]);
+  const [userWallets, setUserWallets] = useState<UserWallet[]>([]);
   const [botConfig, setBotConfigState] = useState<BotConfigData | null>(null);
   const [trades, setTrades] = useState<TradeData[]>([]);
   const [analyses, setAnalyses] = useState<AnalysisData[]>([]);
@@ -120,24 +145,26 @@ export function AppProvider({ children }: AppProviderProps) {
   const [logs, setLogs] = useState<LogData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<UserAccount | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userStats, setUserStats] = useState<AppContextType['userStats']>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   // ✅ منع التكرار
   const hasLoadedWallets = useRef(false);
   const isInitialized = useRef(false);
+  const hasLoadedUserWallets = useRef(false);
 
-  // ============ BOT WALLETS ============
+  // ============ BOT WALLETS (المركزية) ============
 
   const loadBotWallets = async () => {
-    // ✅ منع التحميل المتكرر
     if (isInitialized.current) {
       console.log('✅ المحافظ محملة مسبقاً، تخطي...');
       return;
     }
 
     try {
-      console.log('🔄 جاري تحميل المحافظ...');
+      console.log('🔄 جاري تحميل محافظ البوت...');
       const botWallet = BotWalletManager.getInstance();
       const networks = botConfig?.networks || ['solana'];
       
@@ -148,9 +175,9 @@ export function AppProvider({ children }: AppProviderProps) {
       const allWallets = botWallet.getAllWallets();
       setBotWallets(allWallets);
       isInitialized.current = true;
-      console.log(`✅ تم تحميل ${allWallets.length} محفظة`);
+      console.log(`✅ تم تحميل ${allWallets.length} محفظة بوت`);
     } catch (error) {
-      console.error('❌ فشل تحميل المحافظ:', error);
+      console.error('❌ فشل تحميل محافظ البوت:', error);
     }
   };
 
@@ -163,9 +190,48 @@ export function AppProvider({ children }: AppProviderProps) {
       const botWallet = BotWalletManager.getInstance();
       return await botWallet.refreshBalance(network);
     } catch (error) {
-      console.error('❌ فشل تحديث الرصيد:', error);
+      console.error('❌ فشل تحديث رصيد البوت:', error);
       return 0;
     }
+  };
+
+  // ============ USER WALLETS (الفردية) ============
+
+  const loadUserWallets = async () => {
+    if (!user) return;
+    
+    if (hasLoadedUserWallets.current) {
+      console.log('✅ محافظ المستخدم محملة مسبقاً، تخطي...');
+      return;
+    }
+
+    try {
+      console.log('🔄 جاري تحميل محافظ المستخدم...');
+      const wallets = await AccountManager.getAllUserWallets(user.id);
+      setUserWallets(wallets);
+      hasLoadedUserWallets.current = true;
+      console.log(`✅ تم تحميل ${wallets.length} محفظة مستخدم`);
+    } catch (error) {
+      console.error('❌ فشل تحميل محافظ المستخدم:', error);
+    }
+  };
+
+  const getUserWallet = (network: string): UserWallet | null => {
+    return userWallets.find(w => w.network === network) || null;
+  };
+
+  const createUserWallet = async (network: string): Promise<UserWallet> => {
+    if (!user) throw new Error('المستخدم غير مسجل');
+    const wallet = await AccountManager.createUserWallet(user.id, network);
+    await loadUserWallets();
+    return wallet;
+  };
+
+  const refreshUserBalance = async (network: string): Promise<number> => {
+    if (!user) throw new Error('المستخدم غير مسجل');
+    const balance = await AccountManager.getUserWalletBalance(user.id, network);
+    await loadUserWallets();
+    return balance;
   };
 
   // ============ UPDATE BOT STATE ============
@@ -359,11 +425,44 @@ export function AppProvider({ children }: AppProviderProps) {
     setLogs(prev => [log, ...prev]);
   };
 
+  // ============ USER STATS ============
+
+  const loadUserStats = async () => {
+    if (!user) return;
+    try {
+      const stats = await AccountManager.getUserStats(user.id);
+      setUserStats(stats);
+    } catch (error) {
+      console.error('❌ فشل تحميل إحصائيات المستخدم:', error);
+    }
+  };
+
+  // ============ TRANSACTIONS ============
+
+  const loadTransactions = async () => {
+    if (!user) return;
+    try {
+      const txs = await AccountManager.getTransactions(user.id);
+      setTransactions(txs);
+    } catch (error) {
+      console.error('❌ فشل تحميل المعاملات:', error);
+    }
+  };
+
+  const addTransaction = async (transaction: Omit<Transaction, 'id' | 'createdAt'>) => {
+    await AccountManager.addTransaction(transaction);
+    await loadTransactions();
+  };
+
   // ============ LOGOUT ============
 
   const logout = () => {
     setUser(null);
     setIsAdmin(false);
+    setUserWallets([]);
+    setUserStats(null);
+    setTransactions([]);
+    hasLoadedUserWallets.current = false;
     localStorage.removeItem('user');
     window.location.href = '/login';
   };
@@ -389,13 +488,23 @@ export function AppProvider({ children }: AppProviderProps) {
     loadLogs();
   }, []);
 
-  // ✅ تحميل المحافظ مرة واحدة فقط بعد تحميل الإعدادات
+  // ✅ تحميل محافظ البوت بعد تحميل الإعدادات
   useEffect(() => {
     if (botConfig && !hasLoadedWallets.current) {
       hasLoadedWallets.current = true;
       loadBotWallets();
     }
   }, [botConfig]);
+
+  // ✅ تحميل محافظ المستخدم وإحصائياته بعد تسجيل الدخول
+  useEffect(() => {
+    if (user) {
+      hasLoadedUserWallets.current = false;
+      loadUserWallets();
+      loadUserStats();
+      loadTransactions();
+    }
+  }, [user]);
 
   // ============ CONTEXT VALUE ============
 
@@ -408,6 +517,11 @@ export function AppProvider({ children }: AppProviderProps) {
     loadBotWallets,
     getBotWallet,
     refreshBotBalance,
+    userWallets,
+    loadUserWallets,
+    createUserWallet,
+    refreshUserBalance,
+    getUserWallet,
     botConfig,
     setBotConfig,
     loadBotConfig,
@@ -433,6 +547,11 @@ export function AppProvider({ children }: AppProviderProps) {
     isAdmin,
     setIsAdmin,
     logout,
+    userStats,
+    loadUserStats,
+    transactions,
+    loadTransactions,
+    addTransaction,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
