@@ -22,11 +22,17 @@ export function BotControlPage() {
     setIsLoading,
   } = useApp();
 
-  const [isRunning, setIsRunning] = useState(false);
+  const [isRunning, setIsRunning] = useState(() => {
+    const saved = localStorage.getItem('isRunning');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return false;
+  });
   
-  // ✅ تهيئة selectedNetworks من localStorage أولاً (الأولوية القصوى)
   const [selectedNetworks, setSelectedNetworks] = useState<string[]>(() => {
-    // 1️⃣ محاولة استعادة من localStorage
     const saved = localStorage.getItem('selectedNetworks');
     if (saved) {
       try {
@@ -37,7 +43,6 @@ export function BotControlPage() {
       } catch (e) {}
     }
     
-    // 2️⃣ إذا لم يوجد في localStorage، استخدم botConfig
     if (botConfig?.networks) {
       if (typeof botConfig.networks === 'string') {
         try {
@@ -60,94 +65,61 @@ export function BotControlPage() {
   const [discoveredCount, setDiscoveredCount] = useState(0);
   const [buySignals, setBuySignals] = useState<number>(0);
 
-  // ✅ حفظ الشبكات في localStorage عند التغيير
-  useEffect(() => {
-    localStorage.setItem('selectedNetworks', JSON.stringify(selectedNetworks));
-  }, [selectedNetworks]);
+  // ============ HANDLERS (تعريف الدوال أولاً) ============
 
-  // ✅ تحديث botConfig عند تغيير الشبكات
-  useEffect(() => {
-    if (botConfig) {
-      const updatedConfig = {
-        ...botConfig,
-        networks: selectedNetworks,
-        mode: mode,
-      };
-      setBotConfig(updatedConfig);
-    }
-  }, [selectedNetworks, mode]);
-
-  // ✅ تحديث selectedNetworks من botConfig فقط إذا لم يكن هناك قيمة في localStorage
-  useEffect(() => {
-    // ✅ لا تحديث إذا كان هناك قيمة محفوظة في localStorage
-    const saved = localStorage.getItem('selectedNetworks');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // إذا كانت الشبكات المحفوظة مختلفة عن botConfig، استخدم المحفوظة
-          const savedNetworks = parsed;
-          if (JSON.stringify(savedNetworks) !== JSON.stringify(selectedNetworks)) {
-            setSelectedNetworks(savedNetworks);
-          }
-          return;
-        }
-      } catch (e) {}
-    }
-    
-    // ✅ فقط إذا لم يكن هناك قيمة في localStorage، استخدم botConfig
-    if (botConfig?.networks) {
-      let networks: string[] = ['solana'];
-      if (typeof botConfig.networks === 'string') {
-        try {
-          networks = JSON.parse(botConfig.networks);
-        } catch {
-          networks = ['solana'];
-        }
-      } else if (Array.isArray(botConfig.networks)) {
-        networks = botConfig.networks;
+  // ✅ تشغيل البوت عبر Worker
+  const handleStart = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${WORKER_URL}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: mode === 'AUTO' ? 'normal-bot' : 'manual' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsRunning(true);
+        localStorage.setItem('isRunning', JSON.stringify(true));
+        await addLog('SUCCESS', `🤖 تم تشغيل البوت في وضع ${mode === 'AUTO' ? 'تلقائي' : 'يدوي'} على الشبكات: ${selectedNetworks.join(', ')}`);
+        await performScan();
+      } else {
+        await addLog('ERROR', `❌ فشل تشغيل البوت: ${data.message}`);
       }
-      if (JSON.stringify(networks) !== JSON.stringify(selectedNetworks)) {
-        setSelectedNetworks(networks);
-        localStorage.setItem('selectedNetworks', JSON.stringify(networks));
-      }
+    } catch (error) {
+      await addLog('ERROR', `❌ خطأ: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
-  }, [botConfig]);
+  };
 
-  // ✅ جلب حالة البوت من الـ Worker عند تحميل الصفحة
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const res = await fetch(`${WORKER_URL}/status`);
-        const data = await res.json();
-        setIsRunning(data.isRunning);
-        if (data.isRunning) {
-          addLog('INFO', '🤖 البوت يعمل بالفعل (تم استعادة الحالة)');
-        }
-      } catch (error) {
-        console.error('❌ فشل جلب حالة البوت:', error);
+  // ✅ إيقاف البوت عبر Worker
+  const handleStop = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${WORKER_URL}/stop`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setIsRunning(false);
+        localStorage.setItem('isRunning', JSON.stringify(false));
+        await addLog('INFO', '⏹️ تم إيقاف البوت');
+      } else {
+        await addLog('ERROR', `❌ فشل إيقاف البوت: ${data.message}`);
       }
-    };
-    checkStatus();
-  }, []);
-
-  // ✅ عند تغيير الشبكات، أوقف البوت ثم أعد تشغيله
-  useEffect(() => {
-    if (isRunning && botConfig) {
-      const restartBot = async () => {
-        await handleStop();
-        const updatedConfig = {
-          ...botConfig,
-          networks: selectedNetworks,
-        };
-        setBotConfig(updatedConfig);
-        setTimeout(() => {
-          handleStart();
-        }, 1500);
-      };
-      restartBot();
+    } catch (error) {
+      await addLog('ERROR', `❌ خطأ: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
-  }, [selectedNetworks]);
+  };
+
+  // ✅ دالة موحدة للزر
+  const handleStartStop = async () => {
+    if (isRunning) {
+      await handleStop();
+    } else {
+      await handleStart();
+    }
+  };
 
   // ============ SIMULATE BOT SCAN ============
 
@@ -247,59 +219,97 @@ export function BotControlPage() {
     return tokens;
   };
 
-  // ============ HANDLERS ============
+  // ============ useEffect ============
 
-  // ✅ تشغيل البوت عبر Worker
-  const handleStart = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch(`${WORKER_URL}/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: mode === 'AUTO' ? 'normal-bot' : 'manual' }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setIsRunning(true);
-        await addLog('SUCCESS', `🤖 تم تشغيل البوت في وضع ${mode === 'AUTO' ? 'تلقائي' : 'يدوي'} على الشبكات: ${selectedNetworks.join(', ')}`);
-        await performScan();
-      } else {
-        await addLog('ERROR', `❌ فشل تشغيل البوت: ${data.message}`);
+  // ✅ حفظ حالة البوت في localStorage
+  useEffect(() => {
+    localStorage.setItem('isRunning', JSON.stringify(isRunning));
+  }, [isRunning]);
+
+  // ✅ حفظ الشبكات في localStorage عند التغيير
+  useEffect(() => {
+    localStorage.setItem('selectedNetworks', JSON.stringify(selectedNetworks));
+  }, [selectedNetworks]);
+
+  // ✅ تحديث botConfig عند تغيير الشبكات
+  useEffect(() => {
+    if (botConfig) {
+      const updatedConfig = {
+        ...botConfig,
+        networks: selectedNetworks,
+        mode: mode,
+      };
+      setBotConfig(updatedConfig);
+    }
+  }, [selectedNetworks, mode]);
+
+  // ✅ استعادة الشبكات من localStorage عند تحميل الصفحة
+  useEffect(() => {
+    const savedNetworks = localStorage.getItem('selectedNetworks');
+    if (savedNetworks) {
+      try {
+        const parsed = JSON.parse(savedNetworks);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setSelectedNetworks(parsed);
+          return;
+        }
+      } catch (e) {}
+    }
+    
+    if (botConfig?.networks) {
+      let networks: string[] = ['solana'];
+      if (typeof botConfig.networks === 'string') {
+        try {
+          networks = JSON.parse(botConfig.networks);
+        } catch {
+          networks = ['solana'];
+        }
+      } else if (Array.isArray(botConfig.networks)) {
+        networks = botConfig.networks;
       }
-    } catch (error) {
-      await addLog('ERROR', `❌ خطأ: ${error.message}`);
-    } finally {
-      setIsLoading(false);
+      setSelectedNetworks(networks);
+      localStorage.setItem('selectedNetworks', JSON.stringify(networks));
     }
-  };
+  }, [botConfig]);
 
-  // ✅ إيقاف البوت عبر Worker
-  const handleStop = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch(`${WORKER_URL}/stop`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setIsRunning(false);
-        await addLog('INFO', '⏹️ تم إيقاف البوت');
-      } else {
-        await addLog('ERROR', `❌ فشل إيقاف البوت: ${data.message}`);
+  // ✅ جلب حالة البوت من الـ Worker عند تحميل الصفحة
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`${WORKER_URL}/status`);
+        const data = await res.json();
+        setIsRunning(data.isRunning);
+        localStorage.setItem('isRunning', JSON.stringify(data.isRunning));
+        if (data.isRunning) {
+          addLog('INFO', '🤖 البوت يعمل بالفعل (تم استعادة الحالة)');
+          setTimeout(() => {
+            handleStart();
+          }, 1000);
+        }
+      } catch (error) {
+        console.error('❌ فشل جلب حالة البوت:', error);
       }
-    } catch (error) {
-      await addLog('ERROR', `❌ خطأ: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    };
+    checkStatus();
+  }, []);
 
-  // ✅ دالة موحدة للزر
-  const handleStartStop = async () => {
-    if (isRunning) {
-      await handleStop();
-    } else {
-      await handleStart();
+  // ✅ عند تغيير الشبكات، أوقف البوت ثم أعد تشغيله
+  useEffect(() => {
+    if (isRunning && botConfig) {
+      const restartBot = async () => {
+        await handleStop();
+        const updatedConfig = {
+          ...botConfig,
+          networks: selectedNetworks,
+        };
+        setBotConfig(updatedConfig);
+        setTimeout(() => {
+          handleStart();
+        }, 1500);
+      };
+      restartBot();
     }
-  };
+  }, [selectedNetworks]);
 
   // Auto-scan loop
   useEffect(() => {
