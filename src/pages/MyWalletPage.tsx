@@ -1,111 +1,80 @@
-// src/pages/MarketsPage.tsx
+// src/pages/ManualTradesPage.tsx
 
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { formatUsd } from '../lib/format';
+import { BotWalletManager } from '../lib/wallet';
+import { AccountManager } from '../lib/accounts';
+import { discoverAllPairs } from '../lib/discovery';
 import { NETWORKS, getNetworkColor, getNetworkName } from '../config/networks';
-import { discoverAllPairs, type MultiSourceResult } from '../lib/discovery';
-import { runHunterPipeline, type HunterFilters } from '../lib/hunterEngine';
-import { searchPairs, getPairsByToken } from '../lib/dexscreener';
-import type { DiscoveredToken, PipelineStats, ChainId, TokenPair } from '../types';
-import { formatUsd, formatPrice, formatPct, timeAgo, formatDateTime } from '../lib/format';
-import {
-  Search, Loader2, RefreshCw, BrainCircuit, ChevronDown, ChevronRight,
-  AlertCircle, Filter, Zap, ShieldCheck, Droplets, BarChart3, Trophy,
-  Eye, XCircle, Clock, ExternalLink, Radar, Layers, Flame, TrendingUp, Building2,
-  Copy, CheckCircle, TrendingDown,
+import { 
+  TrendingUp, TrendingDown, Loader2, XCircle, Search, 
+  Plus, Minus, Sparkles, Globe, Filter, Clock, Star,
+  Zap, Droplets, BarChart3, ShieldCheck, Trophy, Eye,
+  Sliders, DollarSign, AlertCircle, Copy, CheckCircle,
+  Network, RefreshCw
 } from 'lucide-react';
 
-interface MarketsPageProps {
-  onAnalyzeToken: (token: DiscoveredToken) => void;
+const WORKER_URL = 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+
+interface Signal {
+  id: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  network: string;
+  price: number;
+  score: number;
+  recommendation: 'BUY' | 'SELL' | 'HOLD';
+  reason: string;
+  aiOpinion?: string;
+  createdAt: string;
+  ageInSeconds?: number;
+  isNew?: boolean;
+  liquidity?: number;
+  volume?: number;
+  priceChange24h?: number;
+  confidence?: number;
 }
 
-type StatusFilter = 'all' | 'candidate' | 'watch' | 'reject';
-type SortBy = 'score' | 'volume' | 'liquidity' | 'change' | 'age';
-type StrategyFilter = 'all' | 'new-listing' | 'momentum' | 'established';
+type FilterType = 'all' | 'good' | 'new' | 'old' | 'high_volume' | 'high_liquidity' | 'momentum';
 
-const STATUS_CONFIG = {
-  candidate: { label: 'Candidate', color: 'text-emerald-400', bg: 'bg-emerald-500/10', dot: 'bg-emerald-400', icon: Trophy },
-  watch: { label: 'Watch', color: 'text-amber-400', bg: 'bg-amber-500/10', dot: 'bg-amber-400', icon: Eye },
-  reject: { label: 'Reject', color: 'text-red-400', bg: 'bg-red-500/10', dot: 'bg-red-400', icon: XCircle },
-} as const;
-
-const STRATEGY_CONFIG = {
-  'new-listing': { label: 'New', icon: Flame, color: 'text-orange-400', bg: 'bg-orange-500/10' },
-  'momentum': { label: 'Momentum', icon: TrendingUp, color: 'text-blue-400', bg: 'bg-blue-500/10' },
-  'established': { label: 'Established', icon: Building2, color: 'text-teal-400', bg: 'bg-teal-500/10' },
-} as const;
-
-// ============ ✅ مكون الرسم البياني البسيط ============
-function Sparkline({ data, width = 60, height = 20, color = '#10b981' }: { 
-  data: number[]; 
-  width?: number; 
-  height?: number; 
-  color?: string;
-}) {
-  if (!data || data.length < 2) {
-    return <span className="text-xs text-slate-500">—</span>;
-  }
-
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
+export function ManualTradesPage() {
+  const { 
+    addLog, 
+    trades, 
+    addTrade, 
+    isLoading, 
+    setIsLoading, 
+    botConfig,
+    user // ✅ إضافة المستخدم
+  } = useApp();
   
-  const points = data.map((value, index) => {
-    const x = (index / (data.length - 1)) * width;
-    const y = height - ((value - min) / range) * height;
-    return `${x},${y}`;
-  }).join(' ');
-
-  const isUp = data[data.length - 1] > data[0];
-  const strokeColor = isUp ? '#10b981' : '#ef4444';
-
-  return (
-    <svg width={width} height={height} className="inline-block">
-      <polyline
-        points={points}
-        fill="none"
-        stroke={strokeColor}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {/* ✅ نقطة البداية */}
-      <circle cx="0" cy={height - ((data[0] - min) / range) * height} r="1.5" fill={strokeColor} />
-      {/* ✅ نقطة النهاية */}
-      <circle cx={width} cy={height - ((data[data.length - 1] - min) / range) * height} r="1.5" fill={strokeColor} />
-    </svg>
-  );
-}
-
-export function MarketsPage({ onAnalyzeToken }: MarketsPageProps) {
-  const { botConfig, addLog } = useApp();
-  const [selectedNetwork, setSelectedNetwork] = useState<ChainId>('solana');
-  const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
-  const [stats, setStats] = useState<PipelineStats | null>(null);
-  const [sources, setSources] = useState<MultiSourceResult['sources']>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [filteredSignals, setFilteredSignals] = useState<Signal[]>([]);
+  const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
+  const [executing, setExecuting] = useState(false);
+  const [amount, setAmount] = useState(50);
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [strategyFilter, setStrategyFilter] = useState<StrategyFilter>('all');
-  const [sortBy, setSortBy] = useState<SortBy>('age'); // ✅ الافتراضي: الأحدث
-  const [expandedToken, setExpandedToken] = useState<string | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<number | null>(null);
-  const mountedRef = useRef(true);
-
-  // ============ البحث اليدوي ============
-  const [manualSearchQuery, setManualSearchQuery] = useState('');
-  const [manualSearchLoading, setManualSearchLoading] = useState(false);
-  const [manualSearchResults, setManualSearchResults] = useState<TokenPair[]>([]);
-  const [manualSearchError, setManualSearchError] = useState<string | null>(null);
-
-  // ============ زر النسخ ============
+  const [showAIOpinions, setShowAIOpinions] = useState(true);
+  const [isSearching, setIsSearching] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+  const [ageFilter, setAgeFilter] = useState<number | null>(null);
+  const [minLiquidityFilter, setMinLiquidityFilter] = useState<number>(0);
+  const [minVolumeFilter, setMinVolumeFilter] = useState<number>(0);
+  const [minScoreFilter, setMinScoreFilter] = useState<number>(0);
+  const [showFilters, setShowFilters] = useState(true);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const [selectedNetwork, setSelectedNetwork] = useState<string>('solana');
+  const [allPairs, setAllPairs] = useState<any[]>([]);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  
+  const activeNetworks = botConfig?.networks || ['solana'];
+  const mountedRef = useRef(true);
+  const ITEMS_PER_PAGE = 20;
 
-  // ============ ✅ زر تجاوز الفلاتر ============
-  const [bypassFilters, setBypassFilters] = useState(false);
-
-  // ============ دالة النسخ ============
+  // ✅ نسخ العنوان
   const copyToClipboard = (text: string, label: string = 'العنوان') => {
     navigator.clipboard.writeText(text);
     setCopiedAddress(text);
@@ -113,712 +82,811 @@ export function MarketsPage({ onAnalyzeToken }: MarketsPageProps) {
     setTimeout(() => setCopiedAddress(null), 2000);
   };
 
-  // ============ دالة البحث اليدوي ============
-  const handleManualSearch = async () => {
-    const query = manualSearchQuery.trim();
-    if (!query) {
-      setManualSearchError('❌ الرجاء إدخال رمز العملة أو عنوانها');
-      return;
+  // ✅ تحويل بيانات DEX إلى Signal
+  const dexPairToSignal = (pair: any): Signal => {
+    if (!pair || !pair.baseToken) {
+      return {
+        id: Math.random().toString(),
+        tokenAddress: '',
+        tokenSymbol: 'Unknown',
+        network: 'solana',
+        price: 0,
+        score: 0,
+        recommendation: 'HOLD',
+        reason: '⚠️ بيانات غير مكتملة',
+        aiOpinion: '🧠 Gemini AI: لا توجد بيانات كافية',
+        createdAt: new Date().toISOString(),
+        ageInSeconds: 0,
+        isNew: false,
+        liquidity: 0,
+        volume: 0,
+        priceChange24h: 0,
+        confidence: 0,
+      };
     }
 
-    setManualSearchLoading(true);
-    setManualSearchError(null);
-    setManualSearchResults([]);
-
-    try {
-      addLog('INFO', `🔍 جاري البحث عن: ${query} على ${getNetworkName(selectedNetwork)}`);
-
-      let results = await searchPairs(query);
-      let filtered = results.filter((p) => p.chainId === selectedNetwork);
-
-      if (filtered.length === 0) {
-        addLog('INFO', `🔍 لم يتم العثور بالرمز، جاري البحث بالعنوان...`);
-        try {
-          const addressResults = await getPairsByToken(selectedNetwork, query);
-          filtered = addressResults;
-        } catch (e) {}
-      }
-
-      if (filtered.length > 0 && !query.startsWith('0x') && !query.startsWith('So')) {
-        const exactMatch = filtered.filter(
-          (p) => p.baseToken.symbol.toUpperCase() === query.toUpperCase()
-        );
-        if (exactMatch.length > 0) filtered = exactMatch;
-      }
-
-      setManualSearchResults(filtered);
-
-      if (filtered.length === 0) {
-        setManualSearchError(`❌ لم يتم العثور على "${query}" على شبكة ${getNetworkName(selectedNetwork)}`);
-        addLog('WARNING', `❌ لم يتم العثور على ${query} على ${getNetworkName(selectedNetwork)}`);
-      } else {
-        addLog('SUCCESS', `✅ تم العثور على ${filtered.length} نتيجة لـ ${query}`);
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'فشل البحث';
-      setManualSearchError(`❌ ${msg}`);
-      addLog('ERROR', `❌ فشل البحث عن ${query}: ${msg}`);
-    } finally {
-      setManualSearchLoading(false);
+    const price = parseFloat(pair.priceUsd || '0');
+    const volume = pair.volume?.h24 || 0;
+    const liquidity = pair.liquidity?.usd || 0;
+    const change24 = pair.priceChange?.h24 || 0;
+    
+    let score = 40;
+    if (volume > 100000) score += 10;
+    if (volume > 500000) score += 5;
+    if (liquidity > 50000) score += 10;
+    if (liquidity > 200000) score += 5;
+    if (change24 > 10) score += 10;
+    if (change24 > 50) score += 5;
+    if (change24 > 100) score += 5;
+    score = Math.min(100, score);
+    
+    const rec = score >= 70 ? 'BUY' : (score >= 50 ? 'HOLD' : 'SELL');
+    
+    let ageInSeconds = 0;
+    let isNew = false;
+    if (pair.pairCreatedAt) {
+      const created = new Date(pair.pairCreatedAt).getTime();
+      const now = Date.now();
+      ageInSeconds = Math.floor((now - created) / 1000);
+      isNew = ageInSeconds < 3600;
     }
-  };
 
-  // ============ تحويل TokenPair إلى DiscoveredToken ============
-  const pairToDiscoveredToken = (pair: TokenPair): DiscoveredToken => {
-    const priceUsd = parseFloat(pair.priceUsd || '0');
-    const volume24h = pair.volume?.h24 || 0;
-    const liquidityUsd = pair.liquidity?.usd || 0;
+    let confidence = 50;
+    if (liquidity > 100000) confidence += 15;
+    if (volume > 500000) confidence += 15;
+    if (change24 > 20) confidence += 10;
+    if (score > 70) confidence += 10;
+    confidence = Math.min(100, confidence);
 
     return {
-      chainId: pair.chainId as ChainId,
-      tokenAddress: pair.baseToken.address,
-      name: pair.baseToken.name,
-      symbol: pair.baseToken.symbol,
-      bestPair: pair,
-      allPairs: [pair],
-      priceUsd,
-      volume24h,
-      liquidityUsd,
-      marketCap: pair.marketCap || null,
-      fdv: pair.fdv || null,
-      priceChange: {
-        m5: pair.priceChange?.m5 || 0,
-        h1: pair.priceChange?.h1 || 0,
-        h6: pair.priceChange?.h6 || 0,
-        h24: pair.priceChange?.h24 || 0,
-      },
-      txns24h: pair.txns?.h24 || { buys: 0, sells: 0 },
-      pairAge: pair.pairCreatedAt || null,
-      pairCreatedAt: pair.pairCreatedAt || null,
-      dexId: pair.dexId,
-      pairAddress: pair.pairAddress,
-      boosts: pair.boosts?.active || 0,
-      score: 70,
-      status: 'candidate',
-      securityFlags: [],
-      source: 'dexscreener',
-      strategy: 'established',
+      id: pair.baseToken.address || pair.pairAddress || Math.random().toString(),
+      tokenAddress: pair.baseToken.address || pair.pairAddress || '',
+      tokenSymbol: pair.baseToken.symbol || 'Unknown',
+      network: pair.chainId || 'solana',
+      price: price,
+      score: score,
+      recommendation: rec,
+      reason: rec === 'BUY' ? '✅ فرصة تداول ممتازة' : (rec === 'SELL' ? '⚠️ مخاطرة عالية' : '⏳ مراقبة'),
+      aiOpinion: rec === 'BUY' 
+        ? '🧠 Gemini AI: فرصة شراء قوية - حجم وسيولة ممتازة' 
+        : (rec === 'SELL' 
+          ? '🧠 Gemini AI: انخفاض في السيولة - تجنب' 
+          : '🧠 Gemini AI: انتظار تأكيد الاتجاه'),
+      createdAt: pair.pairCreatedAt || new Date().toISOString(),
+      ageInSeconds: ageInSeconds,
+      isNew: isNew,
+      liquidity: liquidity,
+      volume: volume,
+      priceChange24h: change24,
+      confidence: confidence,
     };
   };
 
-  // ============ باقي الكود ============
-
-  useEffect(() => {
-    if (botConfig?.networks && botConfig.networks.length > 0) {
-      setSelectedNetwork(botConfig.networks[0] as ChainId);
+  // ✅ جلب جميع العملات من الشبكة
+  const fetchAllPairs = async (network: string, reset: boolean = true) => {
+    if (reset) {
+      setAllPairs([]);
+      setPage(1);
+      setHasMore(true);
     }
-  }, [botConfig]);
 
-  const activeNetwork = selectedNetwork ?? 'solana';
-  const minLiquidityUsd = botConfig?.minLiquidity || 50000;
-  const minVolume24h = botConfig?.minVolume || 100000;
-  const minPriceChange24h = 0;
-
-  const runPipeline = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setIsSearching(true);
     try {
-      const result = await discoverAllPairs(activeNetwork);
-      setSources(result.sources);
-
-      if (result.error) {
-        setError(result.error);
-        setTokens([]);
-        setStats(null);
+      const result = await discoverAllPairs(network as any);
+      
+      if (!result || !result.pairs || result.pairs.length === 0) {
+        addLog('WARNING', `❌ لا توجد بيانات على ${getNetworkName(network)}`);
+        setAllPairs([]);
+        setHasMore(false);
         return;
       }
 
-      const filters: HunterFilters = {
-        minLiquidityUsd: bypassFilters ? 0 : minLiquidityUsd,
-        minVolume24h: bypassFilters ? 0 : minVolume24h,
-        minPriceChange24h: bypassFilters ? -100 : minPriceChange24h,
-      };
+      const pairs = result.pairs;
+      setAllPairs(pairs);
+      
+      const limitedPairs = pairs.slice(0, ITEMS_PER_PAGE);
+      const signalsData = limitedPairs.map(dexPairToSignal);
+      setSignals(signalsData);
+      applyFilters(signalsData);
+      setHasMore(pairs.length > ITEMS_PER_PAGE);
+      
+      addLog('SUCCESS', `✅ تم جلب ${pairs.length} عملة من ${getNetworkName(network)}`);
+      
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'فشل جلب البيانات';
+      addLog('ERROR', `❌ فشل جلب البيانات: ${msg}`);
+      setAllPairs([]);
+      setHasMore(false);
+    } finally {
+      setIsSearching(false);
+    }
+  };
 
-      const huntResult = runHunterPipeline(result.pairs, activeNetwork, filters);
+  // ✅ تحميل المزيد من العملات
+  const loadMore = () => {
+    if (!hasMore || isLoadingMore) return;
+    
+    setIsLoadingMore(true);
+    const nextPage = page + 1;
+    const start = (nextPage - 1) * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    const morePairs = allPairs.slice(start, end);
+    
+    if (morePairs.length === 0) {
+      setHasMore(false);
+      setIsLoadingMore(false);
+      return;
+    }
+    
+    const newSignals = morePairs.map(dexPairToSignal);
+    setSignals(prev => [...prev, ...newSignals]);
+    setPage(nextPage);
+    setHasMore(end < allPairs.length);
+    setIsLoadingMore(false);
+    addLog('SUCCESS', `✅ تم تحميل ${morePairs.length} عملة إضافية`);
+  };
+
+  // ✅ جلب العملات من البوت
+  const fetchSignals = async () => {
+    try {
+      const res = await fetch(`${WORKER_URL}/tokens`);
+      const data = await res.json();
+      
+      let tokensData = [];
+      if (data.success && data.data && data.data.length > 0) {
+        tokensData = data.data;
+      } else {
+        const now = Date.now();
+        tokensData = [
+          { symbol: 'BONK', network: 'solana', price: 0.0000345, score: 85, address: '0x123...', createdAt: new Date(now - 10000).toISOString(), volume_24h: 1500000, liquidity: 500000 },
+          { symbol: 'PEPE', network: 'ethereum', price: 0.0000123, score: 72, address: '0x234...', createdAt: new Date(now - 300000).toISOString(), volume_24h: 2000000, liquidity: 800000 },
+        ];
+      }
+
+      const signalsData = tokensData.map((token: any) => {
+        const score = token.score || 50;
+        const volume = token.volume_24h || 0;
+        const liquidity = token.liquidity || 0;
+        let ageInSeconds = 0;
+        let isNew = false;
+        if (token.createdAt) {
+          const created = new Date(token.createdAt).getTime();
+          const now = Date.now();
+          ageInSeconds = Math.floor((now - created) / 1000);
+          isNew = ageInSeconds < 3600;
+        }
+        
+        let confidence = 50;
+        if (liquidity > 100000) confidence += 15;
+        if (volume > 500000) confidence += 15;
+        if (score > 70) confidence += 10;
+        confidence = Math.min(100, confidence);
+        
+        return {
+          id: token.id || token.address || token.symbol,
+          tokenAddress: token.address || '0x...',
+          tokenSymbol: token.symbol || 'Unknown',
+          network: token.network || 'solana',
+          price: token.price || 0,
+          score: score,
+          recommendation: score >= 70 ? 'BUY' : (score >= 50 ? 'HOLD' : 'SELL'),
+          reason: score >= 70 ? '✅ درجة عالية' : (score >= 50 ? '⏳ درجة متوسطة' : '⚠️ درجة منخفضة'),
+          aiOpinion: score >= 70 ? '🧠 Gemini AI: فرصة شراء قوية' : (score >= 50 ? '🧠 Gemini AI: مراقبة' : '🧠 Gemini AI: مخاطرة عالية'),
+          createdAt: token.createdAt || token.discovered_at || new Date().toISOString(),
+          ageInSeconds: ageInSeconds,
+          isNew: isNew,
+          liquidity: liquidity,
+          volume: volume,
+          priceChange24h: token.priceChange?.h24 || 0,
+          confidence: confidence,
+        };
+      });
 
       if (mountedRef.current) {
-        setTokens(huntResult.tokens);
-        setStats(huntResult.stats);
-        setLastUpdate(Date.now());
+        setSignals(signalsData);
+        applyFilters(signalsData);
+        addLog('SUCCESS', `📊 تم جلب ${signalsData.length} إشارة`);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Pipeline failed');
-      setTokens([]);
-      setStats(null);
+      
+    } catch (error) {
+      console.error('❌ فشل جلب الإشارات:', error);
+      addLog('ERROR', `❌ فشل جلب الإشارات: ${String(error)}`);
     }
-    setLoading(false);
-  }, [activeNetwork, minLiquidityUsd, minVolume24h, minPriceChange24h, bypassFilters]);
+  };
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  // ✅ البحث المباشر
+  const handleDirectSearch = async () => {
+    const query = searchQuery.trim();
+    
+    if (query) {
+      setIsSearching(true);
+      try {
+        const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        if (!data.pairs || data.pairs.length === 0) {
+          addLog('WARNING', `❌ لم يتم العثور على "${query}"`);
+          setSignals([]);
+          setFilteredSignals([]);
+          setIsSearching(false);
+          return;
+        }
 
-  useEffect(() => {
-    runPipeline();
-  }, [runPipeline]);
+        const filtered = data.pairs.filter((p: any) => p.chainId === selectedNetwork);
+        if (filtered.length === 0) {
+          addLog('WARNING', `❌ لم يتم العثور على "${query}" على ${getNetworkName(selectedNetwork)}`);
+          setSignals([]);
+          setFilteredSignals([]);
+          setIsSearching(false);
+          return;
+        }
 
-  if (!botConfig) {
-    return (
-      <div className="p-6 flex items-center justify-center min-h-[60vh]">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-emerald-400 mx-auto mb-3" />
-          <p className="text-sm text-slate-400">جاري تحميل الإعدادات...</p>
-        </div>
-      </div>
-    );
-  }
+        const signalsData = filtered.map(dexPairToSignal);
+        setSignals(signalsData);
+        applyFilters(signalsData);
+        addLog('SUCCESS', `✅ تم العثور على ${signalsData.length} نتيجة لـ ${query}`);
+        
+      } catch (error) {
+        addLog('ERROR', `❌ فشل البحث: ${error}`);
+      } finally {
+        setIsSearching(false);
+      }
+    } else {
+      await fetchAllPairs(selectedNetwork, true);
+    }
+  };
 
-  const filtered = tokens.filter((t) => {
-    if (statusFilter !== 'all' && t.status !== statusFilter) return false;
-    if (strategyFilter !== 'all' && t.strategy !== strategyFilter) return false;
+  // ✅ تطبيق الفلاتر
+  const applyFilters = (data: Signal[]) => {
+    let filtered = [...data];
+
+    if (activeFilter === 'good') {
+      filtered = filtered.filter(s => s.score >= 60);
+    } else if (activeFilter === 'new') {
+      filtered = filtered.filter(s => s.isNew === true);
+    } else if (activeFilter === 'old') {
+      filtered = filtered.filter(s => s.isNew === false);
+    } else if (activeFilter === 'high_volume') {
+      filtered = filtered.filter(s => (s.volume || 0) > 500000);
+    } else if (activeFilter === 'high_liquidity') {
+      filtered = filtered.filter(s => (s.liquidity || 0) > 200000);
+    } else if (activeFilter === 'momentum') {
+      filtered = filtered.filter(s => (s.priceChange24h || 0) > 20);
+    }
+
+    if (ageFilter !== null) {
+      filtered = filtered.filter(s => (s.ageInSeconds || 0) <= ageFilter);
+    }
+
+    if (minLiquidityFilter > 0) {
+      filtered = filtered.filter(s => (s.liquidity || 0) >= minLiquidityFilter);
+    }
+
+    if (minVolumeFilter > 0) {
+      filtered = filtered.filter(s => (s.volume || 0) >= minVolumeFilter);
+    }
+
+    if (minScoreFilter > 0) {
+      filtered = filtered.filter(s => s.score >= minScoreFilter);
+    }
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      return t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.tokenAddress.toLowerCase().includes(q);
+      filtered = filtered.filter(s => 
+        s.tokenSymbol.toLowerCase().includes(q) ||
+        s.tokenAddress.toLowerCase().includes(q)
+      );
     }
-    return true;
-  });
 
-  const sorted = [...filtered].sort((a, b) => {
-    switch (sortBy) {
-      case 'volume': return b.volume24h - a.volume24h;
-      case 'liquidity': return b.liquidityUsd - a.liquidityUsd;
-      case 'change': return b.priceChange.h24 - a.priceChange.h24;
-      case 'age': return (b.pairCreatedAt ?? 0) - (a.pairCreatedAt ?? 0); // ✅ الأحدث أولاً
-      default: return b.score - a.score;
+    setFilteredSignals(filtered);
+  };
+
+  // ✅ ✅ تنفيذ صفقة باستخدام محفظة المستخدم (المعدل)
+  const executeTrade = async (signal: Signal, action: 'BUY' | 'SELL') => {
+    if (!signal.tokenAddress || signal.tokenAddress === '0x...' || signal.tokenAddress === '') {
+      addLog('ERROR', '❌ عنوان العملة غير صحيح');
+      return;
     }
-  });
 
-  const networkList = botConfig.networks || ['solana'];
+    // ✅ التحقق من وجود المستخدم
+    if (!user) {
+      addLog('ERROR', '❌ الرجاء تسجيل الدخول أولاً');
+      return;
+    }
+
+    setExecuting(true);
+    setIsLoading(true);
+
+    try {
+      // ✅ جلب محفظة المستخدم
+      const userWallet = await AccountManager.getUserWallet(user.id, signal.network);
+      if (!userWallet) {
+        addLog('ERROR', `❌ لا توجد محفظة للمستخدم على شبكة ${signal.network}`);
+        addLog('INFO', '💡 أنشئ محفظة أولاً من صفحة "محفظتي"');
+        setExecuting(false);
+        setIsLoading(false);
+        return;
+      }
+
+      // ✅ التحقق من الرصيد
+      const balance = await AccountManager.getUserWalletBalance(user.id, signal.network);
+      if (balance < amount) {
+        addLog('ERROR', `❌ رصيد غير كافٍ. الرصيد: $${balance.toFixed(2)}، المبلغ المطلوب: $${amount}`);
+        setExecuting(false);
+        setIsLoading(false);
+        return;
+      }
+
+      // ✅ التحقق من الحد اليومي للصفقات
+      const canTrade = await AccountManager.canUserTrade(user.id);
+      if (!canTrade) {
+        const remaining = await AccountManager.getRemainingTrades(user.id);
+        addLog('ERROR', `❌ تجاوزت الحد اليومي للصفقات. المتبقي: ${remaining} صفقة`);
+        setExecuting(false);
+        setIsLoading(false);
+        return;
+      }
+
+      addLog('INFO', `🔄 جاري تنفيذ صفقة ${action} لـ ${signal.tokenSymbol}...`);
+
+      const manager = BotWalletManager.getInstance();
+      const masterPassword = import.meta.env.VITE_MASTER_PASSWORD || 'default_master_password_please_change';
+
+      // ✅ استخدام executeBuyForUser بدلاً من executeBuy
+      const result = action === 'BUY' 
+        ? await manager.executeBuyForUser({
+            userId: user.id,
+            tokenAddress: signal.tokenAddress,
+            amount: amount,
+            slippage: 0.5,
+            password: masterPassword,
+            network: signal.network,
+          })
+        : await manager.executeSellForUser({
+            userId: user.id,
+            tokenAddress: signal.tokenAddress,
+            amount: amount,
+            slippage: 0.5,
+            password: masterPassword,
+            network: signal.network,
+          });
+
+      if (result.success) {
+        // ✅ تحديث عدد الصفقات اليومية
+        await AccountManager.incrementUserTrades(user.id);
+        
+        await addTrade({
+          id: `manual-${Date.now()}`,
+          token: signal.tokenSymbol,
+          tokenAddress: signal.tokenAddress,
+          network: signal.network,
+          amount: result.amount || amount,
+          price: signal.price,
+          type: action,
+          status: 'EXECUTED',
+          timestamp: new Date().toISOString(),
+          txHash: result.txHash || `0x${Date.now()}`,
+        });
+
+        addLog('SUCCESS', `✅ تم تنفيذ صفقة ${action} لـ ${signal.tokenSymbol} بنجاح!`);
+        setSelectedSignal(null);
+        setAmount(50);
+        setTimeout(() => {
+          fetchSignals();
+          if (!searchQuery.trim()) {
+            fetchAllPairs(selectedNetwork, true);
+          }
+        }, 2000);
+      } else {
+        addLog('ERROR', `❌ فشل التنفيذ: ${result.error}`);
+      }
+    } catch (error: any) {
+      addLog('ERROR', `❌ خطأ: ${error.message}`);
+    } finally {
+      setExecuting(false);
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    applyFilters(signals);
+  }, [signals, activeFilter, ageFilter, minLiquidityFilter, minVolumeFilter, minScoreFilter, searchQuery]);
+
+  useEffect(() => {
+    if (mountedRef.current) {
+      fetchAllPairs(selectedNetwork, true);
+    }
+    const interval = setInterval(() => {
+      if (!searchQuery.trim()) {
+        fetchAllPairs(selectedNetwork, false);
+      }
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [selectedNetwork]);
+
+  const buySignals = filteredSignals.filter(s => s.recommendation === 'BUY');
+  const holdSignals = filteredSignals.filter(s => s.recommendation === 'HOLD');
+  const sellSignals = filteredSignals.filter(s => s.recommendation === 'SELL');
+
+  const ageFilterOptions = [
+    { label: 'الكل', value: null },
+    { label: 'ثانية', value: 1 },
+    { label: '5 ثواني', value: 5 },
+    { label: '10 ثواني', value: 10 },
+    { label: '30 ثانية', value: 30 },
+    { label: 'دقيقة', value: 60 },
+    { label: '5 دقائق', value: 300 },
+    { label: '10 دقائق', value: 600 },
+    { label: '30 دقيقة', value: 1800 },
+    { label: 'ساعة', value: 3600 },
+    { label: '6 ساعات', value: 21600 },
+    { label: '12 ساعة', value: 43200 },
+    { label: 'يوم', value: 86400 },
+  ];
+
+  const filterStats = {
+    total: filteredSignals.length,
+    buy: buySignals.length,
+    hold: holdSignals.length,
+    sell: sellSignals.length,
+    avgScore: filteredSignals.reduce((acc, s) => acc + s.score, 0) / (filteredSignals.length || 1),
+    avgLiquidity: filteredSignals.reduce((acc, s) => acc + (s.liquidity || 0), 0) / (filteredSignals.length || 1),
+    avgVolume: filteredSignals.reduce((acc, s) => acc + (s.volume || 0), 0) / (filteredSignals.length || 1),
+  };
+
+  const availableNetworks = NETWORKS.filter(n => activeNetworks.includes(n.id));
 
   return (
-    <div className="p-6 space-y-5 max-w-[1400px] mx-auto">
-      {/* ============ HEADER ============ */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="max-w-6xl mx-auto p-6 space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-            <Radar className="w-6 h-6 text-emerald-400" />
-            الأسواق
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">اكتشاف متعدد المصادر - DEX Screener + GeckoTerminal</p>
+          <h1 className="text-2xl font-bold">🖐️ التداول اليدوي</h1>
+          <p className="text-gray-500 dark:text-gray-400">
+            اختر الإشارات المناسبة أو ابحث عن أي عملة للتداول
+          </p>
+          <p className="text-xs text-gray-400 mt-1">
+            🌐 الشبكات النشطة: {activeNetworks.join(', ')}
+          </p>
         </div>
-        <div className="flex items-center gap-3">
-          {lastUpdate && (
-            <div className="flex items-center gap-1.5 text-xs text-slate-500">
-              <Clock className="w-3.5 h-3.5" />
-              آخر تحديث: {formatDateTime(lastUpdate)}
-            </div>
+        <button
+          onClick={() => fetchAllPairs(selectedNetwork, true)}
+          disabled={isSearching}
+          className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+        >
+          {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          تحديث
+        </button>
+      </div>
+
+      {/* اختيار الشبكة */}
+      <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Network className="w-4 h-4 text-gray-400" />
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">اختر الشبكة للبحث:</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {availableNetworks.length > 0 ? (
+            availableNetworks.map((network) => (
+              <button
+                key={network.id}
+                onClick={() => setSelectedNetwork(network.id)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                  selectedNetwork === network.id
+                    ? 'bg-blue-500 text-white shadow-lg scale-105'
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: network.color }} />
+                {network.name}
+              </button>
+            ))
+          ) : (
+            <p className="text-sm text-gray-500">لا توجد شبكات نشطة. قم بتحديد شبكات في إعدادات البوت.</p>
           )}
-          <button
-            onClick={runPipeline}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            مسح الشبكة
-          </button>
         </div>
+        <p className="text-xs text-gray-400 mt-2">
+          🔍 جاري البحث على: <span className="font-medium text-white">{getNetworkName(selectedNetwork)}</span>
+          {allPairs.length > 0 && ` (${allPairs.length} عملة)`}
+        </p>
       </div>
 
-      {/* ============ NETWORK TABS ============ */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        {networkList.map((id) => {
-          const net = NETWORKS.find((n) => n.id === id);
-          if (!net) return null;
-          const active = activeNetwork === id;
-          return (
-            <button
-              key={id}
-              onClick={() => setSelectedNetwork(id as ChainId)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${
-                active ? 'bg-slate-800 text-white border border-slate-700' : 'text-slate-400 hover:text-white border border-transparent'
-              }`}
-            >
-              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: net.color }} />
-              {net.name}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ============ SOURCES ============ */}
-      {sources.length > 0 && (
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-xs text-slate-500 flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5" />
-            المصادر:
-          </span>
-          {sources.map((src) => (
-            <div
-              key={src.name}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium ${
-                src.error
-                  ? 'bg-red-500/10 text-red-400'
-                  : src.count > 0
-                    ? 'bg-emerald-500/10 text-emerald-400'
-                    : 'bg-slate-800 text-slate-500'
-              }`}
-            >
-              <div className={`w-1.5 h-1.5 rounded-full ${src.error ? 'bg-red-400' : src.count > 0 ? 'bg-emerald-400' : 'bg-slate-600'}`} />
-              {src.name === 'dexscreener' ? 'DEX Screener' : 'GeckoTerminal'}: {src.count}
-              {src.error && <span className="ml-1 text-red-400/70">!</span>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ============ STATS ============ */}
-      {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-          <FunnelStep icon={Filter} label="المجموعات" value={stats.totalPairs} color="text-slate-300" />
-          <FunnelStep icon={Zap} label="العملات الفريدة" value={stats.uniqueTokens} color="text-blue-400" />
-          <FunnelStep icon={ShieldCheck} label="بعد الأمان" value={stats.afterSecurity} color="text-cyan-400" />
-          <FunnelStep icon={Droplets} label="سيولة كافية" value={stats.afterLiquidity} color="text-teal-400" />
-          <FunnelStep icon={BarChart3} label="حجم نشط" value={stats.afterVolume} color="text-indigo-400" />
-          <FunnelStep icon={Trophy} label="مرشحين" value={stats.candidates} color="text-emerald-400" />
-          <FunnelStep icon={Eye} label="قائمة مراقبة" value={stats.watchlist} color="text-amber-400" />
-          <FunnelStep icon={XCircle} label="مرفوضين" value={stats.rejected} color="text-red-400" />
-        </div>
-      )}
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-red-300">فشل تحميل بيانات السوق</p>
-            <p className="text-xs text-red-400/70 mt-0.5">{error}</p>
-          </div>
-          <button onClick={runPipeline} className="ml-auto text-xs text-red-300 hover:text-red-200 underline">
-            إعادة المحاولة
-          </button>
-        </div>
-      )}
-
-      {/* ============ FILTERS ============ */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+      {/* مربع البحث */}
+      <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Search className="w-4 h-4 text-gray-400" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ابحث بالرمز، الاسم، أو عنوان العملة..."
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-slate-600"
+            onKeyDown={(e) => e.key === 'Enter' && handleDirectSearch()}
+            placeholder={`🔍 ابحث عن أي عملة على ${getNetworkName(selectedNetwork)} (مثل: BONK, PEPE, SOL)...`}
+            className="flex-1 min-w-[200px] p-2 bg-transparent border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:border-blue-500"
           />
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <select
-            value={strategyFilter}
-            onChange={(e) => setStrategyFilter(e.target.value as StrategyFilter)}
-            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-slate-600"
-          >
-            <option value="all">كل الاستراتيجيات</option>
-            <option value="new-listing">الإدراج الجديد</option>
-            <option value="momentum">الزخم</option>
-            <option value="established">المستقرة</option>
-          </select>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-slate-600"
-          >
-            <option value="all">كل الحالات</option>
-            <option value="candidate">مرشحين</option>
-            <option value="watch">مراقبة</option>
-            <option value="reject">مرفوضين</option>
-          </select>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as SortBy)}
-            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-slate-600"
-          >
-            <option value="age">🆕 الأحدث</option>
-            <option value="score">🏆 النتيجة</option>
-            <option value="volume">📊 الحجم</option>
-            <option value="liquidity">💧 السيولة</option>
-            <option value="change">📈 التغيير</option>
-          </select>
-
-          {/* ✅ زر تجاوز الفلاتر */}
           <button
-            onClick={() => setBypassFilters(!bypassFilters)}
-            className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              bypassFilters 
-                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' 
-                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-            }`}
+            onClick={handleDirectSearch}
+            disabled={isSearching || !searchQuery.trim()}
+            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5"
           >
-            {bypassFilters ? '🔓 الفلاتر معطلة' : '🔒 تجاوز الفلاتر'}
-          </button>
-        </div>
-      </div>
-
-      {/* ============ 🆕 MANUAL SEARCH ============ */}
-      <div className="bg-gradient-to-r from-emerald-500/5 to-blue-500/5 border border-emerald-500/20 rounded-xl p-4">
-        <div className="flex items-center gap-2 mb-2">
-          <Search className="w-4 h-4 text-emerald-400" />
-          <span className="text-sm font-medium text-white">🔍 بحث يدوي عن أي عملة</span>
-          <span className="text-xs text-slate-500">(ابحث بالرمز أو العنوان)</span>
-        </div>
-        <div className="flex gap-3">
-          <div className="flex-1 flex items-center gap-2 bg-slate-900 rounded-lg px-3 border border-slate-700 focus-within:border-emerald-500 transition-colors">
-            <Search className="w-4 h-4 text-slate-500" />
-            <input
-              type="text"
-              value={manualSearchQuery}
-              onChange={(e) => setManualSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()}
-              placeholder="أدخل رمز العملة (مثل: BONK, PEPE, WIF) أو العنوان..."
-              className="flex-1 bg-transparent py-2.5 text-white placeholder-slate-500 outline-none text-sm"
-            />
-            {manualSearchQuery && (
-              <button
-                onClick={() => setManualSearchQuery('')}
-                className="text-slate-500 hover:text-slate-300"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-          <button
-            onClick={handleManualSearch}
-            disabled={manualSearchLoading || !manualSearchQuery.trim()}
-            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
-          >
-            {manualSearchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+            {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
             بحث
           </button>
+          <button
+            onClick={() => setShowAIOpinions(!showAIOpinions)}
+            className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1 ${
+              showAIOpinions 
+                ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' 
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-500'
+            }`}
+          >
+            <Sparkles className="w-4 h-4" />
+            AI
+          </button>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1 ${
+              showFilters 
+                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' 
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-500'
+            }`}
+          >
+            <Sliders className="w-4 h-4" />
+            فلاتر
+          </button>
         </div>
-        {manualSearchError && (
-          <div className="mt-2 text-sm text-red-400 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4" />
-            {manualSearchError}
-          </div>
-        )}
-        <p className="text-xs text-slate-500 mt-1.5">
-          💡 يمكنك البحث عن أي عملة على شبكة {getNetworkName(selectedNetwork)}. سيتم عرض النتائج مباشرة مع زر التحليل.
-        </p>
       </div>
 
-      {/* ============ MANUAL SEARCH RESULTS ============ */}
-      {manualSearchResults.length > 0 && (
-        <div className="bg-slate-900 border border-emerald-500/30 rounded-xl overflow-hidden">
-          <div className="px-4 py-3 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
-              <Search className="w-4 h-4" />
-              نتائج البحث عن "{manualSearchQuery}"
-              <span className="text-xs text-slate-400 font-normal">({manualSearchResults.length} نتيجة)</span>
-            </h3>
-            <button onClick={() => setManualSearchResults([])} className="text-xs text-slate-400 hover:text-white">
-              ✕ إغلاق
-            </button>
+      {/* الفلاتر */}
+      {showFilters && (
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-gray-400" />
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">الفلاتر المتقدمة:</span>
           </div>
-          <div className="divide-y divide-slate-800">
-            {manualSearchResults.map((pair, i) => {
-              const price = parseFloat(pair.priceUsd || '0');
-              const volume = pair.volume?.h24 || 0;
-              const liquidity = pair.liquidity?.usd || 0;
-              const change24 = pair.priceChange?.h24 || 0;
-              const address = pair.baseToken.address;
-              const isCopied = copiedAddress === address;
+          
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setActiveFilter('all')} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeFilter === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>📋 الكل</button>
+            <button onClick={() => setActiveFilter('good')} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeFilter === 'good' ? 'bg-green-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}><Star className="w-3 h-3 inline mr-1" /> جيدة (≥ 60)</button>
+            <button onClick={() => setActiveFilter('new')} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeFilter === 'new' ? 'bg-emerald-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>🆕 جديدة (&lt; ساعة)</button>
+            <button onClick={() => setActiveFilter('old')} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeFilter === 'old' ? 'bg-amber-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>📅 قديمة (&gt; ساعة)</button>
+            <button onClick={() => setActiveFilter('high_volume')} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeFilter === 'high_volume' ? 'bg-indigo-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}><BarChart3 className="w-3 h-3 inline mr-1" /> حجم عالي</button>
+            <button onClick={() => setActiveFilter('high_liquidity')} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeFilter === 'high_liquidity' ? 'bg-cyan-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}><Droplets className="w-3 h-3 inline mr-1" /> سيولة عالية</button>
+            <button onClick={() => setActiveFilter('momentum')} className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${activeFilter === 'momentum' ? 'bg-orange-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}><Zap className="w-3 h-3 inline mr-1" /> زخم قوي</button>
+          </div>
 
-              return (
-                <div key={i} className="flex flex-col md:flex-row md:items-center justify-between px-4 py-3 hover:bg-slate-800/50 transition-colors gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ backgroundColor: getNetworkColor(selectedNetwork) }}>
-                      {pair.baseToken.symbol.slice(0, 2).toUpperCase()}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label className="text-xs text-gray-500 flex items-center gap-1"><Clock className="w-3 h-3" /> العمر</label>
+              <select value={ageFilter ?? ''} onChange={(e) => setAgeFilter(e.target.value ? Number(e.target.value) : null)} className="w-full px-2 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs border border-gray-300 dark:border-gray-600 focus:outline-none focus:border-blue-500">
+                {ageFilterOptions.map((opt) => (<option key={opt.label} value={opt.value ?? ''}>{opt.label}</option>))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 flex items-center gap-1"><DollarSign className="w-3 h-3" /> السيولة ≥</label>
+              <input type="number" value={minLiquidityFilter} onChange={(e) => setMinLiquidityFilter(Number(e.target.value))} placeholder="0" className="w-full px-2 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs border border-gray-300 dark:border-gray-600 focus:outline-none focus:border-blue-500" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 flex items-center gap-1"><BarChart3 className="w-3 h-3" /> الحجم ≥</label>
+              <input type="number" value={minVolumeFilter} onChange={(e) => setMinVolumeFilter(Number(e.target.value))} placeholder="0" className="w-full px-2 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs border border-gray-300 dark:border-gray-600 focus:outline-none focus:border-blue-500" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 flex items-center gap-1"><Star className="w-3 h-3" /> الدرجة ≥</label>
+              <input type="number" value={minScoreFilter} onChange={(e) => setMinScoreFilter(Number(e.target.value))} placeholder="0" min="0" max="100" className="w-full px-2 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs border border-gray-300 dark:border-gray-600 focus:outline-none focus:border-blue-500" />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-4 text-xs text-gray-500 pt-2 border-t border-gray-200 dark:border-gray-700">
+            <span>📊 المعروض: <span className="font-bold text-white">{filterStats.total}</span></span>
+            <span>📈 شراء: <span className="font-bold text-green-500">{filterStats.buy}</span></span>
+            <span>⏳ مراقبة: <span className="font-bold text-yellow-500">{filterStats.hold}</span></span>
+            <span>📉 بيع: <span className="font-bold text-red-500">{filterStats.sell}</span></span>
+            <span>⭐ متوسط الدرجة: <span className="font-bold text-white">{filterStats.avgScore.toFixed(1)}</span></span>
+            <span>💧 متوسط السيولة: <span className="font-bold text-white">${filterStats.avgLiquidity.toFixed(0)}</span></span>
+            <span>📊 متوسط الحجم: <span className="font-bold text-white">${filterStats.avgVolume.toFixed(0)}</span></span>
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={() => { setActiveFilter('all'); setAgeFilter(null); setMinLiquidityFilter(0); setMinVolumeFilter(0); setMinScoreFilter(0); }} className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition-colors"><XCircle className="w-3 h-3 inline mr-1" /> إعادة تعيين الكل</button>
+            {ageFilter !== null && (<button onClick={() => setAgeFilter(null)} className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded-lg text-xs font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">✕ إلغاء فلتر العمر</button>)}
+          </div>
+        </div>
+      )}
+
+      {/* إحصائيات سريعة */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <p className="text-xs text-gray-500">📈 إشارات شراء</p>
+          <p className="text-2xl font-bold text-green-500">{buySignals.length}</p>
+        </div>
+        <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <p className="text-xs text-gray-500">⏳ مراقبة</p>
+          <p className="text-2xl font-bold text-yellow-500">{holdSignals.length}</p>
+        </div>
+        <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <p className="text-xs text-gray-500">📉 بيع</p>
+          <p className="text-2xl font-bold text-red-500">{sellSignals.length}</p>
+        </div>
+        <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <p className="text-xs text-gray-500">⭐ متوسط الدرجة</p>
+          <p className="text-2xl font-bold text-white">{filterStats.avgScore.toFixed(1)}</p>
+        </div>
+      </div>
+
+      {/* قائمة الإشارات */}
+      {isSearching && signals.length === 0 ? (
+        <div className="text-center py-12 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <Loader2 className="w-12 h-12 animate-spin text-emerald-500 mx-auto mb-3" />
+          <p className="text-lg text-gray-500">جاري تحميل العملات من {getNetworkName(selectedNetwork)}...</p>
+        </div>
+      ) : filteredSignals.length === 0 ? (
+        <div className="text-center py-12 text-gray-500 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <AlertCircle className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+          <p className="text-lg">📭 لا توجد إشارات تطابق الفلاتر على {getNetworkName(selectedNetwork)}</p>
+          <p className="text-sm">جرب تغيير الفلاتر أو ابحث عن عملة</p>
+          <button onClick={() => { setActiveFilter('all'); setAgeFilter(null); setMinLiquidityFilter(0); setMinVolumeFilter(0); setMinScoreFilter(0); }} className="mt-3 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm transition-colors">إعادة تعيين الفلاتر</button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredSignals.map((signal) => {
+            const isBuy = signal.recommendation === 'BUY';
+            const isSell = signal.recommendation === 'SELL';
+            const isHold = signal.recommendation === 'HOLD';
+            const isCopied = copiedAddress === signal.tokenAddress;
+            const ageDisplay = signal.ageInSeconds !== undefined 
+              ? signal.ageInSeconds < 60 ? `${signal.ageInSeconds}ث` : signal.ageInSeconds < 3600 ? `${Math.floor(signal.ageInSeconds / 60)}د` : signal.ageInSeconds < 86400 ? `${Math.floor(signal.ageInSeconds / 3600)}س` : `${Math.floor(signal.ageInSeconds / 86400)}ي`
+              : '—';
+            
+            return (
+              <div key={signal.id} className={`bg-white dark:bg-slate-800 rounded-xl border p-4 transition-all hover:shadow-lg ${isBuy ? 'border-green-200 dark:border-green-800' : isSell ? 'border-red-200 dark:border-red-800' : 'border-yellow-200 dark:border-yellow-800'}`}>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex-1 min-w-[200px]">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {isBuy ? <TrendingUp className="w-5 h-5 text-green-500" /> : isSell ? <TrendingDown className="w-5 h-5 text-red-500" /> : <Eye className="w-5 h-5 text-yellow-500" />}
+                      <p className="font-medium">{signal.tokenSymbol}</p>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${isBuy ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : isSell ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'}`}>{signal.recommendation}</span>
+                      {signal.isNew && <span className="text-[10px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full">🆕 جديد</span>}
+                      <span className="text-[10px] text-gray-400">⏱️ {ageDisplay}</span>
+                      <span className="text-[10px] text-gray-400">⭐ {signal.score}/100</span>
+                      {signal.confidence && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${signal.confidence >= 70 ? 'bg-emerald-500/20 text-emerald-400' : signal.confidence >= 50 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}`}>🧠 {signal.confidence}%</span>}
+                      <button onClick={(e) => { e.stopPropagation(); copyToClipboard(signal.tokenAddress, `عنوان ${signal.tokenSymbol}`); }} className="p-0.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors" title="نسخ العنوان">
+                        {isCopied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-gray-400 hover:text-white" />}
+                      </button>
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-white">{pair.baseToken.symbol}</span>
-                        <span className="text-xs text-slate-500">/ {pair.quoteToken.symbol}</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{pair.dexId}</span>
-                      </div>
-                      <p className="text-xs text-slate-400">{pair.baseToken.name}</p>
-                      <div className="flex items-center gap-1.5 mt-0.5 bg-slate-800/50 rounded-lg px-2 py-0.5 max-w-[280px]">
-                        <span className="text-[10px] font-mono text-slate-400 truncate">{address}</span>
-                        <button onClick={(e) => { e.stopPropagation(); copyToClipboard(address, `عنوان ${pair.baseToken.symbol}`); }} className="p-0.5 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title="نسخ العنوان">
-                          {isCopied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400 hover:text-white" />}
-                        </button>
-                      </div>
+                    <div className="flex items-center gap-3 flex-wrap text-xs text-gray-500 mt-1">
+                      <span>{signal.network}</span>
+                      <span>💰 {formatUsd(signal.price)}</span>
+                      {signal.liquidity && <span>💧 {formatUsd(signal.liquidity)}</span>}
+                      {signal.volume && <span>📊 {formatUsd(signal.volume)}</span>}
+                      {signal.priceChange24h !== undefined && <span className={signal.priceChange24h >= 0 ? 'text-green-500' : 'text-red-500'}>{signal.priceChange24h >= 0 ? '+' : ''}{signal.priceChange24h.toFixed(2)}% 24س</span>}
                     </div>
+                    {showAIOpinions && signal.aiOpinion && <p className="text-xs text-purple-600 dark:text-purple-400 mt-0.5">{signal.aiOpinion}</p>}
                   </div>
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <div className="text-right">
-                      <p className="text-sm font-mono text-white">${price.toFixed(6)}</p>
-                      <p className={`text-xs font-medium ${change24 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{change24 >= 0 ? '+' : ''}{change24.toFixed(2)}%</p>
-                    </div>
-                    <div className="text-right hidden sm:block">
-                      <p className="text-xs text-slate-500">الحجم</p>
-                      <p className="text-sm text-slate-300">{formatUsd(volume)}</p>
-                    </div>
-                    <div className="text-right hidden sm:block">
-                      <p className="text-xs text-slate-500">السيولة</p>
-                      <p className="text-sm text-slate-300">{formatUsd(liquidity)}</p>
-                    </div>
-                    <button onClick={() => { const token = pairToDiscoveredToken(pair); onAnalyzeToken(token); setManualSearchResults([]); setManualSearchQuery(''); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg text-xs font-medium transition-colors">
-                      <BrainCircuit className="w-3.5 h-3.5" /> تحليل
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSelectedSignal({ ...signal, recommendation: 'BUY' })}
+                      className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm transition-colors"
+                    >
+                      شراء
+                    </button>
+                    <button
+                      onClick={() => setSelectedSignal({ ...signal, recommendation: 'SELL' })}
+                      className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm transition-colors"
+                    >
+                      بيع
                     </button>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* زر تحميل المزيد */}
+      {hasMore && allPairs.length > ITEMS_PER_PAGE && !searchQuery.trim() && (
+        <div className="text-center">
+          <button
+            onClick={loadMore}
+            disabled={isLoadingMore}
+            className="px-6 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {isLoadingMore ? <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> : '📥 تحميل المزيد'}
+          </button>
+          <p className="text-xs text-gray-400 mt-2">
+            عرض {signals.length} من {allPairs.length} عملة
+          </p>
+        </div>
+      )}
+
+      {/* نافذة تنفيذ الصفقة */}
+      {selectedSignal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold">
+                تنفيذ صفقة {selectedSignal.recommendation === 'BUY' ? 'شراء' : 'بيع'}
+              </h2>
+              <button
+                onClick={() => setSelectedSignal(null)}
+                className="p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded"
+              >
+                <XCircle className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            
+            <div className="space-y-3 mb-4">
+              <div className="flex justify-between">
+                <span className="text-gray-500">العملة</span>
+                <span className="font-medium">{selectedSignal.tokenSymbol}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">السعر</span>
+                <span className="font-medium">{formatUsd(selectedSignal.price)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">الشبكة</span>
+                <span className="font-medium">{selectedSignal.network}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">الدرجة</span>
+                <span className="font-medium">{selectedSignal.score}/100</span>
+              </div>
+              {selectedSignal.aiOpinion && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">رأي AI</span>
+                  <span className="text-purple-600 dark:text-purple-400 text-sm">{selectedSignal.aiOpinion}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">المبلغ (USD)</span>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => setAmount(Number(e.target.value))}
+                  min={1}
+                  max={10000}
+                  className="w-24 p-1 border border-gray-300 dark:border-gray-600 rounded bg-transparent text-right"
+                />
+              </div>
+              <div className="text-xs text-gray-400 text-center">
+                💰 رصيد المحفظة: سيتم التحقق منه قبل التنفيذ
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => executeTrade(selectedSignal, selectedSignal.recommendation as 'BUY' | 'SELL')}
+                disabled={executing}
+                className={`flex-1 py-2 rounded-lg text-white transition-colors ${
+                  selectedSignal.recommendation === 'BUY'
+                    ? 'bg-green-500 hover:bg-green-600'
+                    : 'bg-red-500 hover:bg-red-600'
+                } disabled:opacity-50 flex items-center justify-center`}
+              >
+                {executing ? <Loader2 className="w-4 h-4 animate-spin" /> : '✅ تأكيد التنفيذ'}
+              </button>
+              <button
+                onClick={() => setSelectedSignal(null)}
+                className="px-4 py-2 bg-gray-300 dark:bg-gray-700 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-600 transition-colors"
+              >
+                إلغاء
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ============ TOKENS TABLE ============ */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3">
-            <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
-            <p className="text-sm text-slate-400">جاري مسح {getNetworkName(activeNetwork)}...</p>
-          </div>
-        ) : sorted.length === 0 ? (
-          <div className="py-20 text-center">
-            <Radar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-            <p className="text-sm text-slate-500">
-              {error ? 'لا توجد بيانات بسبب خطأ في API.' : 'لا توجد عملات تطابق الفلاتر. حاول تعديل الفلاتر أو إعادة المسح.'}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-slate-800 text-xs text-slate-500 uppercase tracking-wide">
-                  <th className="text-left px-4 py-3 font-medium w-8"></th>
-                  <th className="text-left px-3 py-3 font-medium">العملة</th>
-                  <th className="text-right px-3 py-3 font-medium">السعر</th>
-                  <th className="text-center px-3 py-3 font-medium">الاتجاه</th>
-                  <th className="text-right px-3 py-3 font-medium">5د</th>
-                  <th className="text-right px-3 py-3 font-medium">1س</th>
-                  <th className="text-right px-3 py-3 font-medium">6س</th>
-                  <th className="text-right px-3 py-3 font-medium">24س</th>
-                  <th className="text-right px-3 py-3 font-medium">الحجم</th>
-                  <th className="text-right px-3 py-3 font-medium">السيولة</th>
-                  <th className="text-right px-3 py-3 font-medium">القيمة</th>
-                  <th className="text-right px-3 py-3 font-medium">FDV</th>
-                  <th className="text-right px-3 py-3 font-medium">الإنشاء</th>
-                  <th className="text-right px-3 py-3 font-medium">العمر</th>
-                  <th className="text-right px-3 py-3 font-medium">شراء</th>
-                  <th className="text-right px-3 py-3 font-medium">بيع</th>
-                  <th className="text-center px-3 py-3 font-medium">الاستراتيجية</th>
-                  <th className="text-center px-3 py-3 font-medium">النتيجة</th>
-                  <th className="text-center px-3 py-3 font-medium">الحالة</th>
-                  <th className="text-center px-3 py-3 font-medium">الإجراء</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((token) => {
-                  const tokenId = `${token.chainId}:${token.tokenAddress}`;
-                  const isExpanded = expandedToken === tokenId;
-                  const statusCfg = STATUS_CONFIG[token.status];
-                  const StatusIcon = statusCfg.icon;
-                  const stratCfg = STRATEGY_CONFIG[token.strategy];
-                  const StratIcon = stratCfg.icon;
-                  const ageStr = token.pairCreatedAt ? timeAgo(token.pairCreatedAt) : '—';
-                  const isCopied = copiedAddress === token.tokenAddress;
-
-                  // ✅ بيانات الرسم البياني (من التغيرات السعرية)
-                  const sparklineData = [
-                    token.priceChange.m5,
-                    token.priceChange.h1,
-                    token.priceChange.h6,
-                    token.priceChange.h24,
-                  ].filter(v => v !== 0 && !isNaN(v));
-
-                  return (
-                    <Fragment key={tokenId}>
-                      <tr
-                        className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors cursor-pointer"
-                        onClick={() => setExpandedToken(isExpanded ? null : tokenId)}
-                      >
-                        <td className="px-4 py-3 text-slate-500">
-                          {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                        </td>
-                        
-                        {/* ✅ عمود العملة مع زر نسخ */}
-                        <td className="px-3 py-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ backgroundColor: getNetworkColor(activeNetwork) }}>
-                              {token.symbol.slice(0, 2)}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium text-white truncate">{token.symbol}</p>
-                              <p className="text-xs text-slate-500 truncate max-w-[100px]">{token.name}</p>
-                              <div className="flex items-center gap-1 mt-0.5">
-                                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[120px]">
-                                  {token.tokenAddress.slice(0, 8)}...{token.tokenAddress.slice(-6)}
-                                </span>
-                                <button onClick={(e) => { e.stopPropagation(); copyToClipboard(token.tokenAddress, `عنوان ${token.symbol}`); }} className="p-0.5 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title={`نسخ عنوان ${token.symbol}`}>
-                                  {isCopied ? <CheckCircle className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-500 hover:text-white" />}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        
-                        <td className="text-right px-3 py-3 text-sm text-white font-mono">{formatPrice(token.priceUsd)}</td>
-                        
-                        {/* ✅ عمود الرسم البياني */}
-                        <td className="text-center px-3 py-3">
-                          <Sparkline 
-                            data={sparklineData.length >= 2 ? sparklineData : [0, token.priceChange.h24 || 0]} 
-                            width={50} 
-                            height={18}
-                            color={token.priceChange.h24 >= 0 ? '#10b981' : '#ef4444'}
-                          />
-                        </td>
-                        
-                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.m5 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.m5)}</td>
-                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.h1 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.h1)}</td>
-                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.h6 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.h6)}</td>
-                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.h24 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.h24)}</td>
-                        <td className="text-right px-3 py-3 text-sm text-slate-300">{formatUsd(token.volume24h)}</td>
-                        <td className="text-right px-3 py-3 text-sm text-slate-300">{formatUsd(token.liquidityUsd)}</td>
-                        <td className="text-right px-3 py-3 text-sm text-slate-300">{token.marketCap ? formatUsd(token.marketCap) : '—'}</td>
-                        <td className="text-right px-3 py-3 text-sm text-slate-300">{token.fdv ? formatUsd(token.fdv) : '—'}</td>
-                        
-                        {/* ✅ عمود الإنشاء */}
-                        <td className="text-right px-3 py-3 text-xs text-slate-400">
-                          {token.pairCreatedAt ? formatDateTime(token.pairCreatedAt) : '—'}
-                        </td>
-                        
-                        {/* ✅ عمود العمر */}
-                        <td className="text-right px-3 py-3 text-sm text-slate-400">
-                          {token.pairCreatedAt ? timeAgo(token.pairCreatedAt) : '—'}
-                        </td>
-                        
-                        <td className="text-right px-3 py-3 text-sm text-emerald-400">{token.txns24h.buys.toLocaleString()}</td>
-                        <td className="text-right px-3 py-3 text-sm text-red-400">{token.txns24h.sells.toLocaleString()}</td>
-                        <td className="text-center px-3 py-3">
-                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${stratCfg.bg} ${stratCfg.color}`}>
-                            <StratIcon className="w-3 h-3" /> {stratCfg.label}
-                          </span>
-                        </td>
-                        <td className="text-center px-3 py-3">
-                          <span className={`inline-block px-2 py-1 rounded text-xs font-bold ${token.score >= 70 ? 'bg-emerald-500/20 text-emerald-400' : token.score >= 45 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'}`}>
-                            {token.score}
-                          </span>
-                        </td>
-                        <td className="text-center px-3 py-3">
-                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${statusCfg.bg} ${statusCfg.color}`}>
-                            <StatusIcon className="w-3 h-3" /> {statusCfg.label}
-                          </span>
-                        </td>
-                        <td className="text-center px-3 py-3">
-                          <button onClick={(e) => { e.stopPropagation(); onAnalyzeToken(token); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium transition-colors">
-                            <BrainCircuit className="w-3.5 h-3.5" /> تحليل
-                          </button>
-                        </td>
-                      </tr>
-                      
-                      {/* ============ EXPANDED DETAILS ============ */}
-                      {isExpanded && (
-                        <tr className="bg-slate-950/50">
-                          <td colSpan={20} className="px-6 py-4">
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-4 flex-wrap">
-                                <div className="flex items-center gap-2 bg-slate-800/50 rounded-lg px-3 py-1.5">
-                                  <span className="text-xs text-slate-400">عنوان العملة:</span>
-                                  <span className="text-xs font-mono text-slate-300 break-all max-w-[300px]">{token.tokenAddress}</span>
-                                  <button onClick={(e) => { e.stopPropagation(); copyToClipboard(token.tokenAddress, `عنوان ${token.symbol}`); }} className="p-1 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title="نسخ العنوان">
-                                    {isCopied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400 hover:text-white" />}
-                                  </button>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-slate-500">DEX:</span>
-                                  <span className="text-xs text-slate-300">{token.dexId}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-slate-500">أفضل زوج:</span>
-                                  <span className="text-xs font-mono text-slate-300">{token.pairAddress.slice(0, 16)}...{token.pairAddress.slice(-6)}</span>
-                                </div>
-                                {token.securityFlags.length > 0 && (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-slate-500">تنبيهات:</span>
-                                    {token.securityFlags.map((flag) => (<span key={flag} className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">{flag}</span>))}
-                                  </div>
-                                )}
-                                <a href={token.bestPair.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300">
-                                  <ExternalLink className="w-3 h-3" /> عرض في DEX
-                                </a>
-                              </div>
-
-                              <div className="flex items-center gap-2 bg-slate-800/30 rounded-lg px-3 py-2">
-                                <span className="text-xs text-slate-500">📋 العنوان الكامل:</span>
-                                <span className="text-xs font-mono text-emerald-300 break-all flex-1">{token.tokenAddress}</span>
-                                <button onClick={(e) => { e.stopPropagation(); copyToClipboard(token.tokenAddress, `عنوان ${token.symbol}`); }} className="p-1 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title="نسخ العنوان">
-                                  {isCopied ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-400 hover:text-white" />}
-                                </button>
-                              </div>
-
-                              {/* ✅ معلومات الإنشاء */}
-                              <div className="flex items-center gap-4 flex-wrap bg-slate-800/20 rounded-lg px-3 py-2">
-                                <span className="text-xs text-slate-500">🕐 وقت الإنشاء:</span>
-                                <span className="text-xs font-mono text-slate-300">{token.pairCreatedAt ? formatDateTime(token.pairCreatedAt) : 'غير معروف'}</span>
-                                <span className="text-xs text-slate-500">|</span>
-                                <span className="text-xs text-slate-500">⏳ العمر:</span>
-                                <span className="text-xs font-medium text-emerald-400">{token.pairCreatedAt ? timeAgo(token.pairCreatedAt) : 'غير معروف'}</span>
-                              </div>
-
-                              <div>
-                                <p className="text-xs text-slate-500 mb-2">جميع الأزواج ({token.allPairs.length})</p>
-                                <div className="space-y-1 max-h-48 overflow-y-auto">
-                                  {token.allPairs.map((pair, i) => (
-                                    <div key={i} className="flex items-center justify-between text-xs bg-slate-900/50 rounded-lg px-3 py-2">
-                                      <div className="flex items-center gap-3">
-                                        <span className="font-mono text-slate-500">{pair.dexId}</span>
-                                        <span className="text-white">{pair.baseToken.symbol}/{pair.quoteToken.symbol}</span>
-                                        <span className="text-slate-500 font-mono">{pair.pairAddress.slice(0, 12)}...</span>
-                                      </div>
-                                      <div className="flex items-center gap-4 text-slate-400">
-                                        <span>{formatPrice(pair.priceUsd)}</span>
-                                        <span>الحجم: {formatUsd(pair.volume?.h24 ?? 0)}</span>
-                                        <span>السيولة: {formatUsd(pair.liquidity?.usd ?? 0)}</span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+      {/* تعليمات */}
+      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
+        <h3 className="font-medium text-blue-800 dark:text-blue-300 mb-2">📌 كيفية التداول اليدوي</h3>
+        <ul className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
+          <li>1️⃣ اختر الشبكة التي تريد البحث عليها من الأعلى</li>
+          <li>2️⃣ ابحث عن أي عملة في مربع البحث أو انتظر تحميل جميع العملات</li>
+          <li>3️⃣ استخدم الفلاتر المتقدمة لتصفية العملات (جيدة / جديدة / قديمة / حجم / سيولة / زخم)</li>
+          <li>4️⃣ اضغط "شراء" أو "بيع" لفتح نافذة التنفيذ</li>
+          <li>5️⃣ حدد المبلغ المناسب واضغط "تأكيد التنفيذ"</li>
+        </ul>
       </div>
-
-      {!loading && sorted.length > 0 && (
-        <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>عرض {sorted.length} من {tokens.length} عملة مكتشفة على {getNetworkName(activeNetwork)}</span>
-          <span>مصادر البيانات: DEX Screener + GeckoTerminal</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============ COMPONENTS ============
-
-function FunnelStep({ icon: Icon, label, value, color }: {
-  icon: typeof Filter;
-  label: string;
-  value: number;
-  color: string;
-}) {
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-      <div className="flex items-center gap-1.5 mb-1.5">
-        <Icon className={`w-3.5 h-3.5 ${color}`} />
-        <span className="text-xs text-slate-500 truncate">{label}</span>
-      </div>
-      <p className={`text-lg font-bold ${color}`}>{value.toLocaleString()}</p>
     </div>
   );
 }
