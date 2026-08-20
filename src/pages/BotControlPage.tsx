@@ -24,7 +24,7 @@ export function BotControlPage() {
 
   const [isRunning, setIsRunning] = useState(false);
   
-  // ✅ تهيئة selectedNetworks من localStorage أو botConfig
+  // ✅ تهيئة selectedNetworks من localStorage أولاً (الأولوية القصوى)
   const [selectedNetworks, setSelectedNetworks] = useState<string[]>(() => {
     // 1️⃣ محاولة استعادة من localStorage
     const saved = localStorage.getItem('selectedNetworks');
@@ -77,8 +77,25 @@ export function BotControlPage() {
     }
   }, [selectedNetworks, mode]);
 
-  // ✅ تحديث selectedNetworks عند تغيير botConfig من قاعدة البيانات
+  // ✅ تحديث selectedNetworks من botConfig فقط إذا لم يكن هناك قيمة في localStorage
   useEffect(() => {
+    // ✅ لا تحديث إذا كان هناك قيمة محفوظة في localStorage
+    const saved = localStorage.getItem('selectedNetworks');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // إذا كانت الشبكات المحفوظة مختلفة عن botConfig، استخدم المحفوظة
+          const savedNetworks = parsed;
+          if (JSON.stringify(savedNetworks) !== JSON.stringify(selectedNetworks)) {
+            setSelectedNetworks(savedNetworks);
+          }
+          return;
+        }
+      } catch (e) {}
+    }
+    
+    // ✅ فقط إذا لم يكن هناك قيمة في localStorage، استخدم botConfig
     if (botConfig?.networks) {
       let networks: string[] = ['solana'];
       if (typeof botConfig.networks === 'string') {
@@ -90,7 +107,6 @@ export function BotControlPage() {
       } else if (Array.isArray(botConfig.networks)) {
         networks = botConfig.networks;
       }
-      // ✅ تحديث فقط إذا اختلفت القيم
       if (JSON.stringify(networks) !== JSON.stringify(selectedNetworks)) {
         setSelectedNetworks(networks);
         localStorage.setItem('selectedNetworks', JSON.stringify(networks));
@@ -139,7 +155,6 @@ export function BotControlPage() {
     if (!isRunning) return;
 
     setIsLoading(true);
-    const startTime = Date.now();
 
     try {
       const networkList = Array.isArray(selectedNetworks) ? selectedNetworks : ['solana'];
