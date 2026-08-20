@@ -25,12 +25,12 @@ export function TradingModeSelector({
         {/* AUTO Mode */}
         <button
           onClick={() => onModeChange('AUTO')}
-          disabled={isRunning}
+          // ✅ إزالة disabled={isRunning}
           className={`p-6 rounded-xl border-2 text-left transition-all ${
             mode === 'AUTO'
               ? 'border-green-500 bg-green-50 dark:bg-green-900/20 shadow-lg'
               : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
-          } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+          }`}
         >
           <div className="flex items-center gap-2">
             <span className="text-3xl">🤖</span>
@@ -54,12 +54,12 @@ export function TradingModeSelector({
         {/* MANUAL Mode */}
         <button
           onClick={() => onModeChange('MANUAL')}
-          disabled={isRunning}
+          // ✅ إزالة disabled={isRunning}
           className={`p-6 rounded-xl border-2 text-left transition-all ${
             mode === 'MANUAL'
               ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-lg'
               : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
-          } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+          }`}
         >
           <div className="flex items-center gap-2">
             <span className="text-3xl">🎯</span>
