@@ -6,9 +6,9 @@ import { NetworkSelector } from '../components/NetworkSelector';
 import { TradingModeSelector } from '../components/TradingModeSelector';
 import { generateId, getTimestamp } from '../lib/madarTech';
 
-// ✅ عنوان الـ Worker (استبدل YOUR_SUBDOMAIN بالفعلي)
-// ✅ استخدم هذا العنوان
+// ✅ عنوان الـ Worker
 const WORKER_URL = 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+
 export function BotControlPage() {
   const {
     botConfig,
@@ -96,6 +96,24 @@ export function BotControlPage() {
     };
     checkStatus();
   }, []);
+
+  // ✅ عند تغيير الشبكات، أوقف البوت ثم أعد تشغيله
+  useEffect(() => {
+    if (isRunning && botConfig) {
+      const restartBot = async () => {
+        await handleStop();
+        const updatedConfig = {
+          ...botConfig,
+          networks: selectedNetworks,
+        };
+        setBotConfig(updatedConfig);
+        setTimeout(() => {
+          handleStart();
+        }, 1500);
+      };
+      restartBot();
+    }
+  }, [selectedNetworks]);
 
   // ============ SIMULATE BOT SCAN ============
 
@@ -210,7 +228,7 @@ export function BotControlPage() {
       const data = await res.json();
       if (data.success) {
         setIsRunning(true);
-        await addLog('SUCCESS', `🤖 تم تشغيل البوت في وضع ${mode === 'AUTO' ? 'تلقائي' : 'يدوي'}`);
+        await addLog('SUCCESS', `🤖 تم تشغيل البوت في وضع ${mode === 'AUTO' ? 'تلقائي' : 'يدوي'} على الشبكات: ${selectedNetworks.join(', ')}`);
         await performScan();
       } else {
         await addLog('ERROR', `❌ فشل تشغيل البوت: ${data.message}`);
