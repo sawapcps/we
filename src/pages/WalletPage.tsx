@@ -1,6 +1,6 @@
 // src/pages/WalletPage.tsx
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useApp } from "@/context/AppContext";
 import { BotWalletManager, BotWalletData } from "@/lib/wallet";
 import { AccountManager } from "@/lib/accounts";
@@ -16,12 +16,20 @@ export function WalletPage() {
   const [systemStats, setSystemStats] = useState<any>(null);
   const [selectedNetwork, setSelectedNetwork] = useState<string>("solana");
   const [expandedWallet, setExpandedWallet] = useState<string | null>(null);
+  
+  // ✅ منع التحميل المتكرر
+  const hasLoaded = useRef(false);
+  const isLoadingData = useRef(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
+  // ✅ دالة تحميل البيانات مع حماية ضد التكرار
   const loadData = async () => {
+    // ✅ منع التحميل المتزامن
+    if (isLoadingData.current) {
+      console.log("⏳ جاري التحميل بالفعل، تخطي...");
+      return;
+    }
+    
+    isLoadingData.current = true;
     setIsLoading(true);
     try {
       await loadBotWallets();
@@ -35,8 +43,17 @@ export function WalletPage() {
       console.error("خطأ في تحميل البيانات:", error);
     } finally {
       setIsLoading(false);
+      isLoadingData.current = false;
     }
   };
+
+  // ✅ تحميل البيانات مرة واحدة فقط
+  useEffect(() => {
+    if (!hasLoaded.current) {
+      hasLoaded.current = true;
+      loadData();
+    }
+  }, []);
 
   const refreshBalance = async (network: string) => {
     setIsLoading(true);
