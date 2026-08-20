@@ -24,8 +24,20 @@ export function BotControlPage() {
 
   const [isRunning, setIsRunning] = useState(false);
   
-  // ✅ تهيئة selectedNetworks من botConfig فقط (قاعدة البيانات)
+  // ✅ تهيئة selectedNetworks من localStorage أو botConfig
   const [selectedNetworks, setSelectedNetworks] = useState<string[]>(() => {
+    // 1️⃣ محاولة استعادة من localStorage
+    const saved = localStorage.getItem('selectedNetworks');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {}
+    }
+    
+    // 2️⃣ إذا لم يوجد في localStorage، استخدم botConfig
     if (botConfig?.networks) {
       if (typeof botConfig.networks === 'string') {
         try {
@@ -48,7 +60,12 @@ export function BotControlPage() {
   const [discoveredCount, setDiscoveredCount] = useState(0);
   const [buySignals, setBuySignals] = useState<number>(0);
 
-  // ✅ تحديث botConfig في قاعدة البيانات عند تغيير الشبكات أو الوضع
+  // ✅ حفظ الشبكات في localStorage عند التغيير
+  useEffect(() => {
+    localStorage.setItem('selectedNetworks', JSON.stringify(selectedNetworks));
+  }, [selectedNetworks]);
+
+  // ✅ تحديث botConfig عند تغيير الشبكات
   useEffect(() => {
     if (botConfig) {
       const updatedConfig = {
@@ -76,6 +93,7 @@ export function BotControlPage() {
       // ✅ تحديث فقط إذا اختلفت القيم
       if (JSON.stringify(networks) !== JSON.stringify(selectedNetworks)) {
         setSelectedNetworks(networks);
+        localStorage.setItem('selectedNetworks', JSON.stringify(networks));
       }
     }
   }, [botConfig]);
