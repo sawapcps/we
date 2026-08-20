@@ -1,619 +1,824 @@
-// src/pages/MyWalletPage.tsx
+// src/pages/MarketsPage.tsx
 
-import { useState, useEffect } from "react";
-import { useApp } from "../context/AppContext";
-import { AccountManager } from "../lib/accounts";
-import { formatUsd } from "../lib/format";
-import { 
-  Wallet, Copy, Check, TrendingUp, Coins, DollarSign, 
-  ArrowUpRight, History, Shield, Save, AlertCircle, Trash2 
-} from "lucide-react";
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useApp } from '../context/AppContext';
+import { NETWORKS, getNetworkColor, getNetworkName } from '../config/networks';
+import { discoverAllPairs, type MultiSourceResult } from '../lib/discovery';
+import { runHunterPipeline, type HunterFilters } from '../lib/hunterEngine';
+import { searchPairs, getPairsByToken } from '../lib/dexscreener';
+import type { DiscoveredToken, PipelineStats, ChainId, TokenPair } from '../types';
+import { formatUsd, formatPrice, formatPct, timeAgo, formatDateTime } from '../lib/format';
+import {
+  Search, Loader2, RefreshCw, BrainCircuit, ChevronDown, ChevronRight,
+  AlertCircle, Filter, Zap, ShieldCheck, Droplets, BarChart3, Trophy,
+  Eye, XCircle, Clock, ExternalLink, Radar, Layers, Flame, TrendingUp, Building2,
+  Copy, CheckCircle, TrendingDown,
+} from 'lucide-react';
 
-// ✅ ثوابت MadarTech API
-const MADARTECH_API_URL = import.meta.env.VITE_MADARTECH_API_URL || 'https://cloud.madartech.uk/api/v1';
-const MADARTECH_DB_ID = import.meta.env.VITE_MADARTECH_DB_ID || 'mt_live_AZyHOq0IztD6H5gsSafGbpjo00kDcKAPRDh0Gcob';
-const MADARTECH_API_KEY = 'mt_live_uqkE8sldXpFASeV51lIyVghJQKs4hZTheAbyAaJh';
-// ✅ قائمة الشبكات المدعومة
-const SUPPORTED_NETWORKS = [
-  { id: 'solana', name: 'Solana', icon: '🟣' },
-  { id: 'ethereum', name: 'Ethereum', icon: '🔵' },
-  { id: 'bsc', name: 'BNB Chain', icon: '🟡' },
-  { id: 'polygon', name: 'Polygon', icon: '🟣' },
-  { id: 'arbitrum', name: 'Arbitrum', icon: '🔷' },
-  { id: 'base', name: 'Base', icon: '🔷' },
-  { id: 'avalanche', name: 'Avalanche', icon: '🔴' },
-  { id: 'optimism', name: 'Optimism', icon: '🔴' },
-  { id: 'robinhood', name: 'Robinhood', icon: '🦊' },
-];
+interface MarketsPageProps {
+  onAnalyzeToken: (token: DiscoveredToken) => void;
+}
 
-export function MyWalletPage() {
-  const { user, addLog } = useApp();
-  const [balance, setBalance] = useState(0);
-  const [totalProfit, setTotalProfit] = useState(0);
-  const [totalFees, setTotalFees] = useState(0);
-  const [totalDeposited, setTotalDeposited] = useState(0);
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [userWallets, setUserWallets] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [withdrawAmount, setWithdrawAmount] = useState("");
-  const [withdrawAddress, setWithdrawAddress] = useState("");
-  const [selectedNetwork, setSelectedNetwork] = useState("solana");
+type StatusFilter = 'all' | 'candidate' | 'watch' | 'reject';
+type SortBy = 'score' | 'volume' | 'liquidity' | 'change' | 'age';
+type StrategyFilter = 'all' | 'new-listing' | 'momentum' | 'established';
+
+const STATUS_CONFIG = {
+  candidate: { label: 'Candidate', color: 'text-emerald-400', bg: 'bg-emerald-500/10', dot: 'bg-emerald-400', icon: Trophy },
+  watch: { label: 'Watch', color: 'text-amber-400', bg: 'bg-amber-500/10', dot: 'bg-amber-400', icon: Eye },
+  reject: { label: 'Reject', color: 'text-red-400', bg: 'bg-red-500/10', dot: 'bg-red-400', icon: XCircle },
+} as const;
+
+const STRATEGY_CONFIG = {
+  'new-listing': { label: 'New', icon: Flame, color: 'text-orange-400', bg: 'bg-orange-500/10' },
+  'momentum': { label: 'Momentum', icon: TrendingUp, color: 'text-blue-400', bg: 'bg-blue-500/10' },
+  'established': { label: 'Established', icon: Building2, color: 'text-teal-400', bg: 'bg-teal-500/10' },
+} as const;
+
+// ============ ✅ مكون الرسم البياني البسيط ============
+function Sparkline({ data, width = 60, height = 20, color = '#10b981' }: { 
+  data: number[]; 
+  width?: number; 
+  height?: number; 
+  color?: string;
+}) {
+  if (!data || data.length < 2) {
+    return <span className="text-xs text-slate-500">—</span>;
+  }
+
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  
+  const points = data.map((value, index) => {
+    const x = (index / (data.length - 1)) * width;
+    const y = height - ((value - min) / range) * height;
+    return `${x},${y}`;
+  }).join(' ');
+
+  const isUp = data[data.length - 1] > data[0];
+  const strokeColor = isUp ? '#10b981' : '#ef4444';
+
+  return (
+    <svg width={width} height={height} className="inline-block">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* ✅ نقطة البداية */}
+      <circle cx="0" cy={height - ((data[0] - min) / range) * height} r="1.5" fill={strokeColor} />
+      {/* ✅ نقطة النهاية */}
+      <circle cx={width} cy={height - ((data[data.length - 1] - min) / range) * height} r="1.5" fill={strokeColor} />
+    </svg>
+  );
+}
+
+export function MarketsPage({ onAnalyzeToken }: MarketsPageProps) {
+  const { botConfig, addLog } = useApp();
+  const [selectedNetwork, setSelectedNetwork] = useState<ChainId>('solana');
+  const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
+  const [stats, setStats] = useState<PipelineStats | null>(null);
+  const [sources, setSources] = useState<MultiSourceResult['sources']>([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [strategyFilter, setStrategyFilter] = useState<StrategyFilter>('all');
+  const [sortBy, setSortBy] = useState<SortBy>('age'); // ✅ الافتراضي: الأحدث
+  const [expandedToken, setExpandedToken] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<number | null>(null);
+  const mountedRef = useRef(true);
+
+  // ============ البحث اليدوي ============
+  const [manualSearchQuery, setManualSearchQuery] = useState('');
+  const [manualSearchLoading, setManualSearchLoading] = useState(false);
+  const [manualSearchResults, setManualSearchResults] = useState<TokenPair[]>([]);
+  const [manualSearchError, setManualSearchError] = useState<string | null>(null);
+
+  // ============ زر النسخ ============
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+
+  // ============ ✅ زر تجاوز الفلاتر ============
+  const [bypassFilters, setBypassFilters] = useState(false);
+
+  // ============ دالة النسخ ============
+  const copyToClipboard = (text: string, label: string = 'العنوان') => {
+    navigator.clipboard.writeText(text);
+    setCopiedAddress(text);
+    addLog('SUCCESS', `✅ تم نسخ ${label}: ${text.slice(0, 10)}...`);
+    setTimeout(() => setCopiedAddress(null), 2000);
+  };
+
+  // ============ دالة البحث اليدوي ============
+  const handleManualSearch = async () => {
+    const query = manualSearchQuery.trim();
+    if (!query) {
+      setManualSearchError('❌ الرجاء إدخال رمز العملة أو عنوانها');
+      return;
+    }
+
+    setManualSearchLoading(true);
+    setManualSearchError(null);
+    setManualSearchResults([]);
+
+    try {
+      addLog('INFO', `🔍 جاري البحث عن: ${query} على ${getNetworkName(selectedNetwork)}`);
+
+      let results = await searchPairs(query);
+      let filtered = results.filter((p) => p.chainId === selectedNetwork);
+
+      if (filtered.length === 0) {
+        addLog('INFO', `🔍 لم يتم العثور بالرمز، جاري البحث بالعنوان...`);
+        try {
+          const addressResults = await getPairsByToken(selectedNetwork, query);
+          filtered = addressResults;
+        } catch (e) {}
+      }
+
+      if (filtered.length > 0 && !query.startsWith('0x') && !query.startsWith('So')) {
+        const exactMatch = filtered.filter(
+          (p) => p.baseToken.symbol.toUpperCase() === query.toUpperCase()
+        );
+        if (exactMatch.length > 0) filtered = exactMatch;
+      }
+
+      setManualSearchResults(filtered);
+
+      if (filtered.length === 0) {
+        setManualSearchError(`❌ لم يتم العثور على "${query}" على شبكة ${getNetworkName(selectedNetwork)}`);
+        addLog('WARNING', `❌ لم يتم العثور على ${query} على ${getNetworkName(selectedNetwork)}`);
+      } else {
+        addLog('SUCCESS', `✅ تم العثور على ${filtered.length} نتيجة لـ ${query}`);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'فشل البحث';
+      setManualSearchError(`❌ ${msg}`);
+      addLog('ERROR', `❌ فشل البحث عن ${query}: ${msg}`);
+    } finally {
+      setManualSearchLoading(false);
+    }
+  };
+
+  // ============ تحويل TokenPair إلى DiscoveredToken ============
+  const pairToDiscoveredToken = (pair: TokenPair): DiscoveredToken => {
+    const priceUsd = parseFloat(pair.priceUsd || '0');
+    const volume24h = pair.volume?.h24 || 0;
+    const liquidityUsd = pair.liquidity?.usd || 0;
+
+    return {
+      chainId: pair.chainId as ChainId,
+      tokenAddress: pair.baseToken.address,
+      name: pair.baseToken.name,
+      symbol: pair.baseToken.symbol,
+      bestPair: pair,
+      allPairs: [pair],
+      priceUsd,
+      volume24h,
+      liquidityUsd,
+      marketCap: pair.marketCap || null,
+      fdv: pair.fdv || null,
+      priceChange: {
+        m5: pair.priceChange?.m5 || 0,
+        h1: pair.priceChange?.h1 || 0,
+        h6: pair.priceChange?.h6 || 0,
+        h24: pair.priceChange?.h24 || 0,
+      },
+      txns24h: pair.txns?.h24 || { buys: 0, sells: 0 },
+      pairAge: pair.pairCreatedAt || null,
+      pairCreatedAt: pair.pairCreatedAt || null,
+      dexId: pair.dexId,
+      pairAddress: pair.pairAddress,
+      boosts: pair.boosts?.active || 0,
+      score: 70,
+      status: 'candidate',
+      securityFlags: [],
+      source: 'dexscreener',
+      strategy: 'established',
+    };
+  };
+
+  // ============ باقي الكود ============
 
   useEffect(() => {
-    if (user) {
-      loadUserData();
-      loadUserWallets();
+    if (botConfig?.networks && botConfig.networks.length > 0) {
+      setSelectedNetwork(botConfig.networks[0] as ChainId);
     }
-  }, [user]);
+  }, [botConfig]);
 
-  // ✅ جلب userId من قاعدة البيانات
-  const getUserId = async (): Promise<string | null> => {
-    try {
-      const email = user?.email || 'admin@cryptobot.com';
-      const result = await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `SELECT id FROM users WHERE email = ?`,
-          dbId: MADARTECH_DB_ID,
-          params: [email]
-        })
-      });
-      const data = await result.json();
-      
-      if (data.success && data.data && data.data.length > 0) {
-        const userId = String(data.data[0].id);
-        console.log('✅ userId المستخدم:', userId);
-        return userId;
-      }
-      
-      console.log('⚠️ لم يتم العثور على المستخدم');
-      return null;
-    } catch (error) {
-      console.error("خطأ في جلب userId:", error);
-      return null;
-    }
-  };
+  const activeNetwork = selectedNetwork ?? 'solana';
+  const minLiquidityUsd = botConfig?.minLiquidity || 50000;
+  const minVolume24h = botConfig?.minVolume || 100000;
+  const minPriceChange24h = 0;
 
-  // ✅ جلب محافظ المستخدم
-  const loadUserWallets = async () => {
-    try {
-      const userId = await getUserId();
-      if (!userId) {
-        console.log('⚠️ لا يوجد userId، لا يمكن جلب المحافظ');
-        setUserWallets([]);
-        return;
-      }
-
-      const result = await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `SELECT * FROM user_wallets WHERE userId = ? ORDER BY createdAt DESC`,
-          dbId: MADARTECH_DB_ID,
-          params: [userId]
-        })
-      });
-      const data = await result.json();
-      
-      console.log('📋 محافظ المستخدم:', data);
-      
-      if (data.success && data.data) {
-        setUserWallets(data.data);
-        if (data.data.length > 0) {
-          const defaultWallet = data.data[0];
-          setWithdrawAddress(defaultWallet.address);
-          setSelectedNetwork(defaultWallet.network);
-        }
-      } else {
-        setUserWallets([]);
-      }
-    } catch (error) {
-      console.error("فشل جلب محافظ المستخدم:", error);
-      setUserWallets([]);
-    }
-  };
-
-  const loadUserData = async () => {
-    setIsLoading(true);
+  const runPipeline = useCallback(async () => {
+    setLoading(true);
     setError(null);
-    setSuccess(null);
     try {
-      const userId = await getUserId();
-      if (!userId) {
-        setIsLoading(false);
+      const result = await discoverAllPairs(activeNetwork);
+      setSources(result.sources);
+
+      if (result.error) {
+        setError(result.error);
+        setTokens([]);
+        setStats(null);
         return;
       }
 
-      const result = await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `SELECT balance, totalProfit, totalFees, totalDeposited FROM users WHERE id = ?`,
-          dbId: MADARTECH_DB_ID,
-          params: [userId]
-        })
-      });
-      const data = await result.json();
-      
-      if (data.success && data.data && data.data.length > 0) {
-        const userData = data.data[0];
-        setBalance(userData.balance || 0);
-        setTotalProfit(userData.totalProfit || 0);
-        setTotalFees(userData.totalFees || 0);
-        setTotalDeposited(userData.totalDeposited || 0);
+      const filters: HunterFilters = {
+        minLiquidityUsd: bypassFilters ? 0 : minLiquidityUsd,
+        minVolume24h: bypassFilters ? 0 : minVolume24h,
+        minPriceChange24h: bypassFilters ? -100 : minPriceChange24h,
+      };
+
+      const huntResult = runHunterPipeline(result.pairs, activeNetwork, filters);
+
+      if (mountedRef.current) {
+        setTokens(huntResult.tokens);
+        setStats(huntResult.stats);
+        setLastUpdate(Date.now());
       }
-
-      const txsResult = await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `SELECT * FROM transactions WHERE userId = ? ORDER BY createdAt DESC LIMIT 10`,
-          dbId: MADARTECH_DB_ID,
-          params: [userId]
-        })
-      });
-      const txsData = await txsResult.json();
-      if (txsData.success && txsData.data) {
-        setTransactions(txsData.data);
-      }
-    } catch (error) {
-      console.error("خطأ في تحميل البيانات:", error);
-      setError("فشل تحميل بيانات المحفظة");
-    } finally {
-      setIsLoading(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Pipeline failed');
+      setTokens([]);
+      setStats(null);
     }
-  };
+    setLoading(false);
+  }, [activeNetwork, minLiquidityUsd, minVolume24h, minPriceChange24h, bypassFilters]);
 
-  // ✅ حفظ عنوان المحفظة
-  const saveWithdrawAddress = async () => {
-    if (!withdrawAddress || withdrawAddress.trim() === "") {
-      setError("❌ الرجاء إدخال عنوان محفظتك");
-      return;
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
-    setIsLoading(true);
-    setError(null);
-    setSuccess(null);
+  useEffect(() => {
+    runPipeline();
+  }, [runPipeline]);
 
-    try {
-      const userId = await getUserId();
-      if (!userId) {
-        throw new Error('لا يمكن تحديد هوية المستخدم');
-      }
-
-      console.log('✅ حفظ المحفظة للمستخدم:', userId);
-
-      const checkResult = await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `SELECT * FROM user_wallets WHERE userId = ? AND network = ?`,
-          dbId: MADARTECH_DB_ID,
-          params: [userId, selectedNetwork]
-        })
-      });
-      const checkData = await checkResult.json();
-      
-      if (checkData.success && checkData.data && checkData.data.length > 0) {
-        setError(`❌ توجد محفظة بالفعل لشبكة ${selectedNetwork}`);
-        setIsLoading(false);
-        return;
-      }
-
-      await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `INSERT INTO user_wallets (userId, network, address, encryptedPrivateKey, balance, createdAt, updatedAt) 
-                VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'))`,
-          dbId: MADARTECH_DB_ID,
-          params: [
-            userId, 
-            selectedNetwork, 
-            withdrawAddress,
-            'encrypted_' + Date.now()
-          ]
-        })
-      });
-
-      await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `UPDATE users SET walletAddress = ? WHERE id = ?`,
-          dbId: MADARTECH_DB_ID,
-          params: [withdrawAddress, userId]
-        })
-      });
-
-      setSuccess(`✅ تم حفظ محفظة ${selectedNetwork} بنجاح!`);
-      addLog("SUCCESS", `✅ تم حفظ محفظة ${selectedNetwork}: ${withdrawAddress}`);
-      
-      await loadUserWallets();
-      setWithdrawAddress("");
-      
-      setTimeout(() => setSuccess(null), 5000);
-    } catch (error) {
-      setError(String(error));
-      addLog("ERROR", "❌ فشل حفظ المحفظة: " + String(error));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // ✅ حذف محفظة
-  const deleteWallet = async (walletId: string) => {
-    if (!confirm("هل أنت متأكد من حذف هذه المحفظة؟")) return;
-
-    setIsLoading(true);
-    try {
-      await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `DELETE FROM user_wallets WHERE id = ?`,
-          dbId: MADARTECH_DB_ID,
-          params: [walletId]
-        })
-      });
-
-      setSuccess("✅ تم حذف المحفظة بنجاح");
-      await loadUserWallets();
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleWithdraw = async () => {
-    const amount = parseFloat(withdrawAmount);
-    if (!amount || amount <= 0) {
-      setError("❌ الرجاء إدخال مبلغ صحيح");
-      return;
-    }
-    if (amount > balance) {
-      setError(`❌ الرصيد غير كافٍ. الرصيد المتاح: $${balance.toFixed(2)}`);
-      return;
-    }
-    if (!withdrawAddress) {
-      setError("❌ الرجاء اختيار محفظة للسحب");
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      const password = prompt("🔐 أدخل كلمة المرور لتأكيد السحب");
-      if (!password) {
-        setIsLoading(false);
-        return;
-      }
-
-      const userId = await getUserId();
-      if (!userId) {
-        throw new Error('لا يمكن تحديد هوية المستخدم');
-      }
-
-      await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `UPDATE users SET balance = balance - ? WHERE id = ?`,
-          dbId: MADARTECH_DB_ID,
-          params: [amount, userId]
-        })
-      });
-
-      await fetch(`${MADARTECH_API_URL}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MADARTECH_API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `INSERT INTO transactions (id, userId, type, amount, balanceAfter, description, status, createdAt) 
-                VALUES (?, ?, 'WITHDRAW', ?, ?, ?, 'completed', datetime('now'))`,
-          dbId: MADARTECH_DB_ID,
-          params: [
-            'tx_' + Date.now(),
-            userId,
-            amount,
-            balance - amount,
-            `💸 سحب $${amount.toFixed(2)} إلى ${selectedNetwork}`
-          ]
-        })
-      });
-
-      setSuccess(`✅ تم سحب $${amount.toFixed(2)} بنجاح إلى ${selectedNetwork}`);
-      setWithdrawAmount("");
-      await loadUserData();
-      setTimeout(() => setSuccess(null), 5000);
-    } catch (error) {
-      setError(String(error));
-      addLog("ERROR", "❌ فشل السحب: " + String(error));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  if (!user) {
+  if (!botConfig) {
     return (
-      <div className="p-6 text-center">
-        <p className="text-gray-500">الرجاء تسجيل الدخول لعرض محفظتك</p>
+      <div className="p-6 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-emerald-400 mx-auto mb-3" />
+          <p className="text-sm text-slate-400">جاري تحميل الإعدادات...</p>
+        </div>
       </div>
     );
   }
 
+  const filtered = tokens.filter((t) => {
+    if (statusFilter !== 'all' && t.status !== statusFilter) return false;
+    if (strategyFilter !== 'all' && t.strategy !== strategyFilter) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.tokenAddress.toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    switch (sortBy) {
+      case 'volume': return b.volume24h - a.volume24h;
+      case 'liquidity': return b.liquidityUsd - a.liquidityUsd;
+      case 'change': return b.priceChange.h24 - a.priceChange.h24;
+      case 'age': return (b.pairCreatedAt ?? 0) - (a.pairCreatedAt ?? 0); // ✅ الأحدث أولاً
+      default: return b.score - a.score;
+    }
+  });
+
+  const networkList = botConfig.networks || ['solana'];
+
   return (
-    <div className="space-y-6 max-w-4xl mx-auto p-6">
-      <div>
-        <h1 className="text-2xl font-bold text-white">💰 محفظتي</h1>
-        <p className="text-gray-400 text-sm mt-1">إدارة محافظك وعمليات السحب</p>
-      </div>
-
-      {/* ✅ رسائل الخطأ والنجاح */}
-      {error && (
-        <div className="bg-red-500/20 border border-red-500 rounded-xl p-4 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <p className="text-red-400 font-medium text-sm">{error}</p>
-          </div>
-          <button 
-            onClick={() => setError(null)}
-            className="text-red-400 hover:text-red-300 text-sm ml-2"
-          >
-            ✕
-          </button>
+    <div className="p-6 space-y-5 max-w-[1400px] mx-auto">
+      {/* ============ HEADER ============ */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+            <Radar className="w-6 h-6 text-emerald-400" />
+            الأسواق
+          </h1>
+          <p className="text-sm text-slate-400 mt-1">اكتشاف متعدد المصادر - DEX Screener + GeckoTerminal</p>
         </div>
-      )}
-
-      {success && (
-        <div className="bg-emerald-500/20 border border-emerald-500 rounded-xl p-4 flex items-start gap-3">
-          <span className="text-emerald-400 text-sm flex-1">{success}</span>
-          <button 
-            onClick={() => setSuccess(null)}
-            className="text-emerald-400 hover:text-emerald-300 text-sm"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 rounded-xl p-4">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-emerald-500/20 rounded-lg">
-            <Shield className="w-5 h-5 text-emerald-400" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-emerald-400">نظام الأرباح: 85% لك</h3>
-            <p className="text-sm text-gray-400">من كل ربح، تحصل على 85% فوراً، و15% تذهب لتطوير المنصة</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-          <div className="flex items-center gap-2 text-gray-400">
-            <DollarSign size={18} />
-            <span className="text-sm">الرصيد المتاح</span>
-          </div>
-          <div className="text-2xl font-bold text-emerald-400">${balance.toFixed(2)}</div>
-        </div>
-        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-          <div className="flex items-center gap-2 text-gray-400">
-            <TrendingUp size={18} />
-            <span className="text-sm">إجمالي الأرباح</span>
-          </div>
-          <div className="text-2xl font-bold text-blue-400">${totalProfit.toFixed(2)}</div>
-        </div>
-        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-          <div className="flex items-center gap-2 text-gray-400">
-            <Coins size={18} />
-            <span className="text-sm">العمولات (15%)</span>
-          </div>
-          <div className="text-2xl font-bold text-amber-400">${totalFees.toFixed(2)}</div>
-        </div>
-        <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-          <div className="flex items-center gap-2 text-gray-400">
-            <Wallet size={18} />
-            <span className="text-sm">إجمالي الإيداع</span>
-          </div>
-          <div className="text-2xl font-bold text-purple-400">${totalDeposited.toFixed(2)}</div>
-        </div>
-      </div>
-
-      {/* ✅ إضافة محفظة جديدة */}
-      <div className="p-6 bg-slate-800 rounded-xl border border-slate-700">
-        <h3 className="font-semibold text-white mb-4">➕ إضافة محفظة جديدة</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm text-gray-400 block mb-1">اختر الشبكة</label>
-            <select
-              value={selectedNetwork}
-              onChange={(e) => setSelectedNetwork(e.target.value)}
-              className="w-full px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white focus:outline-none focus:border-emerald-500"
-            >
-              {SUPPORTED_NETWORKS.map((net) => (
-                <option key={net.id} value={net.id}>{net.icon} {net.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm text-gray-400 block mb-1">عنوان المحفظة</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={withdrawAddress}
-                onChange={(e) => setWithdrawAddress(e.target.value)}
-                placeholder="أدخل عنوان المحفظة..."
-                className="flex-1 px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500"
-              />
-              <button
-                onClick={saveWithdrawAddress}
-                disabled={isLoading}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
-              >
-                <Save size={18} />
-                {isLoading ? "جاري..." : "حفظ"}
-              </button>
+          {lastUpdate && (
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Clock className="w-3.5 h-3.5" />
+              آخر تحديث: {formatDateTime(lastUpdate)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">💡 يمكنك إضافة محفظة لكل شبكة على حدة</p>
-          </div>
+          )}
+          <button
+            onClick={runPipeline}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            مسح الشبكة
+          </button>
         </div>
       </div>
 
-      {/* ✅ قائمة المحافظ المسجلة */}
-      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-        <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
-          <Wallet size={18} />
-          محافظي ({userWallets.length})
-        </h3>
-        {userWallets.length === 0 ? (
-          <p className="text-gray-400 text-sm">لا توجد محافظ مسجلة بعد</p>
-        ) : (
-          <div className="space-y-2">
-            {userWallets.map((w) => (
-              <div key={w.id} className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-white">
-                      {SUPPORTED_NETWORKS.find(n => n.id === w.network)?.icon} {w.network}
-                    </span>
-                    <span className="text-xs text-emerald-400">${w.balance?.toFixed(2) || '0.00'}</span>
+      {/* ============ NETWORK TABS ============ */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        {networkList.map((id) => {
+          const net = NETWORKS.find((n) => n.id === id);
+          if (!net) return null;
+          const active = activeNetwork === id;
+          return (
+            <button
+              key={id}
+              onClick={() => setSelectedNetwork(id as ChainId)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${
+                active ? 'bg-slate-800 text-white border border-slate-700' : 'text-slate-400 hover:text-white border border-transparent'
+              }`}
+            >
+              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: net.color }} />
+              {net.name}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ============ SOURCES ============ */}
+      {sources.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-xs text-slate-500 flex items-center gap-1.5">
+            <Layers className="w-3.5 h-3.5" />
+            المصادر:
+          </span>
+          {sources.map((src) => (
+            <div
+              key={src.name}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium ${
+                src.error
+                  ? 'bg-red-500/10 text-red-400'
+                  : src.count > 0
+                    ? 'bg-emerald-500/10 text-emerald-400'
+                    : 'bg-slate-800 text-slate-500'
+              }`}
+            >
+              <div className={`w-1.5 h-1.5 rounded-full ${src.error ? 'bg-red-400' : src.count > 0 ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+              {src.name === 'dexscreener' ? 'DEX Screener' : 'GeckoTerminal'}: {src.count}
+              {src.error && <span className="ml-1 text-red-400/70">!</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ============ STATS ============ */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+          <FunnelStep icon={Filter} label="المجموعات" value={stats.totalPairs} color="text-slate-300" />
+          <FunnelStep icon={Zap} label="العملات الفريدة" value={stats.uniqueTokens} color="text-blue-400" />
+          <FunnelStep icon={ShieldCheck} label="بعد الأمان" value={stats.afterSecurity} color="text-cyan-400" />
+          <FunnelStep icon={Droplets} label="سيولة كافية" value={stats.afterLiquidity} color="text-teal-400" />
+          <FunnelStep icon={BarChart3} label="حجم نشط" value={stats.afterVolume} color="text-indigo-400" />
+          <FunnelStep icon={Trophy} label="مرشحين" value={stats.candidates} color="text-emerald-400" />
+          <FunnelStep icon={Eye} label="قائمة مراقبة" value={stats.watchlist} color="text-amber-400" />
+          <FunnelStep icon={XCircle} label="مرفوضين" value={stats.rejected} color="text-red-400" />
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-red-300">فشل تحميل بيانات السوق</p>
+            <p className="text-xs text-red-400/70 mt-0.5">{error}</p>
+          </div>
+          <button onClick={runPipeline} className="ml-auto text-xs text-red-300 hover:text-red-200 underline">
+            إعادة المحاولة
+          </button>
+        </div>
+      )}
+
+      {/* ============ FILTERS ============ */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex-1 relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="ابحث بالرمز، الاسم، أو عنوان العملة..."
+            className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-slate-600"
+          />
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <select
+            value={strategyFilter}
+            onChange={(e) => setStrategyFilter(e.target.value as StrategyFilter)}
+            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-slate-600"
+          >
+            <option value="all">كل الاستراتيجيات</option>
+            <option value="new-listing">الإدراج الجديد</option>
+            <option value="momentum">الزخم</option>
+            <option value="established">المستقرة</option>
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-slate-600"
+          >
+            <option value="all">كل الحالات</option>
+            <option value="candidate">مرشحين</option>
+            <option value="watch">مراقبة</option>
+            <option value="reject">مرفوضين</option>
+          </select>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortBy)}
+            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-slate-600"
+          >
+            <option value="age">🆕 الأحدث</option>
+            <option value="score">🏆 النتيجة</option>
+            <option value="volume">📊 الحجم</option>
+            <option value="liquidity">💧 السيولة</option>
+            <option value="change">📈 التغيير</option>
+          </select>
+
+          {/* ✅ زر تجاوز الفلاتر */}
+          <button
+            onClick={() => setBypassFilters(!bypassFilters)}
+            className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              bypassFilters 
+                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' 
+                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+            }`}
+          >
+            {bypassFilters ? '🔓 الفلاتر معطلة' : '🔒 تجاوز الفلاتر'}
+          </button>
+        </div>
+      </div>
+
+      {/* ============ 🆕 MANUAL SEARCH ============ */}
+      <div className="bg-gradient-to-r from-emerald-500/5 to-blue-500/5 border border-emerald-500/20 rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Search className="w-4 h-4 text-emerald-400" />
+          <span className="text-sm font-medium text-white">🔍 بحث يدوي عن أي عملة</span>
+          <span className="text-xs text-slate-500">(ابحث بالرمز أو العنوان)</span>
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1 flex items-center gap-2 bg-slate-900 rounded-lg px-3 border border-slate-700 focus-within:border-emerald-500 transition-colors">
+            <Search className="w-4 h-4 text-slate-500" />
+            <input
+              type="text"
+              value={manualSearchQuery}
+              onChange={(e) => setManualSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()}
+              placeholder="أدخل رمز العملة (مثل: BONK, PEPE, WIF) أو العنوان..."
+              className="flex-1 bg-transparent py-2.5 text-white placeholder-slate-500 outline-none text-sm"
+            />
+            {manualSearchQuery && (
+              <button
+                onClick={() => setManualSearchQuery('')}
+                className="text-slate-500 hover:text-slate-300"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <button
+            onClick={handleManualSearch}
+            disabled={manualSearchLoading || !manualSearchQuery.trim()}
+            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+          >
+            {manualSearchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+            بحث
+          </button>
+        </div>
+        {manualSearchError && (
+          <div className="mt-2 text-sm text-red-400 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" />
+            {manualSearchError}
+          </div>
+        )}
+        <p className="text-xs text-slate-500 mt-1.5">
+          💡 يمكنك البحث عن أي عملة على شبكة {getNetworkName(selectedNetwork)}. سيتم عرض النتائج مباشرة مع زر التحليل.
+        </p>
+      </div>
+
+      {/* ============ MANUAL SEARCH RESULTS ============ */}
+      {manualSearchResults.length > 0 && (
+        <div className="bg-slate-900 border border-emerald-500/30 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+              <Search className="w-4 h-4" />
+              نتائج البحث عن "{manualSearchQuery}"
+              <span className="text-xs text-slate-400 font-normal">({manualSearchResults.length} نتيجة)</span>
+            </h3>
+            <button onClick={() => setManualSearchResults([])} className="text-xs text-slate-400 hover:text-white">
+              ✕ إغلاق
+            </button>
+          </div>
+          <div className="divide-y divide-slate-800">
+            {manualSearchResults.map((pair, i) => {
+              const price = parseFloat(pair.priceUsd || '0');
+              const volume = pair.volume?.h24 || 0;
+              const liquidity = pair.liquidity?.usd || 0;
+              const change24 = pair.priceChange?.h24 || 0;
+              const address = pair.baseToken.address;
+              const isCopied = copiedAddress === address;
+
+              return (
+                <div key={i} className="flex flex-col md:flex-row md:items-center justify-between px-4 py-3 hover:bg-slate-800/50 transition-colors gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ backgroundColor: getNetworkColor(selectedNetwork) }}>
+                      {pair.baseToken.symbol.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-white">{pair.baseToken.symbol}</span>
+                        <span className="text-xs text-slate-500">/ {pair.quoteToken.symbol}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{pair.dexId}</span>
+                      </div>
+                      <p className="text-xs text-slate-400">{pair.baseToken.name}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5 bg-slate-800/50 rounded-lg px-2 py-0.5 max-w-[280px]">
+                        <span className="text-[10px] font-mono text-slate-400 truncate">{address}</span>
+                        <button onClick={(e) => { e.stopPropagation(); copyToClipboard(address, `عنوان ${pair.baseToken.symbol}`); }} className="p-0.5 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title="نسخ العنوان">
+                          {isCopied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400 hover:text-white" />}
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-xs font-mono text-gray-400 truncate max-w-[200px]">{w.address}</p>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <div className="text-right">
+                      <p className="text-sm font-mono text-white">${price.toFixed(6)}</p>
+                      <p className={`text-xs font-medium ${change24 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{change24 >= 0 ? '+' : ''}{change24.toFixed(2)}%</p>
+                    </div>
+                    <div className="text-right hidden sm:block">
+                      <p className="text-xs text-slate-500">الحجم</p>
+                      <p className="text-sm text-slate-300">{formatUsd(volume)}</p>
+                    </div>
+                    <div className="text-right hidden sm:block">
+                      <p className="text-xs text-slate-500">السيولة</p>
+                      <p className="text-sm text-slate-300">{formatUsd(liquidity)}</p>
+                    </div>
+                    <button onClick={() => { const token = pairToDiscoveredToken(pair); onAnalyzeToken(token); setManualSearchResults([]); setManualSearchQuery(''); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg text-xs font-medium transition-colors">
+                      <BrainCircuit className="w-3.5 h-3.5" /> تحليل
+                    </button>
+                  </div>
                 </div>
-                <button
-                  onClick={() => deleteWallet(w.id)}
-                  className="p-1 text-red-400 hover:text-red-300 transition-colors"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        )}
-      </div>
-
-      {/* ✅ سحب الأرباح */}
-      <div className="p-6 bg-slate-800 rounded-xl border border-slate-700">
-        <h3 className="font-semibold text-white mb-4">📤 سحب الأرباح</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm text-gray-400 block mb-1">اختر محفظة للسحب</label>
-            <select
-              value={selectedNetwork}
-              onChange={(e) => setSelectedNetwork(e.target.value)}
-              className="w-full px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white focus:outline-none focus:border-emerald-500"
-            >
-              {userWallets.length === 0 ? (
-                <option value="">لا توجد محافظ - أضف محفظة أولاً</option>
-              ) : (
-                userWallets.map((w) => (
-                  <option key={w.id} value={w.network}>
-                    {SUPPORTED_NETWORKS.find(n => n.id === w.network)?.icon} {w.network} - {w.address.slice(0, 10)}...
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-          <div className="flex gap-4">
-            <div className="flex-1">
-              <label className="text-sm text-gray-400 block mb-1">المبلغ ($)</label>
-              <input
-                type="number"
-                value={withdrawAmount}
-                onChange={(e) => setWithdrawAmount(e.target.value)}
-                placeholder="0.00"
-                className="w-full px-4 py-2 rounded-lg border border-slate-600 bg-slate-700 text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={handleWithdraw}
-                disabled={isLoading || balance === 0 || userWallets.length === 0}
-                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium disabled:opacity-50 flex items-center gap-2"
-              >
-                <ArrowUpRight size={18} />
-                {isLoading ? "جاري..." : "سحب"}
-              </button>
-            </div>
-          </div>
-          <p className="text-xs text-gray-500">⚠️ الحد الأدنى للسحب: $10 | الحد الأقصى: $10,000</p>
         </div>
-      </div>
+      )}
 
-      {/* ✅ آخر المعاملات */}
-      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-        <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
-          <History size={18} />
-          آخر المعاملات
-        </h3>
-        {transactions.length === 0 ? (
-          <p className="text-gray-400 text-sm">لا توجد معاملات بعد</p>
+      {/* ============ TOKENS TABLE ============ */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+            <p className="text-sm text-slate-400">جاري مسح {getNetworkName(activeNetwork)}...</p>
+          </div>
+        ) : sorted.length === 0 ? (
+          <div className="py-20 text-center">
+            <Radar className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+            <p className="text-sm text-slate-500">
+              {error ? 'لا توجد بيانات بسبب خطأ في API.' : 'لا توجد عملات تطابق الفلاتر. حاول تعديل الفلاتر أو إعادة المسح.'}
+            </p>
+          </div>
         ) : (
-          <div className="space-y-2 max-h-60 overflow-y-auto">
-            {transactions.map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between text-sm p-2 bg-slate-700/50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <span className={tx.amount > 0 ? "text-emerald-400" : "text-red-400"}>
-                    {tx.type === "PROFIT" && "📈"}
-                    {tx.type === "WITHDRAW" && "💸"}
-                    {tx.type === "DEPOSIT" && "💰"}
-                    {tx.type === "COMMISSION" && "🏦"}
-                  </span>
-                  <span className="text-gray-300">{tx.description}</span>
-                </div>
-                <span className={tx.amount > 0 ? "text-emerald-400" : "text-red-400"}>
-                  {tx.amount > 0 ? "+" : ""}{tx.amount.toFixed(2)}$
-                </span>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-slate-800 text-xs text-slate-500 uppercase tracking-wide">
+                  <th className="text-left px-4 py-3 font-medium w-8"></th>
+                  <th className="text-left px-3 py-3 font-medium">العملة</th>
+                  <th className="text-right px-3 py-3 font-medium">السعر</th>
+                  <th className="text-center px-3 py-3 font-medium">الاتجاه</th>
+                  <th className="text-right px-3 py-3 font-medium">5د</th>
+                  <th className="text-right px-3 py-3 font-medium">1س</th>
+                  <th className="text-right px-3 py-3 font-medium">6س</th>
+                  <th className="text-right px-3 py-3 font-medium">24س</th>
+                  <th className="text-right px-3 py-3 font-medium">الحجم</th>
+                  <th className="text-right px-3 py-3 font-medium">السيولة</th>
+                  <th className="text-right px-3 py-3 font-medium">القيمة</th>
+                  <th className="text-right px-3 py-3 font-medium">FDV</th>
+                  <th className="text-right px-3 py-3 font-medium">الإنشاء</th>
+                  <th className="text-right px-3 py-3 font-medium">العمر</th>
+                  <th className="text-right px-3 py-3 font-medium">شراء</th>
+                  <th className="text-right px-3 py-3 font-medium">بيع</th>
+                  <th className="text-center px-3 py-3 font-medium">الاستراتيجية</th>
+                  <th className="text-center px-3 py-3 font-medium">النتيجة</th>
+                  <th className="text-center px-3 py-3 font-medium">الحالة</th>
+                  <th className="text-center px-3 py-3 font-medium">الإجراء</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((token) => {
+                  const tokenId = `${token.chainId}:${token.tokenAddress}`;
+                  const isExpanded = expandedToken === tokenId;
+                  const statusCfg = STATUS_CONFIG[token.status];
+                  const StatusIcon = statusCfg.icon;
+                  const stratCfg = STRATEGY_CONFIG[token.strategy];
+                  const StratIcon = stratCfg.icon;
+                  const ageStr = token.pairCreatedAt ? timeAgo(token.pairCreatedAt) : '—';
+                  const isCopied = copiedAddress === token.tokenAddress;
+
+                  // ✅ بيانات الرسم البياني (من التغيرات السعرية)
+                  const sparklineData = [
+                    token.priceChange.m5,
+                    token.priceChange.h1,
+                    token.priceChange.h6,
+                    token.priceChange.h24,
+                  ].filter(v => v !== 0 && !isNaN(v));
+
+                  return (
+                    <Fragment key={tokenId}>
+                      <tr
+                        className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors cursor-pointer"
+                        onClick={() => setExpandedToken(isExpanded ? null : tokenId)}
+                      >
+                        <td className="px-4 py-3 text-slate-500">
+                          {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                        </td>
+                        
+                        {/* ✅ عمود العملة مع زر نسخ */}
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ backgroundColor: getNetworkColor(activeNetwork) }}>
+                              {token.symbol.slice(0, 2)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-white truncate">{token.symbol}</p>
+                              <p className="text-xs text-slate-500 truncate max-w-[100px]">{token.name}</p>
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[120px]">
+                                  {token.tokenAddress.slice(0, 8)}...{token.tokenAddress.slice(-6)}
+                                </span>
+                                <button onClick={(e) => { e.stopPropagation(); copyToClipboard(token.tokenAddress, `عنوان ${token.symbol}`); }} className="p-0.5 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title={`نسخ عنوان ${token.symbol}`}>
+                                  {isCopied ? <CheckCircle className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-500 hover:text-white" />}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        
+                        <td className="text-right px-3 py-3 text-sm text-white font-mono">{formatPrice(token.priceUsd)}</td>
+                        
+                        {/* ✅ عمود الرسم البياني */}
+                        <td className="text-center px-3 py-3">
+                          <Sparkline 
+                            data={sparklineData.length >= 2 ? sparklineData : [0, token.priceChange.h24 || 0]} 
+                            width={50} 
+                            height={18}
+                            color={token.priceChange.h24 >= 0 ? '#10b981' : '#ef4444'}
+                          />
+                        </td>
+                        
+                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.m5 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.m5)}</td>
+                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.h1 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.h1)}</td>
+                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.h6 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.h6)}</td>
+                        <td className={`text-right px-3 py-3 text-sm font-mono ${token.priceChange.h24 >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPct(token.priceChange.h24)}</td>
+                        <td className="text-right px-3 py-3 text-sm text-slate-300">{formatUsd(token.volume24h)}</td>
+                        <td className="text-right px-3 py-3 text-sm text-slate-300">{formatUsd(token.liquidityUsd)}</td>
+                        <td className="text-right px-3 py-3 text-sm text-slate-300">{token.marketCap ? formatUsd(token.marketCap) : '—'}</td>
+                        <td className="text-right px-3 py-3 text-sm text-slate-300">{token.fdv ? formatUsd(token.fdv) : '—'}</td>
+                        
+                        {/* ✅ عمود الإنشاء */}
+                        <td className="text-right px-3 py-3 text-xs text-slate-400">
+                          {token.pairCreatedAt ? formatDateTime(token.pairCreatedAt) : '—'}
+                        </td>
+                        
+                        {/* ✅ عمود العمر */}
+                        <td className="text-right px-3 py-3 text-sm text-slate-400">
+                          {token.pairCreatedAt ? timeAgo(token.pairCreatedAt) : '—'}
+                        </td>
+                        
+                        <td className="text-right px-3 py-3 text-sm text-emerald-400">{token.txns24h.buys.toLocaleString()}</td>
+                        <td className="text-right px-3 py-3 text-sm text-red-400">{token.txns24h.sells.toLocaleString()}</td>
+                        <td className="text-center px-3 py-3">
+                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${stratCfg.bg} ${stratCfg.color}`}>
+                            <StratIcon className="w-3 h-3" /> {stratCfg.label}
+                          </span>
+                        </td>
+                        <td className="text-center px-3 py-3">
+                          <span className={`inline-block px-2 py-1 rounded text-xs font-bold ${token.score >= 70 ? 'bg-emerald-500/20 text-emerald-400' : token.score >= 45 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'}`}>
+                            {token.score}
+                          </span>
+                        </td>
+                        <td className="text-center px-3 py-3">
+                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${statusCfg.bg} ${statusCfg.color}`}>
+                            <StatusIcon className="w-3 h-3" /> {statusCfg.label}
+                          </span>
+                        </td>
+                        <td className="text-center px-3 py-3">
+                          <button onClick={(e) => { e.stopPropagation(); onAnalyzeToken(token); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium transition-colors">
+                            <BrainCircuit className="w-3.5 h-3.5" /> تحليل
+                          </button>
+                        </td>
+                      </tr>
+                      
+                      {/* ============ EXPANDED DETAILS ============ */}
+                      {isExpanded && (
+                        <tr className="bg-slate-950/50">
+                          <td colSpan={20} className="px-6 py-4">
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-4 flex-wrap">
+                                <div className="flex items-center gap-2 bg-slate-800/50 rounded-lg px-3 py-1.5">
+                                  <span className="text-xs text-slate-400">عنوان العملة:</span>
+                                  <span className="text-xs font-mono text-slate-300 break-all max-w-[300px]">{token.tokenAddress}</span>
+                                  <button onClick={(e) => { e.stopPropagation(); copyToClipboard(token.tokenAddress, `عنوان ${token.symbol}`); }} className="p-1 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title="نسخ العنوان">
+                                    {isCopied ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400 hover:text-white" />}
+                                  </button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-slate-500">DEX:</span>
+                                  <span className="text-xs text-slate-300">{token.dexId}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-slate-500">أفضل زوج:</span>
+                                  <span className="text-xs font-mono text-slate-300">{token.pairAddress.slice(0, 16)}...{token.pairAddress.slice(-6)}</span>
+                                </div>
+                                {token.securityFlags.length > 0 && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-slate-500">تنبيهات:</span>
+                                    {token.securityFlags.map((flag) => (<span key={flag} className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">{flag}</span>))}
+                                  </div>
+                                )}
+                                <a href={token.bestPair.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300">
+                                  <ExternalLink className="w-3 h-3" /> عرض في DEX
+                                </a>
+                              </div>
+
+                              <div className="flex items-center gap-2 bg-slate-800/30 rounded-lg px-3 py-2">
+                                <span className="text-xs text-slate-500">📋 العنوان الكامل:</span>
+                                <span className="text-xs font-mono text-emerald-300 break-all flex-1">{token.tokenAddress}</span>
+                                <button onClick={(e) => { e.stopPropagation(); copyToClipboard(token.tokenAddress, `عنوان ${token.symbol}`); }} className="p-1 hover:bg-slate-700 rounded transition-colors flex-shrink-0" title="نسخ العنوان">
+                                  {isCopied ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-400 hover:text-white" />}
+                                </button>
+                              </div>
+
+                              {/* ✅ معلومات الإنشاء */}
+                              <div className="flex items-center gap-4 flex-wrap bg-slate-800/20 rounded-lg px-3 py-2">
+                                <span className="text-xs text-slate-500">🕐 وقت الإنشاء:</span>
+                                <span className="text-xs font-mono text-slate-300">{token.pairCreatedAt ? formatDateTime(token.pairCreatedAt) : 'غير معروف'}</span>
+                                <span className="text-xs text-slate-500">|</span>
+                                <span className="text-xs text-slate-500">⏳ العمر:</span>
+                                <span className="text-xs font-medium text-emerald-400">{token.pairCreatedAt ? timeAgo(token.pairCreatedAt) : 'غير معروف'}</span>
+                              </div>
+
+                              <div>
+                                <p className="text-xs text-slate-500 mb-2">جميع الأزواج ({token.allPairs.length})</p>
+                                <div className="space-y-1 max-h-48 overflow-y-auto">
+                                  {token.allPairs.map((pair, i) => (
+                                    <div key={i} className="flex items-center justify-between text-xs bg-slate-900/50 rounded-lg px-3 py-2">
+                                      <div className="flex items-center gap-3">
+                                        <span className="font-mono text-slate-500">{pair.dexId}</span>
+                                        <span className="text-white">{pair.baseToken.symbol}/{pair.quoteToken.symbol}</span>
+                                        <span className="text-slate-500 font-mono">{pair.pairAddress.slice(0, 12)}...</span>
+                                      </div>
+                                      <div className="flex items-center gap-4 text-slate-400">
+                                        <span>{formatPrice(pair.priceUsd)}</span>
+                                        <span>الحجم: {formatUsd(pair.volume?.h24 ?? 0)}</span>
+                                        <span>السيولة: {formatUsd(pair.liquidity?.usd ?? 0)}</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
+
+      {!loading && sorted.length > 0 && (
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <span>عرض {sorted.length} من {tokens.length} عملة مكتشفة على {getNetworkName(activeNetwork)}</span>
+          <span>مصادر البيانات: DEX Screener + GeckoTerminal</span>
+        </div>
+      )}
     </div>
   );
 }
 
-export default MyWalletPage;
+// ============ COMPONENTS ============
+
+function FunnelStep({ icon: Icon, label, value, color }: {
+  icon: typeof Filter;
+  label: string;
+  value: number;
+  color: string;
+}) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <Icon className={`w-3.5 h-3.5 ${color}`} />
+        <span className="text-xs text-slate-500 truncate">{label}</span>
+      </div>
+      <p className={`text-lg font-bold ${color}`}>{value.toLocaleString()}</p>
+    </div>
+  );
+}
