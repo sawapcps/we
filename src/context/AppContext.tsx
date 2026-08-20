@@ -74,6 +74,9 @@ interface AppContextType {
   isRunning: boolean;
   setIsRunning: (running: boolean) => void;
   
+  // ✅ تحديث حالة البوت (جديد)
+  updateBotState: (isRunning: boolean, networks?: string[]) => Promise<void>;
+  
   // User
   user: any;
   setUser: (user: any) => void;
@@ -83,6 +86,8 @@ interface AppContextType {
 }
 
 // ============ DEFAULT VALUES ============
+
+const WORKER_URL = 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 
 const defaultBotConfig: BotConfigData = {
   mode: 'AUTO',
@@ -123,7 +128,6 @@ export function AppProvider({ children }: AppProviderProps) {
   const loadBotWallets = async () => {
     try {
       const botWallet = BotWalletManager.getInstance();
-      // تهيئة المحافظ للشبكات المطلوبة
       const networks = botConfig?.networks || ['solana'];
       for (const network of networks) {
         await botWallet.init(network);
@@ -146,6 +150,52 @@ export function AppProvider({ children }: AppProviderProps) {
     } catch (error) {
       console.error('❌ فشل تحديث الرصيد:', error);
       return 0;
+    }
+  };
+
+  // ============ UPDATE BOT STATE (✅ جديد) ============
+
+  const updateBotState = async (isRunning: boolean, networks?: string[]) => {
+    try {
+      // ✅ تحديث الحالة في الـ Worker
+      const endpoint = isRunning ? '/start' : '/stop';
+      const body = isRunning 
+        ? JSON.stringify({ mode: 'normal-bot', networks: networks || botConfig?.networks || ['solana'] })
+        : '{}';
+      
+      const res = await fetch(`${WORKER_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body,
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        setIsRunning(isRunning);
+        
+        // ✅ إذا كانت هناك شبكات جديدة، احفظها
+        if (networks) {
+          // حفظ الشبكات في D1
+          await fetch(`${WORKER_URL}/networks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ networks }),
+          });
+          
+          // تحديث botConfig
+          if (botConfig) {
+            const updatedConfig = { ...botConfig, networks };
+            await setBotConfig(updatedConfig);
+          }
+        }
+        
+        await addLog('INFO', `✅ تم ${isRunning ? 'تشغيل' : 'إيقاف'} البوت${networks ? ` على الشبكات: ${networks.join(', ')}` : ''}`);
+      } else {
+        await addLog('ERROR', `❌ فشل ${isRunning ? 'تشغيل' : 'إيقاف'} البوت: ${data.message}`);
+      }
+    } catch (error) {
+      console.error('❌ فشل تحديث حالة البوت:', error);
+      await addLog('ERROR', `❌ فشل تحديث حالة البوت: ${String(error)}`);
     }
   };
 
@@ -365,6 +415,7 @@ export function AppProvider({ children }: AppProviderProps) {
     setIsLoading,
     isRunning,
     setIsRunning,
+    updateBotState, // ✅ جديد
     user,
     setUser,
     isAdmin,

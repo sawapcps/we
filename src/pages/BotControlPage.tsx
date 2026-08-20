@@ -20,18 +20,11 @@ export function BotControlPage() {
     addTrade,
     isLoading,
     setIsLoading,
+    isRunning,
+    setIsRunning,
+    updateBotState, // ✅ جديدة
   } = useApp();
 
-  const [isRunning, setIsRunning] = useState(() => {
-    const saved = localStorage.getItem('isRunning');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {}
-    }
-    return false;
-  });
-  
   const [selectedNetworks, setSelectedNetworks] = useState<string[]>(() => {
     const saved = localStorage.getItem('selectedNetworks');
     if (saved) {
@@ -69,7 +62,7 @@ export function BotControlPage() {
   const isRestarting = useRef(false);
   const isInitialLoad = useRef(true);
 
-  // ============ HANDLERS (تعريف الدوال أولاً) ============
+  // ============ HANDLERS ============
 
   // ✅ تشغيل البوت عبر Worker
   const handleStart = async () => {
@@ -78,12 +71,23 @@ export function BotControlPage() {
       const res = await fetch(`${WORKER_URL}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: mode === 'AUTO' ? 'normal-bot' : 'manual' }),
+        body: JSON.stringify({ 
+          mode: mode === 'AUTO' ? 'normal-bot' : 'manual',
+          networks: selectedNetworks // ✅ إرسال الشبكات المحددة
+        }),
       });
       const data = await res.json();
       if (data.success) {
         setIsRunning(true);
         localStorage.setItem('isRunning', JSON.stringify(true));
+        
+        // ✅ حفظ الشبكات في D1
+        await fetch(`${WORKER_URL}/networks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ networks: selectedNetworks }),
+        });
+        
         await addLog('SUCCESS', `🤖 تم تشغيل البوت في وضع ${mode === 'AUTO' ? 'تلقائي' : 'يدوي'} على الشبكات: ${selectedNetworks.join(', ')}`);
         await performScan();
       } else {
@@ -286,6 +290,11 @@ export function BotControlPage() {
         localStorage.setItem('isRunning', JSON.stringify(data.isRunning));
         if (data.isRunning) {
           addLog('INFO', '🤖 البوت يعمل بالفعل (تم استعادة الحالة)');
+          // ✅ استعادة الشبكات المحفوظة
+          if (data.networks && data.networks.length > 0) {
+            setSelectedNetworks(data.networks);
+            localStorage.setItem('selectedNetworks', JSON.stringify(data.networks));
+          }
           setTimeout(() => {
             handleStart();
           }, 1000);
@@ -302,14 +311,38 @@ export function BotControlPage() {
     if (isRunning && botConfig && !isRestarting.current && !isInitialLoad.current) {
       isRestarting.current = true;
       const restartBot = async () => {
-        await handleStop();
+        // ✅ إيقاف البوت
+        await fetch(`${WORKER_URL}/stop`, { method: 'POST' });
+        
+        // ✅ تحديث الإعدادات
         const updatedConfig = {
           ...botConfig,
           networks: selectedNetworks,
         };
         setBotConfig(updatedConfig);
-        setTimeout(() => {
-          handleStart();
+        
+        // ✅ حفظ الشبكات في D1
+        await fetch(`${WORKER_URL}/networks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ networks: selectedNetworks }),
+        });
+        
+        // ✅ إعادة تشغيل البوت مع الشبكات الجديدة
+        setTimeout(async () => {
+          const res = await fetch(`${WORKER_URL}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              mode: mode === 'AUTO' ? 'normal-bot' : 'manual',
+              networks: selectedNetworks 
+            }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            setIsRunning(true);
+            await addLog('SUCCESS', `🔄 تم إعادة تشغيل البوت على الشبكات: ${selectedNetworks.join(', ')}`);
+          }
           setTimeout(() => {
             isRestarting.current = false;
           }, 2000);
@@ -317,7 +350,6 @@ export function BotControlPage() {
       };
       restartBot();
     }
-    // ✅ بعد التحميل الأول، قم بتعيين isInitialLoad إلى false
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
     }
