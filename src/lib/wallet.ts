@@ -1,4 +1,4 @@
-// src/lib/wallet.ts
+﻿// src/lib/wallet.ts
 
 import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { ethers } from 'ethers';

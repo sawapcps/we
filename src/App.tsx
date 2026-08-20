@@ -12,6 +12,8 @@ import { MyWalletPage } from './pages/MyWalletPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LoginPage } from './pages/LoginPage';
 import { AdminPage } from './pages/AdminPage';
+import { OpenTradesPage } from './pages/OpenTradesPage';
+import { ManualTradesPage } from './pages/ManualTradesPage';
 import { madarCreate } from './lib/madarTech';
 import type { DiscoveredToken } from './types';
 
@@ -38,36 +40,42 @@ function Navigation() {
               </span>
             )}
           </div>
-          <div className="flex gap-1 items-center">
-            <Link to="/" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all">
+          <div className="flex gap-1 items-center overflow-x-auto">
+            <Link to="/" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
               📊 لوحة التحكم
             </Link>
-            <Link to="/bot" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all">
+            <Link to="/bot" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
               🤖 البوت
             </Link>
-            <Link to="/markets" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all">
+            <Link to="/markets" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
               📈 الأسواق
             </Link>
-            <Link to="/ai" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all">
+            <Link to="/ai" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
               🧠 AI
             </Link>
-            <Link to="/wallet" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all">
+            <Link to="/wallet" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
               💰 محفظة البوت
             </Link>
-            <Link to="/my-wallet" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all">
+            <Link to="/my-wallet" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
               💳 محفظتي
             </Link>
+            <Link to="/open-trades" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
+              📊 صفقات مفتوحة
+            </Link>
+            <Link to="/manual-trades" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
+              🖐️ تداول يدوي
+            </Link>
             {isAdmin && (
-              <Link to="/admin" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-purple-400 hover:text-purple-300 text-sm transition-all">
+              <Link to="/admin" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-purple-400 hover:text-purple-300 text-sm transition-all whitespace-nowrap">
                 👑 إدارة
               </Link>
             )}
-            <Link to="/settings" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all">
+            <Link to="/settings" className="px-3 py-2 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white text-sm transition-all whitespace-nowrap">
               ⚙️ الإعدادات
             </Link>
             <button
               onClick={logout}
-              className="px-3 py-2 rounded-lg hover:bg-red-500/20 text-red-400 hover:text-red-300 text-sm transition-all"
+              className="px-3 py-2 rounded-lg hover:bg-red-500/20 text-red-400 hover:text-red-300 text-sm transition-all whitespace-nowrap"
             >
               🚪 خروج
             </button>
@@ -129,6 +137,8 @@ function AppContent() {
           <Route path="/ai" element={<AIAnalysisPage pendingAnalysis={pendingAnalysis} onConsumePending={handleConsumePending} />} />
           <Route path="/wallet" element={<WalletPage />} />
           <Route path="/my-wallet" element={<MyWalletPage />} />
+          <Route path="/open-trades" element={<OpenTradesPage />} />
+          <Route path="/manual-trades" element={<ManualTradesPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
