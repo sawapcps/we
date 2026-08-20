@@ -6,6 +6,9 @@ import { NetworkSelector } from '../components/NetworkSelector';
 import { TradingModeSelector } from '../components/TradingModeSelector';
 import { generateId, getTimestamp } from '../lib/madarTech';
 
+// ✅ عنوان الـ Worker (استبدل YOUR_SUBDOMAIN بالفعلي)
+const WORKER_URL = 'https://multi-chain-rpc-proxy.YOUR_SUBDOMAIN.workers.dev';
+
 export function BotControlPage() {
   const {
     botConfig,
@@ -76,6 +79,23 @@ export function BotControlPage() {
       }
     }
   }, [botConfig]);
+
+  // ✅ جلب حالة البوت من الـ Worker عند تحميل الصفحة
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`${WORKER_URL}/status`);
+        const data = await res.json();
+        setIsRunning(data.isRunning);
+        if (data.isRunning) {
+          addLog('INFO', '🤖 البوت يعمل بالفعل (تم استعادة الحالة)');
+        }
+      } catch (error) {
+        console.error('❌ فشل جلب حالة البوت:', error);
+      }
+    };
+    checkStatus();
+  }, []);
 
   // ============ SIMULATE BOT SCAN ============
 
@@ -178,14 +198,55 @@ export function BotControlPage() {
 
   // ============ HANDLERS ============
 
+  // ✅ تشغيل البوت عبر Worker
+  const handleStart = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${WORKER_URL}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: mode === 'AUTO' ? 'normal-bot' : 'manual' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsRunning(true);
+        await addLog('SUCCESS', `🤖 تم تشغيل البوت في وضع ${mode === 'AUTO' ? 'تلقائي' : 'يدوي'}`);
+        await performScan();
+      } else {
+        await addLog('ERROR', `❌ فشل تشغيل البوت: ${data.message}`);
+      }
+    } catch (error) {
+      await addLog('ERROR', `❌ خطأ: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ✅ إيقاف البوت عبر Worker
+  const handleStop = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${WORKER_URL}/stop`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setIsRunning(false);
+        await addLog('INFO', '⏹️ تم إيقاف البوت');
+      } else {
+        await addLog('ERROR', `❌ فشل إيقاف البوت: ${data.message}`);
+      }
+    } catch (error) {
+      await addLog('ERROR', `❌ خطأ: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ✅ دالة موحدة للزر
   const handleStartStop = async () => {
     if (isRunning) {
-      setIsRunning(false);
-      await addLog('INFO', 'تم إيقاف البوت');
+      await handleStop();
     } else {
-      setIsRunning(true);
-      await addLog('INFO', `تم تشغيل البوت في وضع ${mode === 'AUTO' ? 'تلقائي' : 'يدوي'}`);
-      await performScan();
+      await handleStart();
     }
   };
 
