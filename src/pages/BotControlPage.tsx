@@ -7,8 +7,8 @@ import { TradingModeSelector } from '../components/TradingModeSelector';
 import { generateId, getTimestamp } from '../lib/madarTech';
 
 // ✅ عنوان الـ Worker (استبدل YOUR_SUBDOMAIN بالفعلي)
-const WORKER_URL = 'https://multi-chain-rpc-proxy.YOUR_SUBDOMAIN.workers.dev';
-
+// ✅ استخدم هذا العنوان
+const WORKER_URL = 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 export function BotControlPage() {
   const {
     botConfig,
