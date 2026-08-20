@@ -1,6 +1,6 @@
 // src/pages/BotControlPage.tsx
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { NetworkSelector } from '../components/NetworkSelector';
 import { TradingModeSelector } from '../components/TradingModeSelector';
@@ -64,6 +64,10 @@ export function BotControlPage() {
   const [lastScan, setLastScan] = useState<string | null>(null);
   const [discoveredCount, setDiscoveredCount] = useState(0);
   const [buySignals, setBuySignals] = useState<number>(0);
+
+  // ✅ منع التكرار
+  const isRestarting = useRef(false);
+  const isInitialLoad = useRef(true);
 
   // ============ HANDLERS (تعريف الدوال أولاً) ============
 
@@ -293,9 +297,10 @@ export function BotControlPage() {
     checkStatus();
   }, []);
 
-  // ✅ عند تغيير الشبكات، أوقف البوت ثم أعد تشغيله
+  // ✅ عند تغيير الشبكات، أوقف البوت ثم أعد تشغيله (مع منع التكرار)
   useEffect(() => {
-    if (isRunning && botConfig) {
+    if (isRunning && botConfig && !isRestarting.current && !isInitialLoad.current) {
+      isRestarting.current = true;
       const restartBot = async () => {
         await handleStop();
         const updatedConfig = {
@@ -305,9 +310,16 @@ export function BotControlPage() {
         setBotConfig(updatedConfig);
         setTimeout(() => {
           handleStart();
+          setTimeout(() => {
+            isRestarting.current = false;
+          }, 2000);
         }, 1500);
       };
       restartBot();
+    }
+    // ✅ بعد التحميل الأول، قم بتعيين isInitialLoad إلى false
+    if (isInitialLoad.current) {
+      isInitialLoad.current = false;
     }
   }, [selectedNetworks]);
 
