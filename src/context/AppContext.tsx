@@ -1,6 +1,6 @@
 // src/context/AppContext.tsx
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import {
   madarRead,
   saveBotConfig,
@@ -74,7 +74,7 @@ interface AppContextType {
   isRunning: boolean;
   setIsRunning: (running: boolean) => void;
   
-  // ✅ تحديث حالة البوت (جديد)
+  // ✅ تحديث حالة البوت
   updateBotState: (isRunning: boolean, networks?: string[]) => Promise<void>;
   
   // User
@@ -123,17 +123,32 @@ export function AppProvider({ children }: AppProviderProps) {
   const [user, setUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // ✅ منع التكرار
+  const hasLoadedWallets = useRef(false);
+  const isInitialized = useRef(false);
+
   // ============ BOT WALLETS ============
 
   const loadBotWallets = async () => {
+    // ✅ منع التحميل المتكرر
+    if (isInitialized.current) {
+      console.log('✅ المحافظ محملة مسبقاً، تخطي...');
+      return;
+    }
+
     try {
+      console.log('🔄 جاري تحميل المحافظ...');
       const botWallet = BotWalletManager.getInstance();
       const networks = botConfig?.networks || ['solana'];
+      
       for (const network of networks) {
         await botWallet.init(network);
       }
+      
       const allWallets = botWallet.getAllWallets();
       setBotWallets(allWallets);
+      isInitialized.current = true;
+      console.log(`✅ تم تحميل ${allWallets.length} محفظة`);
     } catch (error) {
       console.error('❌ فشل تحميل المحافظ:', error);
     }
@@ -153,11 +168,10 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   };
 
-  // ============ UPDATE BOT STATE (✅ جديد) ============
+  // ============ UPDATE BOT STATE ============
 
   const updateBotState = async (isRunning: boolean, networks?: string[]) => {
     try {
-      // ✅ تحديث الحالة في الـ Worker
       const endpoint = isRunning ? '/start' : '/stop';
       const body = isRunning 
         ? JSON.stringify({ mode: 'normal-bot', networks: networks || botConfig?.networks || ['solana'] })
@@ -173,16 +187,13 @@ export function AppProvider({ children }: AppProviderProps) {
       if (data.success) {
         setIsRunning(isRunning);
         
-        // ✅ إذا كانت هناك شبكات جديدة، احفظها
         if (networks) {
-          // حفظ الشبكات في D1
           await fetch(`${WORKER_URL}/networks`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ networks }),
           });
           
-          // تحديث botConfig
           if (botConfig) {
             const updatedConfig = { ...botConfig, networks };
             await setBotConfig(updatedConfig);
@@ -378,9 +389,10 @@ export function AppProvider({ children }: AppProviderProps) {
     loadLogs();
   }, []);
 
-  // ✅ تحميل المحافظ بعد تحميل الإعدادات
+  // ✅ تحميل المحافظ مرة واحدة فقط بعد تحميل الإعدادات
   useEffect(() => {
-    if (botConfig) {
+    if (botConfig && !hasLoadedWallets.current) {
+      hasLoadedWallets.current = true;
       loadBotWallets();
     }
   }, [botConfig]);
@@ -415,7 +427,7 @@ export function AppProvider({ children }: AppProviderProps) {
     setIsLoading,
     isRunning,
     setIsRunning,
-    updateBotState, // ✅ جديد
+    updateBotState,
     user,
     setUser,
     isAdmin,

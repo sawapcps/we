@@ -3,12 +3,10 @@ main = "src/worker.js"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# ✅ إعدادات قاعدة البيانات D1
 [[d1_databases]]
 binding = "DB"
 database_name = "madartech_platform"
 database_id = "1e57a5a3-8705-4b28-ad17-7b7a1e5c7fa6"
 
-# ✅ تشغيل البوت كل 5 دقائق
 [triggers]
 crons = ["*/5 * * * *"]
