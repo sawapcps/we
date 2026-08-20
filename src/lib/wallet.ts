@@ -79,7 +79,6 @@ export function createWallet(network: string): { address: string; privateKey: st
 
 export async function getSolanaBalance(address: string): Promise<number> {
   try {
-    // ✅ استخدام Worker Proxy
     const response = await fetch(`${WORKER_URL}/solana`, {
       method: 'POST',
       headers: {
@@ -100,12 +99,9 @@ export async function getSolanaBalance(address: string): Promise<number> {
     return 0;
   } catch (error) {
     console.warn('⚠️ Worker Proxy فشل، جاري التبديل إلى RPC مباشر:', error);
-    // ✅ في حال فشل Worker، استخدم RPC مباشر
     return getSolanaBalanceDirect(address);
   }
 }
-
-// ============ جلب الرصيد (RPC مباشر - احتياطي) ============
 
 export async function getSolanaBalanceDirect(address: string): Promise<number> {
   const url = getWorkingRpcUrl();
@@ -125,11 +121,8 @@ export async function getSolanaBalanceDirect(address: string): Promise<number> {
   }
 }
 
-// ============ جلب رصيد EVM (عبر Worker Proxy) ============
-
 export async function getEvmBalance(address: string, network: string): Promise<number> {
   try {
-    // ✅ استخدام Worker Proxy
     const response = await fetch(`${WORKER_URL}/${network}`, {
       method: 'POST',
       headers: {
@@ -153,8 +146,6 @@ export async function getEvmBalance(address: string, network: string): Promise<n
     return 0;
   }
 }
-
-// ============ جلب رصيد أي شبكة ============
 
 export async function getWalletBalance(network: string, address: string): Promise<number> {
   if (network === 'solana') {
@@ -284,6 +275,11 @@ export class BotWalletManager {
   private static instance: BotWalletManager;
   private wallets: BotWalletData[] = [];
   private masterPassword: string;
+  
+  // ✅ متغيرات لمنع التحميل المتكرر
+  private static isInitialized = false;
+  private static initializationPromise: Promise<BotWalletData> | null = null;
+  private static isLoading = false;
 
   private constructor() {
     this.masterPassword = import.meta.env.VITE_MASTER_PASSWORD || 'default_master_password_please_change';
@@ -296,7 +292,39 @@ export class BotWalletManager {
     return BotWalletManager.instance;
   }
 
+  // ✅ دالة init المعدلة (تمنع التكرار)
   async init(network: string = 'solana'): Promise<BotWalletData> {
+    // ✅ إذا كان التحميل جارياً، انتظر النتيجة
+    if (BotWalletManager.initializationPromise) {
+      console.log(`⏳ جاري انتظار تحميل المحفظة ${network}...`);
+      return BotWalletManager.initializationPromise;
+    }
+
+    // ✅ إذا تم التحميل مسبقاً، أرجع المحفظة مباشرة
+    if (BotWalletManager.isInitialized) {
+      const existingWallet = this.wallets.find((w) => w.network === network);
+      if (existingWallet) {
+        console.log(`✅ محفظة ${network} موجودة مسبقاً:`, existingWallet.address);
+        return existingWallet;
+      }
+    }
+
+    // ✅ بدء التحميل
+    console.log(`🔄 بدء تحميل محفظة ${network}...`);
+    BotWalletManager.initializationPromise = this._initInternal(network);
+    
+    try {
+      const result = await BotWalletManager.initializationPromise;
+      BotWalletManager.isInitialized = true;
+      console.log(`✅ تم تحميل محفظة ${network} بنجاح`);
+      return result;
+    } finally {
+      BotWalletManager.initializationPromise = null;
+    }
+  }
+
+  // ✅ دالة داخلية للتحميل
+  private async _initInternal(network: string = 'solana'): Promise<BotWalletData> {
     const result = await madarRead<BotWalletData>('bot_wallet', {});
     this.wallets = result.success && result.data ? result.data : [];
 
@@ -341,9 +369,20 @@ export class BotWalletManager {
     await madarUpdate('bot_wallet', wallet.id, wallet);
   }
 
+  // ✅ getWallet مع حماية إضافية
   getWallet(network?: string): BotWalletData | null {
+    // ✅ إذا كانت المحفظة موجودة في الذاكرة، أرجعها مباشرة
     if (network) {
-      return this.wallets.find((w) => w.network === network) || null;
+      const wallet = this.wallets.find((w) => w.network === network);
+      if (wallet) {
+        return wallet;
+      }
+      // ✅ إذا لم توجد المحفظة ولم يتم التهيئة، قم بالتهيئة
+      if (!BotWalletManager.isInitialized) {
+        console.warn(`⚠️ محفظة ${network} غير موجودة، سيتم تهيئتها عند الطلب`);
+        // لا نستدعي init هنا لتجنب الحلقات
+      }
+      return null;
     }
     return this.wallets.length > 0 ? this.wallets[0] : null;
   }
@@ -585,4 +624,73 @@ export class BotWalletManager {
       return { success: false, error: String(error), amount: params.amount, tokenAddress: params.tokenAddress };
     }
   }
+}
+
+// ============================================================
+// ✅ منع التكرار نهائياً - دوال التهيئة المركزية
+// ============================================================
+
+let isWalletLoading = false;
+let walletLoadPromise: Promise<void> | null = null;
+let isInitialized = false;
+
+// ✅ دالة تهيئة واحدة فقط لجميع المحافظ
+export async function initializeAllWallets(): Promise<void> {
+  // ✅ إذا كان التحميل جارياً، انتظر
+  if (isWalletLoading && walletLoadPromise) {
+    console.log('⏳ جاري انتظار تهيئة المحافظ...');
+    return walletLoadPromise;
+  }
+
+  // ✅ إذا تم التهيئة مسبقاً، تخطى
+  if (isInitialized) {
+    console.log('✅ المحافظ مهيأة مسبقاً');
+    return;
+  }
+
+  console.log('🔄 بدء تهيئة جميع المحافظ...');
+  isWalletLoading = true;
+  
+  walletLoadPromise = (async () => {
+    try {
+      const manager = BotWalletManager.getInstance();
+      
+      // ✅ تهيئة جميع الشبكات
+      const networks = ['solana', 'ethereum', 'arbitrum', 'bsc', 'polygon', 'avalanche', 'base', 'optimism', 'robinhood'];
+      
+      for (const network of networks) {
+        try {
+          await manager.init(network);
+        } catch (error) {
+          console.warn(`⚠️ فشل تهيئة ${network}:`, error);
+        }
+      }
+      
+      isInitialized = true;
+      console.log('✅ تم تهيئة جميع المحافظ بنجاح');
+    } catch (error) {
+      console.error('❌ فشل تهيئة المحافظ:', error);
+    } finally {
+      isWalletLoading = false;
+      walletLoadPromise = null;
+    }
+  })();
+
+  return walletLoadPromise;
+}
+
+// ✅ دالة للتحقق من التهيئة (تُستدعى من أي مكان)
+export function ensureWalletsInitialized(): void {
+  if (!isInitialized && !isWalletLoading) {
+    console.log('🔄 بدء تهيئة المحافظ (استدعاء تلقائي)');
+    initializeAllWallets().catch(console.error);
+  }
+}
+
+// ✅ إعادة تعيين التهيئة (للاستخدام في حالة التحديث)
+export function resetWalletsInitialization(): void {
+  isInitialized = false;
+  isWalletLoading = false;
+  walletLoadPromise = null;
+  console.log('🔄 تم إعادة تعيين تهيئة المحافظ');
 }
