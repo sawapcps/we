@@ -1,29 +1,108 @@
 ﻿// src/pages/WalletPage.tsx
+// ============================================================
+// 💰 محفظة البوت المركزية - تدير أموال جميع المستخدمين
+// ============================================================
 
 import { useState, useEffect, useRef } from "react";
-import { useApp } from "@/context/AppContext";
-import { BotWalletManager, BotWalletData } from "@/lib/wallet";
-import { AccountManager } from "@/lib/accounts";
-import { formatUsd } from "@/lib/format";
-import { Copy, Check, Key, Eye, EyeOff, Coins, Loader2, RefreshCw, Users, DollarSign, TrendingUp, Shield, Wallet, ChevronDown, ChevronRight } from "lucide-react";
+import { useApp } from "../context/AppContext";
+import { BotWalletManager, BotWalletData } from "../lib/wallet";
+import { AccountManager } from "../lib/accounts";
+import { formatUsd } from "../lib/format";
+import { 
+  Copy, Check, Key, Eye, EyeOff, Coins, Loader2, RefreshCw, 
+  Users, DollarSign, TrendingUp, Shield, Wallet, ChevronDown, 
+  ChevronRight, Sparkles, BarChart3, Activity, Zap,
+  Globe, Link2, Unlink, Clock
+} from "lucide-react";
+import { NETWORKS, getNetworkName, getNetworkColor, getNetworkIcon } from "../config/networks";
+
+// ============================================================
+// 🧩 مكون البطاقة الزجاجية
+// ============================================================
+const GlassCard: React.FC<{
+  children: React.ReactNode;
+  className?: string;
+  hover?: boolean;
+  glow?: boolean;
+}> = ({ children, className = '', hover = false, glow = false }) => (
+  <div className={`
+    relative overflow-hidden rounded-2xl 
+    bg-[#14141e]/80 backdrop-blur-xl 
+    border border-[#1e1e2f] 
+    transition-all duration-300
+    ${hover ? 'hover:border-[#10b981]/30 hover:shadow-lg hover:shadow-[#10b981]/5 hover:-translate-y-0.5' : ''}
+    ${glow ? 'shadow-[0_0_30px_-10px_rgba(16,185,129,0.15)]' : ''}
+    ${className}
+  `}>
+    {children}
+  </div>
+);
+
+// ============================================================
+// 🧩 زر أنيق
+// ============================================================
+const Button: React.FC<{
+  children: React.ReactNode;
+  onClick?: () => void;
+  variant?: 'primary' | 'secondary' | 'danger' | 'ghost' | 'success' | 'warning' | 'scalper' | 'wallet';
+  size?: 'sm' | 'md' | 'lg';
+  className?: string;
+  disabled?: boolean;
+  icon?: React.ReactNode;
+}> = ({
+  children,
+  onClick,
+  variant = 'primary',
+  size = 'md',
+  className = '',
+  disabled = false,
+  icon
+}) => {
+  const base = 'inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#0a0a0f] disabled:opacity-50 disabled:cursor-not-allowed';
+
+  const variants = {
+    primary: 'bg-[#10b981] hover:bg-[#059669] text-white shadow-lg shadow-[#10b981]/20 hover:shadow-[#10b981]/30 focus:ring-[#10b981]',
+    secondary: 'bg-[#1e1e2f] hover:bg-[#2a2a3f] text-[#e2e8f0] border border-[#1e1e2f] hover:border-[#10b981]/30',
+    danger: 'bg-[#ef4444] hover:bg-[#dc2626] text-white shadow-lg shadow-[#ef4444]/20 focus:ring-[#ef4444]',
+    ghost: 'bg-transparent hover:bg-[#1e1e2f] text-[#94a3b8] hover:text-white',
+    success: 'bg-[#059669] hover:bg-[#047857] text-white shadow-lg shadow-[#10b981]/20',
+    warning: 'bg-[#f59e0b] hover:bg-[#d97706] text-white shadow-lg shadow-[#f59e0b]/20',
+    scalper: 'bg-[#f97316] hover:bg-[#ea580c] text-white shadow-lg shadow-[#f97316]/20 hover:shadow-[#f97316]/30 focus:ring-[#f97316]',
+    wallet: 'bg-[#8b5cf6] hover:bg-[#7c3aed] text-white shadow-lg shadow-[#8b5cf6]/20 hover:shadow-[#8b5cf6]/30 focus:ring-[#8b5cf6]',
+  };
+
+  const sizes = {
+    sm: 'px-3 py-1.5 text-xs',
+    md: 'px-4 py-2 text-sm',
+    lg: 'px-6 py-3 text-base',
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+    >
+      {icon && <span className="flex-shrink-0">{icon}</span>}
+      {children}
+    </button>
+  );
+};
 
 export function WalletPage() {
   const { addLog, botWallets, loadBotWallets, refreshBotBalance } = useApp();
   const [wallets, setWallets] = useState<BotWalletData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [showPrivateKey, setShowPrivateKey] = useState(false);
+  const [showPrivateKey, setShowPrivateKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [systemStats, setSystemStats] = useState<any>(null);
-  const [selectedNetwork, setSelectedNetwork] = useState<string>("solana");
   const [expandedWallet, setExpandedWallet] = useState<string | null>(null);
+  const [totalBalance, setTotalBalance] = useState(0);
   
-  // ✅ منع التحميل المتكرر
   const hasLoaded = useRef(false);
   const isLoadingData = useRef(false);
 
-  // ✅ دالة تحميل البيانات مع حماية ضد التكرار
   const loadData = async () => {
-    // ✅ منع التحميل المتزامن
     if (isLoadingData.current) {
       console.log("⏳ جاري التحميل بالفعل، تخطي...");
       return;
@@ -37,6 +116,9 @@ export function WalletPage() {
       const allWallets = botWallet.getAllWallets();
       setWallets(allWallets);
       
+      const total = allWallets.reduce((sum, w) => sum + w.balance, 0);
+      setTotalBalance(total);
+      
       const stats = await AccountManager.getSystemStats();
       setSystemStats(stats);
     } catch (error) {
@@ -47,7 +129,6 @@ export function WalletPage() {
     }
   };
 
-  // ✅ تحميل البيانات مرة واحدة فقط
   useEffect(() => {
     if (!hasLoaded.current) {
       hasLoaded.current = true;
@@ -74,250 +155,269 @@ export function WalletPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getNetworkIcon = (network: string): string => {
-    const icons: Record<string, string> = {
-      solana: "🟣",
-      ethereum: "🔵",
-      bsc: "🟡",
-      polygon: "🟣",
-      base: "🔷",
-      arbitrum: "🔷",
-      avalanche: "🔴",
-      optimism: "🔴",
-      robinhood: "🦊",
-      ronin: "⚔️",
-      sui: "🌊",
-      ton: "💎",
-      zksync: "🟪",
-      linea: "⬛",
-      fantom: "🔷",
-      near: "🟢",
-    };
-    return icons[network] || "💳";
+  const togglePrivateKey = (network: string) => {
+    setShowPrivateKey(showPrivateKey === network ? null : network);
   };
 
-  const getNetworkName = (network: string): string => {
-    const names: Record<string, string> = {
-      solana: "Solana",
-      ethereum: "Ethereum",
-      bsc: "BNB Chain",
-      polygon: "Polygon",
-      base: "Base",
-      arbitrum: "Arbitrum",
-      avalanche: "Avalanche",
-      optimism: "Optimism",
-      robinhood: "Robinhood",
-      ronin: "Ronin",
-      sui: "Sui",
-      ton: "TON",
-      zksync: "zkSync",
-      linea: "Linea",
-      fantom: "Fantom",
-      near: "NEAR",
-    };
-    return names[network] || network;
+  const formatDate = (dateString: string) => {
+    try {
+      return new Date(dateString).toLocaleDateString('ar-EG', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return dateString;
+    }
   };
 
-  const totalBalance = wallets.reduce((sum, w) => sum + w.balance, 0);
+  const totalProfit = systemStats?.totalProfit || 0;
+  const totalFees = systemStats?.totalFees || 0;
+  const totalUsers = systemStats?.totalUsers || 0;
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">💰 محفظة البوت</h1>
-        <p className="text-gray-500 dark:text-gray-400">المحفظة المركزية للبوت - تدير أموال جميع المستخدمين</p>
+        <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+          <Wallet className="w-6 h-6 text-[#10b981]" />
+          💰 محفظة البوت
+        </h1>
+        <p className="text-sm text-[#64748b] mt-1">
+          المحفظة المركزية للبوت - تدير أموال جميع المستخدمين
+        </p>
       </div>
 
       {/* نظام الأرباح */}
-      <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 rounded-xl p-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-emerald-500/20 rounded-lg">
-            <Shield className="w-5 h-5 text-emerald-400" />
+      <GlassCard glow className="p-5">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-[#10b981]/10 rounded-xl">
+            <Shield className="w-6 h-6 text-[#10b981]" />
           </div>
           <div className="flex-1">
-            <h3 className="font-semibold text-emerald-400">نظام الأرباح: 85% لك / 15% للخزانة</h3>
-            <p className="text-sm text-gray-400">
-              عند تحقيق أرباح، تحصل على <span className="text-emerald-400 font-bold">85%</span> من الربح، 
-              و<span className="text-amber-400 font-bold">15%</span> تذهب لتطوير البوت والمنصة
+            <h3 className="font-semibold text-white text-lg">نظام الأرباح: 85% لك / 15% للخزانة</h3>
+            <p className="text-sm text-[#94a3b8]">
+              عند تحقيق أرباح، تحصل على <span className="text-[#10b981] font-bold">85%</span> من الربح، 
+              و<span className="text-[#f59e0b] font-bold">15%</span> تذهب لتطوير البوت والمنصة
             </p>
           </div>
-          <div className="text-right">
-            <div className="text-2xl font-bold text-emerald-400">85%</div>
-            <div className="text-xs text-gray-500">صافي الربح</div>
+          <div className="text-center">
+            <div className="text-3xl font-bold text-[#10b981]">85%</div>
+            <div className="text-xs text-[#64748b]">صافي الربح</div>
           </div>
         </div>
-      </div>
+      </GlassCard>
 
       {/* System Stats */}
-      {systemStats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-            <div className="flex items-center gap-2 text-gray-500">
-              <Users size={18} />
-              <span className="text-sm">المستخدمين</span>
-            </div>
-            <div className="text-2xl font-bold">{systemStats.totalUsers}</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <GlassCard className="p-4">
+          <div className="flex items-center gap-2 text-[#64748b]">
+            <Users className="w-4 h-4" />
+            <span className="text-xs">المستخدمين</span>
           </div>
-          <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-            <div className="flex items-center gap-2 text-gray-500">
-              <DollarSign size={18} />
-              <span className="text-sm">إجمالي الرصيد</span>
-            </div>
-            <div className="text-2xl font-bold text-green-500">${systemStats.totalBalance?.toFixed(2) || "0.00"}</div>
+          <div className="text-2xl font-bold text-white">{totalUsers}</div>
+        </GlassCard>
+        <GlassCard className="p-4">
+          <div className="flex items-center gap-2 text-[#64748b]">
+            <DollarSign className="w-4 h-4" />
+            <span className="text-xs">إجمالي الرصيد</span>
           </div>
-          <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-            <div className="flex items-center gap-2 text-gray-500">
-              <TrendingUp size={18} />
-              <span className="text-sm">إجمالي الأرباح</span>
-            </div>
-            <div className="text-2xl font-bold text-blue-500">${systemStats.totalProfit?.toFixed(2) || "0.00"}</div>
+          <div className="text-2xl font-bold text-[#10b981]">${totalBalance.toFixed(2)}</div>
+        </GlassCard>
+        <GlassCard className="p-4">
+          <div className="flex items-center gap-2 text-[#64748b]">
+            <TrendingUp className="w-4 h-4" />
+            <span className="text-xs">إجمالي الأرباح</span>
           </div>
-          <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-            <div className="flex items-center gap-2 text-gray-500">
-              <Coins size={18} />
-              <span className="text-sm">إجمالي العمولات</span>
-            </div>
-            <div className="text-2xl font-bold text-amber-500">${systemStats.totalFees?.toFixed(2) || "0.00"}</div>
+          <div className="text-2xl font-bold text-[#3b82f6]">${totalProfit.toFixed(2)}</div>
+        </GlassCard>
+        <GlassCard className="p-4">
+          <div className="flex items-center gap-2 text-[#64748b]">
+            <Coins className="w-4 h-4" />
+            <span className="text-xs">إجمالي العمولات</span>
           </div>
-        </div>
-      )}
+          <div className="text-2xl font-bold text-[#f59e0b]">${totalFees.toFixed(2)}</div>
+        </GlassCard>
+      </div>
 
       {/* إجمالي الرصيد */}
-      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl p-6 text-white">
+      <GlassCard glow className="p-6 bg-gradient-to-r from-[#10b981]/10 to-[#059669]/10 border-[#10b981]/20">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm opacity-80">إجمالي رصيد المحافظ</p>
-            <p className="text-3xl font-bold">${totalBalance.toFixed(2)}</p>
-            <p className="text-xs opacity-60 mt-1">{wallets.length} محافظ نشطة</p>
+            <p className="text-sm text-[#94a3b8]">إجمالي رصيد المحافظ</p>
+            <p className="text-3xl font-bold text-white">${totalBalance.toFixed(2)}</p>
+            <p className="text-xs text-[#64748b] mt-1 flex items-center gap-1">
+              <Globe className="w-3 h-3" />
+              {wallets.length} محافظ نشطة
+            </p>
           </div>
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={loadData}
             disabled={isLoading}
-            className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm transition-colors disabled:opacity-50"
+            icon={<RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />}
           >
-            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "🔄 تحديث الكل"}
-          </button>
+            {isLoading ? 'جاري التحديث...' : 'تحديث الكل'}
+          </Button>
         </div>
-      </div>
+      </GlassCard>
 
       {/* جميع المحافظ */}
       <div className="space-y-3">
         {wallets.length === 0 ? (
-          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-            <Wallet size={48} className="mx-auto mb-2 opacity-50" />
-            <p>لا توجد محافظ بعد</p>
-            <p className="text-sm">سيتم إنشاء المحافظ تلقائياً عند تفعيل الشبكات</p>
-          </div>
+          <GlassCard className="p-12 text-center">
+            <Wallet className="w-12 h-12 text-[#64748b] mx-auto mb-4 opacity-50" />
+            <p className="text-[#94a3b8] text-sm">لا توجد محافظ بعد</p>
+            <p className="text-[#64748b] text-xs mt-1">سيتم إنشاء المحافظ تلقائياً عند تفعيل الشبكات</p>
+          </GlassCard>
         ) : (
           wallets.map((wallet) => {
             const isExpanded = expandedWallet === wallet.network;
-            const icon = getNetworkIcon(wallet.network);
-            const name = getNetworkName(wallet.network);
+            const showKey = showPrivateKey === wallet.network;
+            const network = NETWORKS.find(n => n.id === wallet.network);
+            const icon = network?.icon || getNetworkIcon(wallet.network);
+            const name = network?.name || getNetworkName(wallet.network);
+            const color = network?.color || '#64748b';
+            const balance = wallet.balance || 0;
 
             return (
-              <div
-                key={wallet.network}
-                className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden"
-              >
+              <GlassCard key={wallet.network} hover className="overflow-hidden">
                 <div
-                  className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors"
+                  className="p-4 flex items-center justify-between cursor-pointer hover:bg-[#1e1e2f]/50 transition-colors"
                   onClick={() => setExpandedWallet(isExpanded ? null : wallet.network)}
                 >
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{icon}</span>
-                    <div>
-                      <p className="font-medium">{name}</p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {formatUsd(wallet.balance)}
-                      </p>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style={{ backgroundColor: `${color}20` }}>
+                      {icon}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium text-white">{name}</p>
+                      <p className="text-sm font-mono text-[#10b981]">{formatUsd(balance)}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <button
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
                       onClick={(e) => {
                         e.stopPropagation();
                         refreshBalance(wallet.network);
                       }}
                       disabled={isLoading}
-                      className="text-xs px-3 py-1 bg-gray-200 dark:bg-slate-700 hover:bg-gray-300 dark:hover:bg-slate-600 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1"
+                      icon={<RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />}
                     >
-                      <RefreshCw className={`w-3 h-3 ${isLoading ? "animate-spin" : ""}`} />
                       تحديث
-                    </button>
-                    {isExpanded ? <ChevronDown className="w-5 h-5 text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
+                    </Button>
+                    {isExpanded ? (
+                      <ChevronDown className="w-5 h-5 text-[#64748b]" />
+                    ) : (
+                      <ChevronRight className="w-5 h-5 text-[#64748b]" />
+                    )}
                   </div>
                 </div>
 
                 {isExpanded && (
-                  <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-slate-900/50 space-y-3">
+                  <div className="p-4 border-t border-[#1e1e2f] bg-[#0a0a0f]/50 space-y-3">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">عنوان المحفظة</p>
+                        <p className="text-xs text-[#64748b]">عنوان المحفظة</p>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-mono truncate">{wallet.address}</p>
+                          <p className="text-sm font-mono text-white truncate">{wallet.address}</p>
                           <button
                             onClick={() => handleCopy(wallet.address)}
-                            className="p-1 hover:bg-gray-200 dark:hover:bg-slate-700 rounded transition-colors"
+                            className="p-1 hover:bg-[#1e1e2f] rounded transition-colors"
                           >
-                            {copied ? <Check size={14} /> : <Copy size={14} />}
+                            {copied ? <Check className="w-4 h-4 text-[#10b981]" /> : <Copy className="w-4 h-4 text-[#64748b]" />}
                           </button>
                         </div>
                       </div>
                       <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">الشبكة</p>
-                        <p className="text-sm font-medium mt-1">{name}</p>
+                        <p className="text-xs text-[#64748b]">الشبكة</p>
+                        <p className="text-sm font-medium text-white mt-1 flex items-center gap-2">
+                          <span>{icon}</span>
+                          {name}
+                        </p>
                       </div>
                       <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">الرصيد</p>
-                        <p className="text-sm font-bold text-green-500 mt-1">{formatUsd(wallet.balance)}</p>
+                        <p className="text-xs text-[#64748b]">الرصيد</p>
+                        <p className="text-sm font-bold text-[#10b981] mt-1">{formatUsd(balance)}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">تاريخ الإنشاء</p>
-                        <p className="text-sm mt-1">{new Date(wallet.createdAt).toLocaleDateString()}</p>
+                        <p className="text-xs text-[#64748b]">تاريخ الإنشاء</p>
+                        <p className="text-sm text-[#94a3b8] mt-1 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {formatDate(wallet.createdAt)}
+                        </p>
                       </div>
                     </div>
 
-                    {/* المفتاح الخاص (مشفر) */}
-                    <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                    {/* المفتاح الخاص */}
+                    <div className="mt-3 pt-3 border-t border-[#1e1e2f]">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <Key size={16} className="text-gray-500" />
-                          <span className="text-sm font-medium">المفتاح الخاص (مشفر)</span>
+                          <Key className="w-4 h-4 text-[#64748b]" />
+                          <span className="text-sm font-medium text-[#94a3b8]">المفتاح الخاص (مشفر)</span>
                         </div>
                         <button
-                          onClick={() => setShowPrivateKey(!showPrivateKey)}
-                          className="text-sm text-gray-500 hover:text-gray-700"
+                          onClick={() => togglePrivateKey(wallet.network)}
+                          className="text-[#64748b] hover:text-white transition-colors"
                         >
-                          {showPrivateKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                          {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
-                      {showPrivateKey && (
-                        <div className="mt-2 p-3 bg-gray-100 dark:bg-slate-700 rounded-lg">
-                          <p className="text-xs font-mono break-all text-gray-700 dark:text-gray-300">
+                      {showKey && (
+                        <div className="mt-2 p-3 bg-[#0a0a0f] rounded-lg border border-[#1e1e2f]">
+                          <p className="text-xs font-mono break-all text-[#94a3b8]">
                             {wallet.encryptedPrivateKey || "غير متاح"}
                           </p>
-                          <p className="text-xs text-gray-500 mt-1">⚠️ المفتاح مشفر. لا تشاركه مع أحد.</p>
+                          <p className="text-xs text-[#ef4444] mt-1 flex items-center gap-1">
+                            ⚠️ المفتاح مشفر. لا تشاركه مع أحد.
+                          </p>
                         </div>
                       )}
                     </div>
                   </div>
                 )}
-              </div>
+              </GlassCard>
             );
           })
         )}
       </div>
 
-      {/* تعليمات الإيداع */}
-      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
-        <h3 className="font-medium text-blue-800 dark:text-blue-300 mb-2">📌 كيف يعمل النظام؟</h3>
-        <ul className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
-          <li>1️⃣ المستخدمون يرسلون أموالهم إلى عنوان المحفظة أعلاه</li>
-          <li>2️⃣ يتم إضافة الرصيد تلقائياً إلى حساباتهم</li>
-          <li>3️⃣ البوت يتداول باستخدام الأموال المجمعة</li>
-          <li>4️⃣ <span className="font-bold text-emerald-400">85%</span> من الأرباح تذهب للمستخدم</li>
-          <li>5️⃣ <span className="font-bold text-amber-400">15%</span> تذهب لتطوير المنصة (الخزانة)</li>
+      {/* تعليمات النظام */}
+      <GlassCard className="p-5 border-[#10b981]/10">
+        <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+          <Zap className="w-5 h-5 text-[#10b981]" />
+          📌 كيف يعمل النظام؟
+        </h3>
+        <ul className="text-sm text-[#94a3b8] space-y-1.5">
+          <li className="flex items-start gap-2">
+            <span className="text-[#10b981] font-bold">1️⃣</span>
+            المستخدمون يرسلون أموالهم إلى عنوان المحفظة أعلاه
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-[#10b981] font-bold">2️⃣</span>
+            يتم إضافة الرصيد تلقائياً إلى حساباتهم
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-[#10b981] font-bold">3️⃣</span>
+            البوت يتداول باستخدام الأموال المجمعة
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-[#10b981] font-bold">4️⃣</span>
+            <span className="text-[#10b981] font-bold">85%</span> من الأرباح تذهب للمستخدم
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-[#10b981] font-bold">5️⃣</span>
+            <span className="text-[#f59e0b] font-bold">15%</span> تذهب لتطوير المنصة (الخزانة)
+          </li>
         </ul>
-      </div>
+      </GlassCard>
     </div>
   );
 }
+
+export default WalletPage;

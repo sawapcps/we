@@ -1,3 +1,5 @@
+// src/lib/dexscreener.ts
+
 import type { TokenPair, ChainId } from '@/types';
 
 const BASE = 'https://api.dexscreener.com';
@@ -6,6 +8,10 @@ interface DexResponse {
   schemaVersion?: string;
   pairs?: TokenPair[];
 }
+
+// ============================================================
+// ? «‰œË«‰ «‰√”«”Í…
+// ============================================================
 
 export async function searchPairs(query: string): Promise<TokenPair[]> {
   const res = await fetch(`${BASE}/latest/dex/search?q=${encodeURIComponent(query)}`);
@@ -45,6 +51,92 @@ export async function searchByNetwork(network: ChainId): Promise<TokenPair[]> {
   const data: DexResponse = await res.json();
   return (data.pairs ?? []).filter((p) => p.chainId === network);
 }
+
+// ============================================================
+// ? œ«‰… Ã‰» «‰ŸÂ‰«  «‰ÃœÍœ… ÂÊ DexScreener
+// ============================================================
+
+export async function getNewPairsFromDex(network: ChainId): Promise<TokenPair[]> {
+  try {
+    // ? «‰»ÕÀ ŸÊ ŸÂ‰«  ÃœÍœ… »«” Œœ«Â „‰Â«  Â· «ÕÍ…
+    const queries = ['new', 'launch', 'recent', 'just launched', '24h'];
+    let allPairs: TokenPair[] = [];
+    
+    for (const query of queries) {
+      try {
+        const results = await searchPairs(`${query} ${network}`);
+        allPairs = [...allPairs, ...results];
+      } catch (e) {
+        //  Ã«Á‰ «‰√Œ◊«¡
+      }
+    }
+    
+    // ? ≈“«‰… «‰Â„——« 
+    const seen = new Set<string>();
+    const unique = allPairs.filter(p => {
+      const key = `${p.chainId}:${p.pairAddress}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    
+    // ? ·‰ — «‰ŸÂ‰«  «‰ÃœÍœ… (√‚‰ ÂÊ 24 ”«Ÿ…)
+    const now = Date.now();
+    return unique.filter(p => {
+      if (!p.pairCreatedAt) return false;
+      const ageHours = (now - p.pairCreatedAt) / (1000 * 60 * 60);
+      return ageHours < 24;
+    });
+    
+  } catch (error) {
+    console.error('? ·‘‰ Ã‰» «‰ŸÂ‰«  «‰ÃœÍœ… ÂÊ DexScreener:', error);
+    return [];
+  }
+}
+
+// ============================================================
+// ? œ«‰… Ã‰» «‰ŸÂ‰«  «‰ÃœÍœ… Ãœ«Î (√‚‰ ÂÊ ”«Ÿ…)
+// ============================================================
+
+export async function getVeryNewPairs(network: ChainId): Promise<TokenPair[]> {
+  try {
+    const queries = ['just launched', 'new', '1m', '5m', '30m'];
+    let allPairs: TokenPair[] = [];
+    
+    for (const query of queries) {
+      try {
+        const results = await searchPairs(`${query} ${network}`);
+        allPairs = [...allPairs, ...results];
+      } catch (e) {
+        //  Ã«Á‰ «‰√Œ◊«¡
+      }
+    }
+    
+    const seen = new Set<string>();
+    const unique = allPairs.filter(p => {
+      const key = `${p.chainId}:${p.pairAddress}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    
+    // ? ·‰ — «‰ŸÂ‰«  «‰ÃœÍœ… Ãœ«Î (√‚‰ ÂÊ ”«Ÿ…)
+    const now = Date.now();
+    return unique.filter(p => {
+      if (!p.pairCreatedAt) return false;
+      const ageMinutes = (now - p.pairCreatedAt) / (1000 * 60);
+      return ageMinutes < 60; // √‚‰ ÂÊ ”«Ÿ…
+    });
+    
+  } catch (error) {
+    console.error('? ·‘‰ Ã‰» «‰ŸÂ‰«  «‰ÃœÍœ… Ãœ«Î:', error);
+    return [];
+  }
+}
+
+// ============================================================
+// ? œË«‰ discovery «‰√’‰Í…
+// ============================================================
 
 export interface NetworkDiscoveryResult {
   pairs: TokenPair[];

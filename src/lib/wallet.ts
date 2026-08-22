@@ -1,4 +1,4 @@
-// src/lib/wallet.ts
+﻿// src/lib/wallet.ts
 
 import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { ethers } from 'ethers';
@@ -16,8 +16,8 @@ export interface BotWalletData {
   balance: number;
   createdAt: string;
   updatedAt: string;
-  userId?: string; // ✅ ربط المحفظة بمستخدم (للحسابات الفردية)
-  isAdminWallet?: boolean; // ✅ تمييز محافظ الأدمن
+  userId?: string;
+  isAdminWallet?: boolean;
 }
 
 export interface TradeResult {
@@ -279,7 +279,6 @@ export class BotWalletManager {
   private wallets: BotWalletData[] = [];
   private masterPassword: string;
   
-  // ✅ متغيرات لمنع التحميل المتكرر
   private static isInitialized = false;
   private static initializationPromise: Promise<BotWalletData> | null = null;
   private static isLoadingWallets = false;
@@ -296,7 +295,6 @@ export class BotWalletManager {
     return BotWalletManager.instance;
   }
 
-  // ✅ دالة init المعدلة (تمنع التكرار نهائياً)
   async init(network: string = 'solana'): Promise<BotWalletData> {
     if (BotWalletManager.walletsLoaded) {
       const existingWallet = this.wallets.find((w) => w.network === network);
@@ -337,7 +335,6 @@ export class BotWalletManager {
     }
   }
 
-  // ✅ دالة داخلية للتحميل
   private async _initInternal(network: string = 'solana'): Promise<BotWalletData> {
     const result = await madarRead<BotWalletData>('bot_wallet', {});
     this.wallets = result.success && result.data ? result.data : [];
@@ -364,7 +361,7 @@ export class BotWalletManager {
       balance: 0,
       createdAt: getTimestamp(),
       updatedAt: getTimestamp(),
-      isAdminWallet: true, // ✅ محافظ البوت المركزية هي للأدمن
+      isAdminWallet: true,
     };
 
     await this.saveWallet(newWallet);
@@ -384,7 +381,6 @@ export class BotWalletManager {
     await madarUpdate('bot_wallet', wallet.id, wallet);
   }
 
-  // ✅ getWallet مع حماية إضافية
   getWallet(network?: string): BotWalletData | null {
     if (network) {
       const wallet = this.wallets.find((w) => w.network === network);
@@ -422,7 +418,7 @@ export class BotWalletManager {
   }
 
   // ============================================================
-  // ✅ التداول بمحفظة الأدمن (المركزية - النظام القديم)
+  // ✅ التداول بمحفظة الأدمن (المركزية)
   // ============================================================
 
   async executeBuy(params: {
@@ -549,7 +545,7 @@ export class BotWalletManager {
   }
 
   // ============================================================
-  // ✅ التداول بمحفظة المستخدم (الفردية - النظام الجديد)
+  // ✅ التداول بمحفظة المستخدم (الفردية) - مع كود التصحيح
   // ============================================================
 
   async executeBuyForUser(params: {
@@ -560,12 +556,29 @@ export class BotWalletManager {
     password: string;
     network?: string;
   }): Promise<TradeResult> {
+    // ============================================================
+    // 🔍 كود التصحيح - اعرض جميع المعطيات
+    // ============================================================
+    console.log('🔑 [executeBuyForUser] ===== بدء التنفيذ =====');
+    console.log('🔑 [executeBuyForUser] userId:', params.userId);
+    console.log('🔑 [executeBuyForUser] tokenAddress:', params.tokenAddress);
+    console.log('🔑 [executeBuyForUser] amount:', params.amount);
+    console.log('🔑 [executeBuyForUser] password:', params.password);
+    console.log('🔑 [executeBuyForUser] password length:', params.password?.length);
+    console.log('🔑 [executeBuyForUser] network:', params.network || 'solana');
+    // ============================================================
+    // نهاية كود التصحيح
+    // ============================================================
+
     try {
       const network = params.network || 'solana';
+      console.log('🔑 [executeBuyForUser] استخدام الشبكة:', network);
       
-      // ✅ جلب محفظة المستخدم من AccountManager
       const userWallet = await AccountManager.getUserWallet(params.userId, network);
+      console.log('🔑 [executeBuyForUser] userWallet:', userWallet ? '✅ موجود' : '❌ غير موجود');
+      
       if (!userWallet) {
+        console.log('❌ [executeBuyForUser] لا توجد محفظة');
         return { 
           success: false, 
           error: `لا توجد محفظة للمستخدم على ${network}`,
@@ -574,10 +587,28 @@ export class BotWalletManager {
         };
       }
 
+      console.log('🔑 [executeBuyForUser] عنوان المحفظة:', userWallet.address);
+      console.log('🔑 [executeBuyForUser] encryptedPrivateKey:', userWallet.encryptedPrivateKey?.slice(0, 20) + '...');
+
       // ✅ التحقق من كلمة المرور
-      decrypt(userWallet.encryptedPrivateKey, params.password);
+      console.log('🔑 [executeBuyForUser] محاولة فك التشفير...');
+      try {
+        const decrypted = decrypt(userWallet.encryptedPrivateKey, params.password);
+        console.log('✅ [executeBuyForUser] تم فك التشفير بنجاح');
+        console.log('✅ [executeBuyForUser] المفتاح الخاص:', decrypted ? '✅ موجود (مخفي)' : '❌ غير موجود');
+      } catch (decryptError) {
+        console.error('❌ [executeBuyForUser] فشل فك التشفير:', decryptError);
+        return {
+          success: false,
+          error: 'كلمة المرور غير صحيحة',
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
+        };
+      }
 
       // ✅ تنفيذ الصفقة على محفظة المستخدم
+      console.log('🚀 [executeBuyForUser] تنفيذ الصفقة...');
+      
       if (network === 'solana') {
         const result = await executeJupiterSwap({
           tokenAddress: params.tokenAddress,
@@ -587,11 +618,12 @@ export class BotWalletManager {
         });
 
         if (result.error) {
+          console.error('❌ [executeBuyForUser] فشل Jupiter:', result.error);
           return { success: false, error: result.error, amount: params.amount, tokenAddress: params.tokenAddress };
         }
 
-        // ✅ تحديث رصيد المحفظة في قاعدة البيانات
         await AccountManager.updateUserWalletBalance(params.userId, network, userWallet.balance);
+        console.log('✅ [executeBuyForUser] تم تحديث الرصيد');
         
         return {
           success: true,
@@ -614,10 +646,12 @@ export class BotWalletManager {
       });
 
       if (result.error) {
+        console.error('❌ [executeBuyForUser] فشل ParaSwap:', result.error);
         return { success: false, error: result.error, amount: params.amount, tokenAddress: params.tokenAddress };
       }
 
       await AccountManager.updateUserWalletBalance(params.userId, network, userWallet.balance);
+      console.log('✅ [executeBuyForUser] تم تحديث الرصيد');
       
       return {
         success: true,
@@ -628,6 +662,7 @@ export class BotWalletManager {
         network,
       };
     } catch (error) {
+      console.error('❌ [executeBuyForUser] خطأ غير متوقع:', error);
       return { 
         success: false, 
         error: String(error), 
@@ -645,11 +680,24 @@ export class BotWalletManager {
     password: string;
     network?: string;
   }): Promise<TradeResult> {
+    // ============================================================
+    // 🔍 كود التصحيح
+    // ============================================================
+    console.log('🔑 [executeSellForUser] ===== بدء التنفيذ =====');
+    console.log('🔑 [executeSellForUser] userId:', params.userId);
+    console.log('🔑 [executeSellForUser] tokenAddress:', params.tokenAddress);
+    console.log('🔑 [executeSellForUser] amount:', params.amount);
+    console.log('🔑 [executeSellForUser] password:', params.password);
+    console.log('🔑 [executeSellForUser] password length:', params.password?.length);
+    console.log('🔑 [executeSellForUser] network:', params.network || 'solana');
+    // ============================================================
+
     try {
       const network = params.network || 'solana';
       
       const userWallet = await AccountManager.getUserWallet(params.userId, network);
       if (!userWallet) {
+        console.log('❌ [executeSellForUser] لا توجد محفظة');
         return { 
           success: false, 
           error: `لا توجد محفظة للمستخدم على ${network}`,
@@ -658,10 +706,23 @@ export class BotWalletManager {
         };
       }
 
-      decrypt(userWallet.encryptedPrivateKey, params.password);
+      console.log('🔑 [executeSellForUser] محاولة فك التشفير...');
+      try {
+        decrypt(userWallet.encryptedPrivateKey, params.password);
+        console.log('✅ [executeSellForUser] تم فك التشفير بنجاح');
+      } catch (decryptError) {
+        console.error('❌ [executeSellForUser] فشل فك التشفير:', decryptError);
+        return {
+          success: false,
+          error: 'كلمة المرور غير صحيحة',
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
+        };
+      }
 
       const txHash = `0x${generateId()}${generateId()}`;
       await AccountManager.updateUserWalletBalance(params.userId, network, userWallet.balance);
+      console.log('✅ [executeSellForUser] تم تحديث الرصيد');
 
       return {
         success: true,
@@ -671,6 +732,7 @@ export class BotWalletManager {
         network,
       };
     } catch (error) {
+      console.error('❌ [executeSellForUser] خطأ:', error);
       return { 
         success: false, 
         error: String(error), 

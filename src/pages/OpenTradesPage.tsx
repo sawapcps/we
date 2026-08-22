@@ -1,159 +1,191 @@
 // src/pages/OpenTradesPage.tsx
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { formatUsd } from '../lib/format';
-import { XCircle, Loader2, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
+import { RefreshCw, Loader2, XCircle, AlertCircle } from 'lucide-react';
+import { formatPrice, formatUsd, formatDateTime } from '../lib/format';
 
-const WORKER_URL = 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+interface OpenTrade {
+  id: string;
+  tokenSymbol: string;
+  tokenAddress: string;
+  network: string;
+  amount: number;
+  price: number;
+  type: 'BUY' | 'SELL';
+  status: string;
+  txHash: string;
+  is_open: number;
+  created_at: string;
+  pnl?: number;
+  pnlPercent?: number;
+}
 
 export function OpenTradesPage() {
   const { addLog } = useApp();
-  const [openTrades, setOpenTrades] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [closingTradeId, setClosingTradeId] = useState<string | null>(null);
+  const [trades, setTrades] = useState<OpenTrade[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [totalValue, setTotalValue] = useState(0);
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
+
+  const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 
   // ✅ جلب الصفقات المفتوحة
-  const fetchOpenTrades = async () => {
-    setIsLoading(true);
+  const loadTrades = async () => {
+    setLoading(true);
     try {
-      const res = await fetch(`${WORKER_URL}/open-trades`);
-      const data = await res.json();
-      if (data.success) {
-        setOpenTrades(data.data || []);
+      const response = await fetch(`${WORKER_URL}/open-trades`);
+      const result = await response.json();
+      
+      if (result.success) {
+        setTrades(result.data || []);
+        const total = (result.data || []).reduce(
+          (sum: number, t: OpenTrade) => sum + t.amount * t.price,
+          0
+        );
+        setTotalValue(total);
+        setLastUpdate(new Date().toLocaleTimeString());
       }
     } catch (error) {
-      console.error('❌ فشل جلب الصفقات المفتوحة:', error);
-    } finally {
-      setIsLoading(false);
+      console.error('❌ فشل جلب الصفقات:', error);
+      addLog('ERROR', `❌ فشل جلب الصفقات: ${error}`);
     }
+    setLoading(false);
   };
 
-  // ✅ إغلاق صفقة محددة (دون التأثير على الباقي)
+  // ✅ إغلاق صفقة
   const closeTrade = async (tradeId: string) => {
-    setClosingTradeId(tradeId);
+    if (!confirm('⚠️ هل أنت متأكد من إغلاق هذه الصفقة؟')) return;
+
     try {
-      const res = await fetch(`${WORKER_URL}/close-trade`, {
+      const response = await fetch(`${WORKER_URL}/close-trade`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tradeId, closePrice: null }),
+        body: JSON.stringify({ tradeId }),
       });
-      const data = await res.json();
-      if (data.success) {
-        addLog('SUCCESS', `✅ تم إغلاق الصفقة ${tradeId}`);
-        await fetchOpenTrades(); // تحديث القائمة
+      
+      const result = await response.json();
+      if (result.success) {
+        addLog('SUCCESS', `✅ تم إغلاق الصفقة بنجاح`);
+        await loadTrades(); // تحديث القائمة
       } else {
-        addLog('ERROR', `❌ فشل إغلاق الصفقة: ${data.error}`);
+        addLog('ERROR', `❌ فشل إغلاق الصفقة: ${result.error}`);
       }
-    } catch (error: any) {
-      addLog('ERROR', `❌ خطأ: ${error.message}`);
-    } finally {
-      setClosingTradeId(null);
+    } catch (error) {
+      console.error('❌ فشل إغلاق الصفقة:', error);
+      addLog('ERROR', `❌ فشل إغلاق الصفقة: ${error}`);
     }
   };
 
-  // تحميل البيانات عند فتح الصفحة
+  // تحميل تلقائي عند فتح الصفحة
   useEffect(() => {
-    fetchOpenTrades();
-    // تحديث تلقائي كل 30 ثانية
-    const interval = setInterval(fetchOpenTrades, 30000);
+    loadTrades();
+    
+    // تحديث كل 30 ثانية
+    const interval = setInterval(loadTrades, 30000);
     return () => clearInterval(interval);
   }, []);
 
-  const totalValue = openTrades.reduce((sum, t) => sum + (t.amount || 0), 0);
-
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">📊 الصفقات المفتوحة</h1>
-          <p className="text-gray-500 dark:text-gray-400">
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+            📊 الصفقات المفتوحة
+          </h1>
+          <p className="text-sm text-slate-400 mt-1">
             إدارة الصفقات النشطة - إغلاق صفقة دون التأثير على الباقي
           </p>
         </div>
         <button
-          onClick={fetchOpenTrades}
-          disabled={isLoading}
-          className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+          onClick={loadTrades}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           تحديث
         </button>
       </div>
 
-      {/* الإحصائيات */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <p className="text-sm text-gray-500">عدد الصفقات</p>
-          <p className="text-2xl font-bold">{openTrades.length}</p>
+      {/* إحصائيات */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <p className="text-xs text-slate-500">عدد الصفقات</p>
+          <p className="text-2xl font-bold text-white">{trades.length}</p>
         </div>
-        <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <p className="text-sm text-gray-500">إجمالي القيمة</p>
-          <p className="text-2xl font-bold text-blue-500">{formatUsd(totalValue)}</p>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <p className="text-xs text-slate-500">إجمالي القيمة</p>
+          <p className="text-2xl font-bold text-emerald-400">${totalValue.toFixed(2)}</p>
         </div>
-        <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700">
-          <p className="text-sm text-gray-500">آخر تحديث</p>
-          <p className="text-sm font-medium">{new Date().toLocaleTimeString()}</p>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <p className="text-xs text-slate-500">آخر تحديث</p>
+          <p className="text-2xl font-bold text-white">{lastUpdate || '—'}</p>
         </div>
       </div>
 
-      {/* قائمة الصفقات */}
-      {openTrades.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <p className="text-lg">📭 لا توجد صفقات مفتوحة</p>
-          <p className="text-sm">سيتم عرض الصفقات النشطة هنا</p>
+      {/* جدول الصفقات */}
+      {trades.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
+          <div className="text-6xl mb-4">📭</div>
+          <p className="text-sm text-slate-400">لا توجد صفقات مفتوحة</p>
+          <p className="text-xs text-slate-500 mt-1">سيتم عرض الصفقات النشطة هنا</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {openTrades.map((trade) => (
-            <div
-              key={trade.id}
-              className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:shadow-md transition-shadow"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {trade.type === 'BUY' ? (
-                    <TrendingUp className="w-5 h-5 text-green-500" />
-                  ) : (
-                    <TrendingDown className="w-5 h-5 text-red-500" />
-                  )}
-                  <div>
-                    <p className="font-medium">{trade.token_symbol || 'Unknown'}</p>
-                    <p className="text-sm text-gray-500">
-                      {trade.network} • {trade.type} • {new Date(trade.created_at).toLocaleTimeString()}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <p className="font-medium">{formatUsd(trade.amount)}</p>
-                    <p className="text-sm text-gray-500">@{trade.price?.toFixed(4) || '0'}</p>
-                  </div>
-                  <button
-                    onClick={() => closeTrade(trade.id)}
-                    disabled={closingTradeId === trade.id}
-                    className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm transition-colors disabled:opacity-50 flex items-center gap-1"
-                  >
-                    {closingTradeId === trade.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <XCircle className="w-4 h-4" />
-                    )}
-                    إغلاق
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-slate-800 text-xs text-slate-500 uppercase tracking-wide">
+                  <th className="text-left px-4 py-3 font-medium">العملة</th>
+                  <th className="text-left px-4 py-3 font-medium">الشبكة</th>
+                  <th className="text-right px-4 py-3 font-medium">السعر</th>
+                  <th className="text-right px-4 py-3 font-medium">الكمية</th>
+                  <th className="text-right px-4 py-3 font-medium">القيمة</th>
+                  <th className="text-right px-4 py-3 font-medium">P&L</th>
+                  <th className="text-center px-4 py-3 font-medium">الإجراء</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trades.map((trade) => (
+                  <tr key={trade.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                    <td className="px-4 py-3">
+                      <span className="font-medium text-white">{trade.tokenSymbol}</span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-400">{trade.network}</td>
+                    <td className="px-4 py-3 text-right text-white font-mono">
+                      ${trade.price.toFixed(6)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-white">{trade.amount}</td>
+                    <td className="px-4 py-3 text-right text-white font-mono">
+                      ${(trade.amount * trade.price).toFixed(2)}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-mono ${trade.pnl && trade.pnl > 0 ? 'text-emerald-400' : trade.pnl && trade.pnl < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                      {trade.pnl ? `${trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(2)}%` : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => closeTrade(trade.id)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-xs font-medium transition-colors"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                        إغلاق
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
-      {/* تعليمات */}
-      <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl border border-yellow-200 dark:border-yellow-800">
-        <h3 className="font-medium text-yellow-800 dark:text-yellow-300 mb-2">📌 كيفية العمل</h3>
-        <ul className="text-sm text-yellow-700 dark:text-yellow-400 space-y-1">
+      {/* معلومات */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <h3 className="text-xs font-semibold text-white mb-2">📌 كيفية العمل</h3>
+        <ul className="text-xs text-slate-400 space-y-1 list-disc list-inside">
           <li>🔹 يمكنك إغلاق أي صفقة مفتوحة بشكل فردي</li>
-          <li>🔹 إغلاق صفقة <span className="font-bold">لا يؤثر</span> على الصفقات الأخرى</li>
+          <li>🔹 إغلاق صفقة لا يؤثر على الصفقات الأخرى</li>
           <li>🔹 يتم تحديث القائمة تلقائياً كل 30 ثانية</li>
           <li>🔹 الصفقات المغلقة تنتقل إلى سجل الصفقات</li>
         </ul>
