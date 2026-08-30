@@ -3,7 +3,7 @@
 // تطبيق MadarTech Trading System - يدعم 4 بوتات و 9 شبكات
 // ============================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
 import { BotControlPage } from './pages/BotControlPage';
@@ -19,8 +19,10 @@ import { OpenTradesPage } from './pages/OpenTradesPage';
 import { ManualTradesPage } from './pages/ManualTradesPage';
 import { ScalperConfigPage } from './pages/ScalperConfigPage';
 import { TradeHistoryPage } from './pages/TradeHistoryPage';
-import { madarCreate } from './lib/madarTech';
+import { madarCreate, generateId, getTimestamp } from './lib/madarTech';
+import { AccountManager } from './lib/accounts';
 import type { DiscoveredToken } from './types';
+import type { BotInstanceData } from './lib/madarTech';
 
 // ============================================================
 // 🎨 أيقونات Lucide
@@ -37,6 +39,7 @@ import {
   Sparkles,
   Menu,
   X,
+    Bell, // ✅ أضف هذا
   LogOut,
   User,
   Plus,
@@ -54,6 +57,10 @@ import {
   Link2,
   Unlink,
   History,
+  Loader2,
+  XCircle,
+  FlaskConical,
+  ShieldCheck,
 } from 'lucide-react';
 
 // ============================================================
@@ -163,62 +170,563 @@ const StatusBadge: React.FC<{ status: 'running' | 'paused' | 'stopped' }> = ({ s
 };
 
 // ============================================================
-// 🧠 مكون إدارة البوتات الأربعة
+// 🧠 مكون إدارة البوتات الأربعة (النسخة النهائية)
 // ============================================================
 const BotsManager: React.FC = () => {
-  const { 
-    botInstances = [], 
-    loadBotInstances, 
-    createBot, 
-    startBot, 
-    stopBot, 
-    deleteBot, 
-    createWalletForBot, 
-    addLog, 
-    user 
+  const {
+    botInstances = [],
+    loadBotInstances,
+    createBot,
+    startBot,
+    stopBot,
+    deleteBot,
+    createWalletForBot,
+    addLog,
+    user,
+    updateBotConfig,
   } = useApp();
 
+
+  // ============================================================
+  // ✅ دالة مساعدة لاستخراج الشبكات من البوت
+  // ============================================================
+  const getBotNetworks = (bot: any): string[] => {
+    if (!bot.networks) return ['solana'];
+    if (typeof bot.networks === 'string') {
+      try {
+        const parsed = JSON.parse(bot.networks);
+        return Array.isArray(parsed) ? parsed : ['solana'];
+      } catch {
+        return ['solana'];
+      }
+    }
+    if (Array.isArray(bot.networks)) return bot.networks;
+    return ['solana'];
+  };
+
+  // ============================================================
+  // حالات المودال
+  // ============================================================
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [selectedBot, setSelectedBot] = useState<BotInstanceData | null>(null);
   const [selectedType, setSelectedType] = useState<'hunter' | 'signal' | 'manual' | 'scalper'>('hunter');
   const [botName, setBotName] = useState('');
   const [selectedNetwork, setSelectedNetwork] = useState('solana');
   const [isCreating, setIsCreating] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isTogglingPaper, setIsTogglingPaper] = useState(false);
 
+  // ============================================================
+  // ✅ حالات الإنشاء (لكل نوع بوت)
+  // ============================================================
+  const [createAmount, setCreateAmount] = useState(100);
+  const [createTakeProfit, setCreateTakeProfit] = useState(30);
+  const [createStopLoss, setCreateStopLoss] = useState(10);
+  const [createMaxTrades, setCreateMaxTrades] = useState(5);
+  const [createMinScore, setCreateMinScore] = useState(60);
+  const [createSmartWallets, setCreateSmartWallets] = useState(3);
+  const [createIndicatorType, setCreateIndicatorType] = useState('rsi');
+  const [createRsiOversold, setCreateRsiOversold] = useState(30);
+  const [createRsiOverbought, setCreateRsiOverbought] = useState(70);
+  const [createBuyThreshold, setCreateBuyThreshold] = useState(-2);
+  const [createTrailingStop, setCreateTrailingStop] = useState(0.5);
+  const [createMinTradeInterval, setCreateMinTradeInterval] = useState(2);
+  const [createDisplayAll, setCreateDisplayAll] = useState(false);
+  const [createShowDetailed, setCreateShowDetailed] = useState(false);
+
+  // ============================================================
+  // حالات التعديل
+  // ============================================================
+  const [editAmount, setEditAmount] = useState(100);
+  const [editTakeProfit, setEditTakeProfit] = useState(30);
+  const [editStopLoss, setEditStopLoss] = useState(10);
+  const [editNetwork, setEditNetwork] = useState('solana');
+  const [editMaxTrades, setEditMaxTrades] = useState(5);
+  const [editMinScore, setEditMinScore] = useState(60);
+
+  // ============================================================
+  // تحميل البوتات عند تغيير المستخدم
+  // ============================================================
   useEffect(() => {
     if (user?.id) {
+      console.log('🔄 BotsManager: تحميل البوتات للمستخدم:', user.id);
       loadBotInstances(user.id);
     }
   }, [user?.id]);
 
+  // ============================================================
+  // تحديث القائمة
+  // ============================================================
   const handleRefresh = async () => {
-    if (!user?.id) return;
+    if (!user?.id) {
+      console.warn('⚠️ لا يوجد مستخدم');
+      return;
+    }
     setIsRefreshing(true);
     try {
+      console.log('🔄 جاري تحديث قائمة البوتات...');
       await loadBotInstances(user.id);
+      console.log('✅ تم تحديث قائمة البوتات، العدد:', botInstances.length);
       await addLog('SUCCESS', '🔄 تم تحديث قائمة البوتات');
     } catch (error) {
+      console.error('❌ فشل تحديث البوتات:', error);
       await addLog('ERROR', `❌ فشل تحديث البوتات: ${error}`);
     } finally {
       setIsRefreshing(false);
     }
   };
 
+  // ============================================================
+  // ✅ دالة مساعدة لإنشاء محفظة للبوت (مع التحقق من الوجود)
+  // ============================================================
+  const ensureWalletForBot = async (botId: string, network: string) => {
+    if (!user?.id) return;
+    try {
+      const result = await createWalletForBot(botId, network, user.id);
+      if (result.success) {
+        console.log(`💰 تم إنشاء محفظة لـ ${network} تلقائياً`);
+        return true;
+      } else {
+        if (result.error?.includes('already exists')) {
+          console.log(`✅ محفظة ${network} موجودة بالفعل`);
+          return true;
+        }
+        console.warn(`⚠️ فشل إنشاء محفظة ${network}:`, result.error);
+        return false;
+      }
+    } catch (e) {
+      console.warn(`⚠️ فشل إنشاء محفظة ${network}:`, e);
+      return false;
+    }
+  };
+
+  // ============================================================
+  // ✅ إنشاء بوت جديد (مع إنشاء محفظة تلقائياً)
+  // ============================================================
   const handleCreateBot = async () => {
-    if (!botName.trim() || !user?.id) return;
+    if (!botName.trim() || !user?.id) {
+      await addLog('ERROR', '❌ اسم البوت أو المستخدم مفقود');
+      return;
+    }
+    
     setIsCreating(true);
     try {
-      await createBot(selectedType, botName.trim(), user.id);
+      console.log('🚀 بدء إنشاء البوت:', {
+        type: selectedType,
+        name: botName,
+        userId: user.id,
+        amount: createAmount,
+      });
+      
+      const result = await createBot(selectedType, botName.trim(), user.id, createAmount);
+      console.log('📦 نتيجة createBot:', result);
+      
+      if (!result.success || !result.botId) {
+        throw new Error(result.error || 'فشل إنشاء البوت');
+      }
+      
+      console.log('✅ تم إنشاء البوت بنجاح، ID:', result.botId);
+      
+      const config: any = {
+        maxPositionSize: createAmount,
+        takeProfit: createTakeProfit,
+        stopLoss: createStopLoss,
+        maxOpenTrades: createMaxTrades,
+        networks: [selectedNetwork],
+      };
+
+      if (selectedType === 'hunter') {
+        config.minScore = createMinScore;
+        config.minSmartWallets = createSmartWallets;
+      }
+      if (selectedType === 'signal') {
+        config.indicatorType = createIndicatorType;
+        config.rsiOversold = createRsiOversold;
+        config.rsiOverbought = createRsiOverbought;
+      }
+      if (selectedType === 'scalper') {
+        config.buyThreshold = createBuyThreshold;
+        config.trailingStop = createTrailingStop;
+        config.minTradeInterval = createMinTradeInterval;
+      }
+      if (selectedType === 'manual') {
+        config.displayAllCandidates = createDisplayAll;
+        config.showDetailedAnalysis = createShowDetailed;
+      }
+
+      console.log('⚙️ جاري تحديث الإعدادات:', config);
+      
+      const updateResult = await updateBotConfig(result.botId, config, user.id);
+      console.log('📦 نتيجة updateBotConfig:', updateResult);
+      
+      // ✅ إنشاء محفظة للشبكة المختارة تلقائياً
+      await ensureWalletForBot(result.botId, selectedNetwork);
+      
+      console.log('🔄 جاري تحديث قائمة البوتات...');
+      await loadBotInstances(user.id);
+      console.log('✅ تم تحديث قائمة البوتات');
+      
       setShowCreateModal(false);
       setBotName('');
-      await loadBotInstances(user.id);
+      resetCreateForm();
+      
+      await addLog('SUCCESS', `✅ تم إنشاء البوت ${botName} (${selectedType}) بمبلغ $${createAmount}`);
+      
     } catch (error) {
-      await addLog('ERROR', `❌ فشل إنشاء البوت: ${error}`);
+      console.error('❌ فشل إنشاء البوت:', error);
+      await addLog('ERROR', `❌ فشل إنشاء البوت: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
     } finally {
       setIsCreating(false);
     }
   };
 
+  // ============================================================
+  // إعادة تعيين نموذج الإنشاء
+  // ============================================================
+  const resetCreateForm = () => {
+    setCreateAmount(100);
+    setCreateTakeProfit(30);
+    setCreateStopLoss(10);
+    setCreateMaxTrades(5);
+    setCreateMinScore(60);
+    setCreateSmartWallets(3);
+    setCreateIndicatorType('rsi');
+    setCreateRsiOversold(30);
+    setCreateRsiOverbought(70);
+    setCreateBuyThreshold(-2);
+    setCreateTrailingStop(0.5);
+    setCreateMinTradeInterval(2);
+    setCreateDisplayAll(false);
+    setCreateShowDetailed(false);
+  };
+
+  // ============================================================
+  // تشغيل البوت
+  // ============================================================
+  const handleStartBot = async (botId: string) => {
+    if (!user?.id) {
+      console.warn('⚠️ لا يوجد مستخدم');
+      return;
+    }
+    setIsStarting(true);
+    try {
+      console.log('▶️ جاري تشغيل البوت:', botId);
+      const result = await startBot(botId, user.id);
+      console.log('📦 نتيجة startBot:', result);
+      
+      if (result.success) {
+        await loadBotInstances(user.id);
+        await addLog('SUCCESS', `▶️ تم تشغيل البوت`);
+        console.log('✅ تم تشغيل البوت بنجاح');
+      } else {
+        await addLog('ERROR', `❌ فشل تشغيل البوت: ${result.message || 'خطأ غير معروف'}`);
+        console.error('❌ فشل التشغيل:', result.message);
+      }
+    } catch (error) {
+      console.error('❌ فشل تشغيل البوت:', error);
+      await addLog('ERROR', `❌ فشل تشغيل البوت: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
+  // ============================================================
+  // إيقاف البوت
+  // ============================================================
+  const handleStopBot = async (botId: string) => {
+    if (!user?.id) {
+      console.warn('⚠️ لا يوجد مستخدم');
+      return;
+    }
+    setIsStopping(true);
+    try {
+      console.log('⏸️ جاري إيقاف البوت:', botId);
+      const result = await stopBot(botId, user.id);
+      console.log('📦 نتيجة stopBot:', result);
+      
+      if (result.success) {
+        await loadBotInstances(user.id);
+        await addLog('INFO', `⏸️ تم إيقاف البوت`);
+        console.log('✅ تم إيقاف البوت بنجاح');
+      } else {
+        await addLog('ERROR', `❌ فشل إيقاف البوت: ${result.message || 'خطأ غير معروف'}`);
+        console.error('❌ فشل الإيقاف:', result.message);
+      }
+    } catch (error) {
+      console.error('❌ فشل إيقاف البوت:', error);
+      await addLog('ERROR', `❌ فشل إيقاف البوت: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+    } finally {
+      setIsStopping(false);
+    }
+  };
+
+  // ============================================================
+  // حذف البوت
+  // ============================================================
+  const handleDeleteBot = async (botId: string, botName: string) => {
+    if (!user?.id) return;
+    
+    if (!window.confirm(`⚠️ هل أنت متأكد من حذف البوت "${botName}"؟\nسيتم حذف جميع البيانات المرتبطة به ولا يمكن التراجع.`)) {
+      return;
+    }
+    
+    setIsDeleting(true);
+    try {
+      console.log('🗑️ جاري حذف البوت:', botId, botName);
+      const result = await deleteBot(botId, user.id);
+      console.log('📦 نتيجة deleteBot:', result);
+      
+      if (result.success) {
+        await loadBotInstances(user.id);
+        await addLog('SUCCESS', `🗑️ تم حذف البوت ${botName}`);
+        console.log('✅ تم حذف البوت بنجاح');
+      } else {
+        await addLog('ERROR', `❌ فشل حذف البوت: ${result.message || 'خطأ غير معروف'}`);
+        console.error('❌ فشل الحذف:', result.message);
+      }
+    } catch (error) {
+      console.error('❌ فشل حذف البوت:', error);
+      await addLog('ERROR', `❌ فشل حذف البوت: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // ============================================================
+  // فتح مودال التعديل
+  // ============================================================
+  const openEditModal = (bot: BotInstanceData) => {
+    setSelectedBot(bot);
+    try {
+      const config = bot.config ? JSON.parse(bot.config) : {};
+      setEditAmount(config.maxPositionSize || bot.max_position_size || 100);
+      setEditTakeProfit(config.takeProfit || bot.take_profit || 30);
+      setEditStopLoss(config.stopLoss || bot.stop_loss || 10);
+      setEditMaxTrades(config.maxOpenTrades || 5);
+      setEditMinScore(config.minScore || 60);
+      
+      try {
+        const networks = bot.networks ? JSON.parse(bot.networks) : ['solana'];
+        setEditNetwork(networks[0] || 'solana');
+      } catch {
+        setEditNetwork('solana');
+      }
+    } catch {
+      setEditAmount(bot.max_position_size || 100);
+      setEditTakeProfit(bot.take_profit || 30);
+      setEditStopLoss(bot.stop_loss || 10);
+      setEditMaxTrades(5);
+      setEditMinScore(60);
+      setEditNetwork('solana');
+    }
+    setShowEditModal(true);
+  };
+
+  // ============================================================
+  // حفظ تعديلات البوت (مع إنشاء محافظ تلقائياً للشبكات الجديدة)
+  // ============================================================
+  const handleSaveEdit = async () => {
+    if (!selectedBot || !user?.id) {
+      await addLog('ERROR', '❌ لا يوجد بوت محدد أو مستخدم');
+      return;
+    }
+    
+    setIsSavingEdit(true);
+    try {
+      console.log('💾 جاري حفظ التعديلات للبوت:', selectedBot.id);
+      
+   const updatedConfig = {
+    maxPositionSize: editAmount,
+    max_position_size: editAmount, // ✅ أضف هذا
+    takeProfit: editTakeProfit,
+    stopLoss: editStopLoss,
+    maxOpenTrades: editMaxTrades,
+    minScore: editMinScore,
+    networks: [editNetwork],
+};
+      
+      console.log('📦 الإعدادات الجديدة:', updatedConfig);
+      
+      const result = await updateBotConfig(selectedBot.id, updatedConfig, user.id);
+      console.log('📦 نتيجة updateBotConfig:', result);
+      
+      if (result.success) {
+        setShowEditModal(false);
+        await addLog('SUCCESS', `✅ تم تحديث إعدادات البوت ${selectedBot.name}`);
+        console.log('✅ تم حفظ التعديلات بنجاح');
+        
+        // ✅✅✅ إعادة تحميل القائمة بعد 500ms
+        setTimeout(async () => {
+          await loadBotInstances(user.id);
+          console.log('🔄 تم إعادة تحميل البوتات');
+        }, 500);
+      } else {
+        await addLog('ERROR', `❌ فشل تحديث الإعدادات: ${result.error}`);
+        console.error('❌ فشل التحديث:', result.error);
+      }
+    } catch (error) {
+      console.error('❌ فشل حفظ التعديلات:', error);
+      await addLog('ERROR', `❌ فشل حفظ التعديلات: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+    } finally {
+      setIsSavingEdit(false);
+    }
+};
+
+  // ============================================================
+  // إنشاء محفظة للبوت (باستخدام الشبكة الأولى المختارة)
+  // ============================================================
+  const handleCreateWallet = async (botId: string) => {
+    if (!user?.id) return;
+    
+    const bot = botInstances.find(b => b.id === botId);
+    let network = 'solana';
+    if (bot) {
+      try {
+        const networks = JSON.parse(bot.networks || '["solana"]');
+        network = networks[0] || 'solana';
+      } catch { network = 'solana'; }
+    }
+    
+    try {
+      const result = await createWalletForBot(botId, network, user.id);
+      if (result.success) {
+        await addLog('SUCCESS', `💰 تم إنشاء محفظة لـ ${network}`);
+        await loadBotInstances(user.id);
+      } else {
+        await addLog('ERROR', `❌ فشل إنشاء المحفظة: ${result.error}`);
+      }
+    } catch (error) {
+      await addLog('ERROR', `❌ فشل إنشاء المحفظة: ${error}`);
+    }
+  };
+
+  // ============================================================
+  // 🔄 تبديل وضع التداول (ورقي / حقيقي)
+  // ============================================================
+  const handleTogglePaperTrading = async (botId: string, currentMode: number) => {
+    if (!user?.id) return;
+    
+    const newMode = currentMode === 1 ? 0 : 1;
+    const modeText = newMode === 1 ? 'تجريبي (ورقي)' : 'حقيقي';
+    const confirmMsg = `⚠️ هل أنت متأكد من تحويل البوت إلى الوضع ${modeText}؟\n${
+      newMode === 1 
+        ? 'سيتم استخدام رصيد وهمي للاختبار (لن يتم تنفيذ صفقات حقيقية).' 
+        : 'سيتم تنفيذ صفقات حقيقية على البلوكتشين. تأكد من وجود رصيد كافٍ ومفاتيح API صحيحة.'
+    }`;
+    
+    if (!window.confirm(confirmMsg)) return;
+    
+    setIsTogglingPaper(true);
+    try {
+      console.log(`🔄 تحويل البوت ${botId} إلى الوضع ${modeText}`);
+      const result = await updateBotConfig(botId, { paper_trading: newMode }, user.id);
+      if (result.success) {
+        await loadBotInstances(user.id);
+        await addLog('SUCCESS', `🔄 تم تحويل البوت إلى الوضع ${modeText}`);
+        console.log(`✅ تم التبديل إلى ${modeText}`);
+      } else {
+        await addLog('ERROR', `❌ فشل تبديل الوضع: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('❌ فشل تبديل الوضع:', error);
+      await addLog('ERROR', `❌ فشل تبديل الوضع: ${error}`);
+    } finally {
+      setIsTogglingPaper(false);
+    }
+  };
+
+  // ============================================================
+  // إغلاق جميع صفقات البوت
+  // ============================================================
+  const handleCloseAllTrades = async (botId: string, botName: string) => {
+    if (!user?.id) return;
+    
+    if (!window.confirm(`⚠️ هل أنت متأكد من إغلاق جميع صفقات البوت "${botName}"؟\nسيتم إغلاقها بسعر السوق الحالي.`)) {
+      return;
+    }
+    
+    try {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+      
+      const tradesRes = await fetch(`${WORKER_URL}/open-trades?botId=${botId}&userId=${user.id}`);
+      const tradesData = await tradesRes.json();
+      
+      if (!tradesData.success || !tradesData.data || tradesData.data.length === 0) {
+        await addLog('INFO', `ℹ️ لا توجد صفقات مفتوحة للبوت ${botName}`);
+        return;
+      }
+      
+      const openTrades = tradesData.data;
+      let closedCount = 0;
+      let failedCount = 0;
+      
+      for (const trade of openTrades) {
+        try {
+          let closePrice = trade.price * 0.98;
+          try {
+            const dexRes = await fetch(`${WORKER_URL}/dex-data`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tokenAddress: trade.token_address, network: trade.network })
+            });
+            const dexData = await dexRes.json();
+            if (dexData.success && dexData.data?.price) {
+              closePrice = dexData.data.price;
+            }
+          } catch (e) {
+            console.warn('⚠️ تعذر جلب السعر من DexScreener، استخدام سعر تقديري');
+          }
+          
+          const pnl = (closePrice - trade.price) * (trade.amount / trade.price);
+          const pnlPercent = ((closePrice - trade.price) / trade.price) * 100;
+          
+          const closeRes = await fetch(`${WORKER_URL}/close-trade`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tradeId: trade.id,
+              closePrice: closePrice,
+              pnl: pnl,
+              pnlPercent: pnlPercent,
+              closeReason: `Closed all trades for bot ${botName}`
+            })
+          });
+          const closeData = await closeRes.json();
+          if (closeData.success) {
+            closedCount++;
+          } else {
+            failedCount++;
+            console.error(`❌ فشل إغلاق الصفقة ${trade.id}:`, closeData.error);
+          }
+        } catch (err) {
+          failedCount++;
+          console.error(`❌ خطأ في إغلاق الصفقة ${trade.id}:`, err);
+        }
+      }
+      
+      if (failedCount === 0 && closedCount > 0) {
+        await addLog('SUCCESS', `✅ تم إغلاق ${closedCount} صفقة للبوت ${botName}`);
+      } else if (closedCount > 0 && failedCount > 0) {
+        await addLog('WARNING', `⚠️ تم إغلاق ${closedCount} صفقة، وفشل ${failedCount} صفقة للبوت ${botName}`);
+      } else {
+        await addLog('ERROR', `❌ فشل إغلاق جميع الصفقات للبوت ${botName}`);
+      }
+      
+      await loadBotInstances(user.id);
+    } catch (error) {
+      console.error('❌ فشل إغلاق الصفقات:', error);
+      await addLog('ERROR', `❌ فشل إغلاق الصفقات: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+    }
+  };
+
+  // ============================================================
+  // أنواع البوتات
+  // ============================================================
   const BOT_TYPES = {
     hunter: {
       label: 'Hunter Alpha',
@@ -226,7 +734,7 @@ const BotsManager: React.FC = () => {
       color: 'text-[#10b981]',
       bg: 'bg-[#10b981]/10',
       desc: 'صائد العملات الجديدة والمحافظ الذكية',
-      badge: 'صيد'
+      badge: 'صيد',
     },
     signal: {
       label: 'Signal Pro',
@@ -234,7 +742,7 @@ const BotsManager: React.FC = () => {
       color: 'text-[#3b82f6]',
       bg: 'bg-[#3b82f6]/10',
       desc: 'محلل الإشارات الفنية والزخم',
-      badge: 'تحليل'
+      badge: 'تحليل',
     },
     manual: {
       label: 'Manual Desk',
@@ -242,7 +750,7 @@ const BotsManager: React.FC = () => {
       color: 'text-[#8b5cf6]',
       bg: 'bg-[#8b5cf6]/10',
       desc: 'لوحة تحكم يدوية متقدمة',
-      badge: 'يدوي'
+      badge: 'يدوي',
     },
     scalper: {
       label: 'Scalper X',
@@ -250,7 +758,7 @@ const BotsManager: React.FC = () => {
       color: 'text-[#f97316]',
       bg: 'bg-[#f97316]/10',
       desc: 'تداول سريع على عملة محددة بصفقات متعددة',
-      badge: 'سريع'
+      badge: 'سريع',
     },
   };
 
@@ -258,6 +766,7 @@ const BotsManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-white flex items-center gap-2">
@@ -265,10 +774,18 @@ const BotsManager: React.FC = () => {
             البوتات الذكية
             <span className="text-sm font-normal text-[#64748b]">({botInstances.length})</span>
           </h2>
-          <p className="text-sm text-[#64748b] mt-1">4 أنواع من البوتات، كل بوت يعمل على شبكة أو أكثر من 9 شبكات</p>
+          <p className="text-sm text-[#64748b] mt-1">
+            4 أنواع من البوتات، كل بوت يعمل على شبكة أو أكثر من 9 شبكات
+          </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="secondary" size="sm" onClick={handleRefresh} disabled={isRefreshing} icon={<RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            icon={<RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />}
+          >
             {isRefreshing ? 'جاري التحديث...' : 'تحديث'}
           </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => setShowCreateModal(true)}>
@@ -277,6 +794,7 @@ const BotsManager: React.FC = () => {
         </div>
       </div>
 
+      {/* قائمة البوتات */}
       {botInstances.length === 0 ? (
         <GlassCard className="p-12 text-center">
           <Bot className="w-12 h-12 text-[#64748b] mx-auto mb-4 opacity-50" />
@@ -293,6 +811,8 @@ const BotsManager: React.FC = () => {
             const type = BOT_TYPES[bot.bot_type as keyof typeof BOT_TYPES] || BOT_TYPES.hunter;
             const Icon = type.icon;
             const isRunning = bot.status === 'running';
+            const botName = bot.name || 'بوت';
+            const isPaperTrading = bot.paper_trading === 1;
 
             return (
               <GlassCard key={bot.id} hover glow className="p-5">
@@ -316,15 +836,32 @@ const BotsManager: React.FC = () => {
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#1e1e2f] text-[#64748b]">
                     {bot.mode === 'auto' ? 'تلقائي' : 'يدوي'}
                   </span>
+                  <button
+                    onClick={() => handleTogglePaperTrading(bot.id, bot.paper_trading ?? 1)}
+                    disabled={isTogglingPaper}
+                    className={`text-[10px] px-2 py-0.5 rounded-full transition-colors ${
+                      isPaperTrading
+                        ? 'bg-[#f59e0b]/20 text-[#f59e0b] hover:bg-[#f59e0b]/30'
+                        : 'bg-[#10b981]/20 text-[#10b981] hover:bg-[#10b981]/30'
+                    }`}
+                  >
+                    {isPaperTrading ? '🧪 تجريبي' : '🔴 حقيقي'}
+                  </button>
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-1.5 text-xs">
                   <div className="bg-[#0a0a0f]/60 rounded-lg px-2.5 py-1.5">
-                    <span className="text-[#64748b]">الشبكات</span>
-                    <p className="text-white font-medium truncate text-[10px]">
-                      {bot.networks ? bot.networks.split(',').map(n => n.trim()).slice(0, 2).join(', ') : 'solana'}
-                      {bot.networks && bot.networks.split(',').length > 2 && '...'}
-                    </p>
+                    <span className="text-[#64748b]">المبلغ</span>
+                  <p className="text-white font-medium text-[10px]">
+    ${(() => {
+        try {
+            const config = bot.config ? JSON.parse(bot.config) : {};
+            return config.maxPositionSize || bot.max_position_size || 100;
+        } catch {
+            return bot.max_position_size || 100;
+        }
+    })()}
+</p>
                   </div>
                   <div className="bg-[#0a0a0f]/60 rounded-lg px-2.5 py-1.5">
                     <span className="text-[#64748b]">صفقات اليوم</span>
@@ -338,20 +875,67 @@ const BotsManager: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-[#1e1e2f]">
+                {/* أزرار التحكم */}
+                <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-[#1e1e2f] flex-wrap">
                   {isRunning ? (
-                    <Button size="sm" variant="warning" icon={<Pause className="w-3 h-3" />} onClick={() => stopBot(bot.id, user.id)}>
-                      إيقاف
+                    <Button
+                      size="sm"
+                      variant="warning"
+                      icon={<Pause className="w-3 h-3" />}
+                      onClick={() => handleStopBot(bot.id)}
+                      disabled={isStopping}
+                    >
+                      {isStopping ? 'جاري...' : 'إيقاف'}
                     </Button>
                   ) : (
-                    <Button size="sm" variant={bot.bot_type === 'scalper' ? 'scalper' : 'primary'} icon={<Play className="w-3 h-3" />} onClick={() => startBot(bot.id, user.id)}>
-                      تشغيل
+                    <Button
+                      size="sm"
+                      variant={bot.bot_type === 'scalper' ? 'scalper' : 'primary'}
+                      icon={<Play className="w-3 h-3" />}
+                      onClick={() => handleStartBot(bot.id)}
+                      disabled={isStarting}
+                    >
+                      {isStarting ? 'جاري...' : 'تشغيل'}
                     </Button>
                   )}
-                  <Button size="sm" variant="secondary" icon={<Wallet className="w-3 h-3" />} onClick={() => createWalletForBot(bot.id, selectedNetwork, user.id)}>
+                  
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<Wallet className="w-3 h-3" />}
+                    onClick={() => handleCreateWallet(bot.id)}
+                  >
                     محفظة
                   </Button>
-                  <Button size="sm" variant="danger" icon={<Trash2 className="w-3 h-3" />} onClick={() => deleteBot(bot.id, user.id)} className="ml-auto" />
+
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<Settings className="w-3 h-3" />}
+                    onClick={() => openEditModal(bot)}
+                  >
+                    تعديل
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    icon={<XCircle className="w-3 h-3" />}
+                    onClick={() => handleCloseAllTrades(bot.id, botName)}
+                  >
+                    إغلاق الصفقات
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    icon={<Trash2 className="w-3 h-3" />}
+                    onClick={() => handleDeleteBot(bot.id, botName)}
+                    disabled={isDeleting}
+                    className="ml-auto"
+                  >
+                    {isDeleting ? 'جاري...' : 'حذف'}
+                  </Button>
                 </div>
               </GlassCard>
             );
@@ -359,13 +943,24 @@ const BotsManager: React.FC = () => {
         </div>
       )}
 
-      {/* مودال إنشاء بوت */}
+      {/* ============================================================
+          مودال إنشاء بوت
+          ============================================================ */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowCreateModal(false)}>
-          <div className="bg-[#14141e] border border-[#1e1e2f] rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-white">إنشاء بوت جديد</h3>
-              <button onClick={() => setShowCreateModal(false)} className="text-[#64748b] hover:text-white transition-colors">
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setShowCreateModal(false)}
+        >
+          <div
+            className="bg-[#14141e] border border-[#1e1e2f] rounded-2xl p-6 w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4 sticky top-0 bg-[#14141e] py-2">
+              <h3 className="text-lg font-bold text-white">🚀 إنشاء بوت جديد</h3>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-[#64748b] hover:text-white transition-colors"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -380,7 +975,10 @@ const BotsManager: React.FC = () => {
                     return (
                       <button
                         key={key}
-                        onClick={() => setSelectedType(key as any)}
+                        onClick={() => {
+                          setSelectedType(key as any);
+                          resetCreateForm();
+                        }}
                         className={`p-3 rounded-xl border-2 text-center transition-all ${
                           isSelected
                             ? `border-[#10b981] bg-[#10b981]/10 shadow-lg shadow-[#10b981]/5`
@@ -408,7 +1006,7 @@ const BotsManager: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-sm text-[#94a3b8] block mb-1">الشبكة الافتراضية</label>
+                <label className="text-sm text-[#94a3b8] block mb-1">🌐 الشبكة الافتراضية</label>
                 <select
                   value={selectedNetwork}
                   onChange={(e) => setSelectedNetwork(e.target.value)}
@@ -420,14 +1018,429 @@ const BotsManager: React.FC = () => {
                     </option>
                   ))}
                 </select>
-                <p className="text-[10px] text-[#64748b] mt-1">🌐 يمكن إضافة شبكات أخرى لاحقاً</p>
+              </div>
+
+              <div className="border-t border-[#1e1e2f] pt-4">
+                <p className="text-xs text-[#64748b] mb-3">⚙️ الإعدادات المشتركة</p>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  
+              <div>
+    <label className="text-sm text-[#94a3b8] block mb-1">💰 المبلغ ($)</label>
+                    <input
+                        type="number"
+                        value={createAmount}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val) && val > 0) {
+                                setCreateAmount(val);
+                            }
+                        }}
+                        min="1"
+                        step="10"
+                        dir="ltr"
+                        className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#10b981] transition-colors text-sm text-left"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm text-[#94a3b8] block mb-1">📊 أقصى صفقات</label>
+                    <input
+                      type="number"
+                      value={createMaxTrades}
+                      onChange={(e) => {
+                          const val = Number(e.target.value);
+                          if (!isNaN(val) && val > 0) {
+                              setCreateMaxTrades(val);
+                          }
+                      }}
+                      min="1"
+                      max="20"
+                      dir="ltr"
+                      className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#10b981] transition-colors text-sm text-left"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label className="text-sm text-[#94a3b8] block mb-1">📈 جني الربح (%)</label>
+                    <input
+                      type="number"
+                      value={createTakeProfit}
+                      onChange={(e) => {
+                          const val = Number(e.target.value);
+                          if (!isNaN(val) && val > 0) {
+                              setCreateTakeProfit(val);
+                          }
+                      }}
+                      min="1"
+                      max="100"
+                      step="0.5"
+                      dir="ltr"
+                      className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#10b981] transition-colors text-sm text-left"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm text-[#94a3b8] block mb-1">🛑 وقف الخسارة (%)</label>
+                    <input
+                      type="number"
+                      value={createStopLoss}
+                      onChange={(e) => {
+                          const val = Number(e.target.value);
+                          if (!isNaN(val) && val > 0) {
+                              setCreateStopLoss(val);
+                          }
+                      }}
+                      min="1"
+                      max="50"
+                      step="0.5"
+                      dir="ltr"
+                      className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#10b981] transition-colors text-sm text-left"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {selectedType === 'hunter' && (
+                <div className="border-t border-[#10b981]/20 pt-4 bg-[#10b981]/5 rounded-xl p-3">
+                  <p className="text-xs text-[#10b981] mb-3">🎯 إعدادات Hunter Alpha</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-sm text-[#94a3b8] block mb-1">⭐ الحد الأدنى للنقاط</label>
+                      <input
+                        type="number"
+                        value={createMinScore}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val) && val > 0) {
+                                setCreateMinScore(val);
+                            }
+                        }}
+                        min="20"
+                        max="90"
+                        dir="ltr"
+                        className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#10b981] transition-colors text-sm text-left"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm text-[#94a3b8] block mb-1">👛 عدد المحافظ الذكية</label>
+                      <input
+                        type="number"
+                        value={createSmartWallets}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val) && val > 0) {
+                                setCreateSmartWallets(val);
+                            }
+                        }}
+                        min="1"
+                        max="20"
+                        dir="ltr"
+                        className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#10b981] transition-colors text-sm text-left"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedType === 'signal' && (
+                <div className="border-t border-[#3b82f6]/20 pt-4 bg-[#3b82f6]/5 rounded-xl p-3">
+                  <p className="text-xs text-[#3b82f6] mb-3">📊 إعدادات Signal Pro</p>
+                  <div>
+                    <label className="text-sm text-[#94a3b8] block mb-1">📈 نوع المؤشر</label>
+                    <select
+                      value={createIndicatorType}
+                      onChange={(e) => setCreateIndicatorType(e.target.value)}
+                      className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#3b82f6] transition-colors text-sm"
+                    >
+                      <option value="rsi">RSI</option>
+                      <option value="stochastic">Stochastic</option>
+                      <option value="macd">MACD</option>
+                      <option value="combined">مدمج</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 mt-3">
+                    <div>
+                      <label className="text-sm text-[#94a3b8] block mb-1">🔻 RSI تشبع بيعي</label>
+                      <input
+                        type="number"
+                        value={createRsiOversold}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val) && val > 0) {
+                                setCreateRsiOversold(val);
+                            }
+                        }}
+                        min="10"
+                        max="40"
+                        dir="ltr"
+                        className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#3b82f6] transition-colors text-sm text-left"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm text-[#94a3b8] block mb-1">🔺 RSI تشبع شرائي</label>
+                      <input
+                        type="number"
+                        value={createRsiOverbought}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val) && val > 0) {
+                                setCreateRsiOverbought(val);
+                            }
+                        }}
+                        min="60"
+                        max="90"
+                        dir="ltr"
+                        className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#3b82f6] transition-colors text-sm text-left"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {selectedType === 'scalper' && (
+                <div className="border-t border-[#f97316]/20 pt-4 bg-[#f97316]/5 rounded-xl p-3">
+                  <p className="text-xs text-[#f97316] mb-3">⚡ إعدادات Scalper X</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-sm text-[#94a3b8] block mb-1">📉 حد الشراء (%)</label>
+                      <input
+                        type="number"
+                        value={createBuyThreshold}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val)) {
+                                setCreateBuyThreshold(val);
+                            }
+                        }}
+                        step="0.5"
+                        dir="ltr"
+                        className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#f97316] transition-colors text-sm text-left"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm text-[#94a3b8] block mb-1">🔄 وقف متحرك (%)</label>
+                      <input
+                        type="number"
+                        value={createTrailingStop}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            if (!isNaN(val) && val > 0) {
+                                setCreateTrailingStop(val);
+                            }
+                        }}
+                        step="0.1"
+                        min="0.1"
+                        max="10"
+                        dir="ltr"
+                        className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#f97316] transition-colors text-sm text-left"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <label className="text-sm text-[#94a3b8] block mb-1">⏱️ الفاصل بين الصفقات (دقائق)</label>
+                    <input
+                      type="number"
+                      value={createMinTradeInterval}
+                      onChange={(e) => {
+                          const val = Number(e.target.value);
+                          if (!isNaN(val) && val > 0) {
+                              setCreateMinTradeInterval(val);
+                          }
+                      }}
+                      min="1"
+                      max="60"
+                      dir="ltr"
+                      className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#f97316] transition-colors text-sm text-left"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {selectedType === 'manual' && (
+                <div className="border-t border-[#8b5cf6]/20 pt-4 bg-[#8b5cf6]/5 rounded-xl p-3">
+                  <p className="text-xs text-[#8b5cf6] mb-3">🖐️ إعدادات Manual Desk</p>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={createDisplayAll}
+                      onChange={(e) => setCreateDisplayAll(e.target.checked)}
+                      className="w-4 h-4 accent-[#8b5cf6]"
+                    />
+                    <span className="text-sm text-[#94a3b8]">عرض جميع المرشحين</span>
+                  </label>
+                  <label className="flex items-center gap-3 mt-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={createShowDetailed}
+                      onChange={(e) => setCreateShowDetailed(e.target.checked)}
+                      className="w-4 h-4 accent-[#8b5cf6]"
+                    />
+                    <span className="text-sm text-[#94a3b8]">تحليل مفصل</span>
+                  </label>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <Button
+                  variant="primary"
+                  className="flex-1"
+                  onClick={handleCreateBot}
+                  disabled={isCreating || !botName.trim()}
+                >
+                  {isCreating ? 'جاري الإنشاء...' : '🚀 إنشاء'}
+                </Button>
+                <Button variant="ghost" className="flex-1" onClick={() => setShowCreateModal(false)}>
+                  إلغاء
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================
+          مودال تعديل البوت
+          ============================================================ */}
+      {showEditModal && selectedBot && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setShowEditModal(false)}
+        >
+          <div
+            className="bg-[#14141e] border border-[#1e1e2f] rounded-2xl p-6 w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4 sticky top-0 bg-[#14141e] py-2">
+              <h3 className="text-lg font-bold text-white">
+                تعديل البوت: <span className="text-[#10b981]">{selectedBot.name}</span>
+              </h3>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="text-[#64748b] hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-[#94a3b8] block mb-1">🌐 الشبكة</label>
+                <select
+                  value={editNetwork}
+                  onChange={(e) => setEditNetwork(e.target.value)}
+                  className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors"
+                >
+                  {NETWORK_OPTIONS.map((net) => (
+                    <option key={net.value} value={net.value}>
+                      {net.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm text-[#94a3b8] block mb-1">💰 المبلغ ($)</label>
+                <input
+                    type="number"
+                    value={editAmount}
+                    onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val) && val > 0) {
+                            setEditAmount(val);
+                        }
+                    }}
+                    min="1"
+                    step="10"
+                    dir="ltr"
+                    className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors text-left"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-[#94a3b8] block mb-1">📈 جني الربح (%)</label>
+                <input
+                  type="number"
+                  value={editTakeProfit}
+                  onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (!isNaN(val) && val > 0) {
+                          setEditTakeProfit(val);
+                      }
+                  }}
+                  min="1"
+                  max="100"
+                  step="0.5"
+                  dir="ltr"
+                  className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors text-left"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-[#94a3b8] block mb-1">🛑 وقف الخسارة (%)</label>
+                <input
+                  type="number"
+                  value={editStopLoss}
+                  onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (!isNaN(val) && val > 0) {
+                          setEditStopLoss(val);
+                      }
+                  }}
+                  min="1"
+                  max="50"
+                  step="0.5"
+                  dir="ltr"
+                  className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors text-left"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-[#94a3b8] block mb-1">📊 أقصى صفقات مفتوحة</label>
+                <input
+                  type="number"
+                  value={editMaxTrades}
+                  onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (!isNaN(val) && val > 0) {
+                          setEditMaxTrades(val);
+                      }
+                  }}
+                  min="1"
+                  max="20"
+                  dir="ltr"
+                  className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors text-left"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-[#94a3b8] block mb-1">⭐ الحد الأدنى للنقاط</label>
+                <input
+                  type="number"
+                  value={editMinScore}
+                  onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (!isNaN(val) && val > 0) {
+                          setEditMinScore(val);
+                      }
+                  }}
+                  min="20"
+                  max="90"
+                  dir="ltr"
+                  className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors text-left"
+                />
               </div>
 
               <div className="flex gap-3 pt-2">
-                <Button variant="primary" className="flex-1" onClick={handleCreateBot} disabled={isCreating || !botName.trim()}>
-                  {isCreating ? 'جاري الإنشاء...' : 'إنشاء'}
+                <Button
+                  variant="primary"
+                  className="flex-1"
+                  onClick={handleSaveEdit}
+                  disabled={isSavingEdit}
+                >
+                                   {isSavingEdit ? 'جاري الحفظ...' : '💾 حفظ التغييرات'}
                 </Button>
-                <Button variant="ghost" className="flex-1" onClick={() => setShowCreateModal(false)}>
+                <Button variant="ghost" className="flex-1" onClick={() => setShowEditModal(false)}>
                   إلغاء
                 </Button>
               </div>
@@ -440,7 +1453,7 @@ const BotsManager: React.FC = () => {
 };
 
 // ============================================================
-// 🧩 شريط التنقل الجانبي (مع دعم Web3Modal)
+// 🧩 شريط التنقل الجانبي
 // ============================================================
 const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -460,10 +1473,9 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     disconnectWallet,
     getWalletBalance,
     walletNetwork,
-  } = useApp();
+        notifications, // ✅ أضف هذا
 
-  // ✅ Web3Modal - زر الاتصال (تم إزالته)
-  // const { open } = useWeb3Modal();
+  } = useApp();
 
   const [balance, setBalance] = useState(0);
 
@@ -474,11 +1486,10 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }, [isWalletConnected, activeWallet]);
 
   if (!user) return <>{children}</>;
+const isActive = (path: string) => location.pathname === path;
 
-  const isActive = (path: string) => location.pathname === path;
-
-  // ✅ قائمة التنقل مع سجل الصفقات
-  const navItems = [
+const navItems = [
+    { path: '/notifications', label: 'الإشعارات', icon: Bell, badge: notifications.length },
     { path: '/', label: 'لوحة التحكم', icon: LayoutDashboard },
     { path: '/bots', label: 'البوتات', icon: Bot, badge: botInstances.filter(b => b.status === 'running').length },
     { path: '/markets', label: 'الأسواق', icon: TrendingUp },
@@ -491,7 +1502,7 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { path: '/scalper', label: 'Scalper X', icon: Zap, badge: botInstances.filter(b => b.bot_type === 'scalper' && b.status === 'running').length },
     ...(isAdmin ? [{ path: '/admin', label: 'إدارة', icon: Shield }] : []),
     { path: '/settings', label: 'الإعدادات', icon: Settings },
-  ];
+];
 
   return (
     <div className="flex min-h-screen bg-[#0a0a0f]">
@@ -502,7 +1513,6 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         ${isOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}
       `}>
         <div className="flex flex-col h-full">
-          {/* Logo */}
           <div className="flex items-center justify-between px-6 h-20 border-b border-[#1e1e2f]">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#10b981] to-[#059669] flex items-center justify-center shadow-lg shadow-[#10b981]/20">
@@ -518,7 +1528,6 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             </button>
           </div>
 
-          {/* Navigation */}
           <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -551,10 +1560,7 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             })}
           </nav>
 
-          {/* ✅ Footer - معلومات المستخدم + المحافظ المتعددة */}
           <div className="px-4 py-4 border-t border-[#1e1e2f] space-y-3">
-            
-            {/* ✅ المحافظ المتعددة (خارجية) - بدون Web3Modal */}
             <div className="relative">
               {isWalletConnected && activeWallet ? (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#1e1e2f]/50">
@@ -575,7 +1581,6 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 </div>
               ) : (
                 <div className="relative">
-                  {/* ✅ زر ربط المحفظة (النظام القديم) */}
                   <button
                     onClick={() => setShowWalletDropdown(!showWalletDropdown)}
                     className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-[#8b5cf6]/10 hover:bg-[#8b5cf6]/20 text-[#8b5cf6] text-sm font-medium transition-colors"
@@ -616,17 +1621,15 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 </div>
               )}
             </div>
-
-            {/* ✅ معلومات المستخدم */}
-            <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[#1e1e2f]/50">
+<div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[#1e1e2f]/50">
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] flex items-center justify-center">
                 <User className="w-4 h-4 text-white" />
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium text-white truncate">{user.email || 'مستخدم'}</p>
                 <div className="flex items-center gap-2">
-                  <span className={`text-[10px] ${isRunning ? 'text-[#10b981]' : 'text-[#64748b]'}`}>
-                    {isRunning ? '● البوت يعمل' : '● البوت متوقف'}
+                  <span className={`text-[10px] ${botInstances.some(b => b.status === 'running') ? 'text-[#10b981]' : 'text-[#64748b]'}`}>
+                    {botInstances.some(b => b.status === 'running') ? `● ${botInstances.filter(b => b.status === 'running').length} بوتات تعمل` : '● البوتات متوقفة'}
                   </span>
                   {isAdmin && (
                     <span className="text-[10px] text-[#8b5cf6]">👑</span>
@@ -671,11 +1674,170 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   );
 };
 
+
 // ============================================================
-// 🚀 التطبيق الرئيسي
+// 🔔 مكون الإشعارات
 // ============================================================
+// 🔔 شريط الإشعارات الدائم + المنبثقة
+// ============================================================
+const Notifications: React.FC = () => {
+    const { notifications, removeNotification } = useApp();
+    const [showHistory, setShowHistory] = useState(false);
+    
+    if (notifications.length === 0) return null;
+    
+    const latestNotification = notifications[notifications.length - 1];
+    
+    return (
+        <>
+            {/* ✅ الإشعار المنبثق الحالي */}
+            <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] w-full max-w-md px-4 pointer-events-none">
+                <div
+                    className={`pointer-events-auto flex items-center justify-between gap-3 px-4 py-3 rounded-xl shadow-lg border backdrop-blur-xl ${
+                        latestNotification.type === 'success' ? 'bg-[#10b981]/20 border-[#10b981]/40 text-[#10b981]' :
+                        latestNotification.type === 'error' ? 'bg-[#ef4444]/20 border-[#ef4444]/40 text-[#ef4444]' :
+                        latestNotification.type === 'warning' ? 'bg-[#f59e0b]/20 border-[#f59e0b]/40 text-[#f59e0b]' :
+                        'bg-[#3b82f6]/20 border-[#3b82f6]/40 text-[#3b82f6]'
+                    }`}
+                >
+                    <span className="text-sm font-medium">{latestNotification.message}</span>
+                    <button
+                        onClick={() => setShowHistory(!showHistory)}
+                        className="text-current opacity-50 hover:opacity-100"
+                    >
+                        <Bell className="w-4 h-4" />
+                    </button>
+                    <button
+                        onClick={() => removeNotification(latestNotification.id)}
+                        className="text-current opacity-50 hover:opacity-100"
+                    >
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+                
+                {/* ✅ سجل الإشعارات */}
+                {showHistory && (
+                    <div className="pointer-events-auto mt-2 bg-[#14141e] border border-[#1e1e2f] rounded-xl shadow-2xl max-h-80 overflow-y-auto">
+                        <div className="p-3 border-b border-[#1e1e2f] flex justify-between items-center">
+                            <span className="text-sm font-bold text-white">📋 سجل الإشعارات</span>
+                            <button onClick={() => setShowHistory(false)} className="text-gray-400">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        {notifications.slice().reverse().map(notification => (
+                            <div
+                                key={notification.id}
+                                className={`flex items-start gap-2 px-4 py-2.5 border-b border-[#1e1e2f] last:border-b-0 ${
+                                    notification.type === 'success' ? 'text-[#10b981]' :
+                                    notification.type === 'error' ? 'text-[#ef4444]' :
+                                    notification.type === 'warning' ? 'text-[#f59e0b]' :
+                                    'text-[#3b82f6]'
+                                }`}
+                            >
+                                <span className="text-xs mt-0.5">
+                                    {notification.type === 'success' ? '✅' :
+                                     notification.type === 'error' ? '❌' :
+                                     notification.type === 'warning' ? '⚠️' : 'ℹ️'}
+                                </span>
+                                <div className="flex-1">
+                                    <p className="text-xs font-medium">{notification.message}</p>
+                                    <p className="text-[10px] text-gray-500">{notification.timestamp}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </>
+    );
+};
+
+const NotificationsPage: React.FC = () => {
+    const { notifications, removeNotification, clearAllNotifications } = useApp();
+    const [isClearing, setIsClearing] = useState(false);
+
+    const handleClearAll = async () => {
+        if (!window.confirm('⚠️ هل أنت متأكد من مسح جميع الإشعارات نهائياً؟\nلا يمكن التراجع عن هذا الإجراء.')) {
+            return;
+        }
+        setIsClearing(true);
+        try {
+            await clearAllNotifications();
+        } catch (error) {
+            console.error('❌ فشل المسح:', error);
+        } finally {
+            setIsClearing(false);
+        }
+    };
+
+    return (
+        <div className="space-y-4">
+            <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                    <Bell className="w-6 h-6 text-[#10b981]" />
+                    الإشعارات
+                    <span className="text-sm text-[#64748b]">({notifications.length})</span>
+                </h2>
+                {notifications.length > 0 && (
+                    <button
+                        onClick={handleClearAll}
+                        disabled={isClearing}
+                        className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                    >
+                        {isClearing ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                            <Trash2 className="w-4 h-4" />
+                        )}
+                        مسح الكل
+                    </button>
+                )}
+            </div>
+
+            {notifications.length === 0 ? (
+                <div className="text-center py-12 text-[#64748b]">
+                    <Bell className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                    <p>لا توجد إشعارات</p>
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {notifications.slice().reverse().map(notification => (
+                        <div
+                            key={notification.id}
+                            className={`flex items-start gap-3 p-4 rounded-xl border ${
+                                notification.type === 'success' ? 'bg-[#10b981]/10 border-[#10b981]/30' :
+                                notification.type === 'error' ? 'bg-[#ef4444]/10 border-[#ef4444]/30' :
+                                notification.type === 'warning' ? 'bg-[#f59e0b]/10 border-[#f59e0b]/30' :
+                                'bg-[#3b82f6]/10 border-[#3b82f6]/30'
+                            }`}
+                        >
+                            <span className="text-lg">
+                                {notification.type === 'success' ? '✅' :
+                                 notification.type === 'error' ? '❌' :
+                                 notification.type === 'warning' ? '⚠️' : 'ℹ️'}
+                            </span>
+                            <div className="flex-1">
+                                <p className="text-sm text-white">{notification.message}</p>
+                                <p className="text-xs text-[#64748b] mt-1">
+                                    {new Date(notification.timestamp).toLocaleString('ar-EG')}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => removeNotification(notification.id)}
+                                className="text-[#64748b] hover:text-[#ef4444]"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+// 🚀 التطبيق الرئيسي (AppContent)
 function AppContent() {
-  const { user } = useApp();
+  const { user, addNotification, notifications } = useApp();
   const [pendingAnalysis, setPendingAnalysis] = useState<{ token: DiscoveredToken } | null>(null);
 
   const handleAnalyzeToken = async (token: DiscoveredToken) => {
@@ -702,14 +1864,68 @@ function AppContent() {
     setPendingAnalysis(null);
   };
 
+  const notificationsRef = useRef(notifications);
+
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
+
+   const fetchNotifications = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const workerUrl = import.meta.env.VITE_WORKER_URL;
+      if (!workerUrl) {
+        console.debug('ℹ️ VITE_WORKER_URL غير موجود');
+        return;
+      }
+      
+      const response = await fetch(
+        `${workerUrl}/notifications?app_id=hunter&userId=${user.id}`
+      );
+      
+      if (!response.ok) {
+        console.debug(`ℹ️ فشل جلب الإشعارات: ${response.status}`);
+        return;
+      }
+      
+      const text = await response.text();
+      
+      try {
+        const data = JSON.parse(text);
+        if (data.success && data.data) {
+          data.data.forEach((notif: any) => {
+            const exists = notificationsRef.current.some(n => n.id === notif.id);
+            if (!exists) {
+              addNotification(notif.type || 'info', notif.message);
+            }
+          });
+        }
+      } catch (e) {
+        console.debug('ℹ️ استجابة غير JSON (طبيعي)');
+      }
+    } catch (error) {
+      console.debug('ℹ️ فشل جلب الإشعارات (طبيعي)');
+    }
+  }, [user?.id, addNotification]);
+
+  useEffect(() => {
+    if (user?.id) {
+      fetchNotifications();
+      const interval = setInterval(fetchNotifications, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [user?.id, fetchNotifications]);
+
   if (!user) {
     return <LoginPage />;
   }
 
   return (
     <BrowserRouter>
+      <Notifications />
       <Sidebar>
         <Routes>
+          <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/" element={<DashboardPage />} />
           <Route path="/bots" element={<BotsManager />} />
           <Route path="/markets" element={<MarketsPage onAnalyzeToken={handleAnalyzeToken} />} />
@@ -732,6 +1948,8 @@ function AppContent() {
 // 🚀 التطبيق الرئيسي
 // ============================================================
 function App() {
+  console.log('🌐 VITE_WORKER_URL:', import.meta.env.VITE_WORKER_URL);
+
   return (
     <AppProvider>
       <AppContent />

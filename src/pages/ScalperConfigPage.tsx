@@ -1,4 +1,7 @@
-// src/pages/ScalperConfigPage.tsx
+
+// ============================================================
+// 📊 Scalper X - تداول سريع آلي + يدوي (صفقات متعددة)
+// ============================================================
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
@@ -8,7 +11,7 @@ import {
   BrainCircuit, TrendingDown, Globe, Filter, ChevronDown, ChevronRight,
   Sparkles, Clock, DollarSign, Activity, Info, Layers, Users, Eye,
   Bot, Settings2, Shield, Cpu, LineChart, Wallet, ArrowUpRight, ArrowDownRight,
-  Plus
+  Plus, History, ListOrdered, Hash
 } from 'lucide-react';
 import { NETWORKS, getNetworkName, getNetworkColor, getNetworkIcon } from '../config/networks';
 import { discoverAllPairs } from '../lib/discovery';
@@ -81,11 +84,11 @@ const Button: React.FC<{
 };
 
 // ============================================================
-// 🎯 الصفحة الرئيسية
+// 📊 صفحة Scalper X الرئيسية
 // ============================================================
 
 export function ScalperConfigPage() {
-  const { user, botInstances, loadBotInstances, updateBotConfig, addLog, startBot, stopBot } = useApp();
+  const { user, botInstances, loadBotInstances, updateBotConfig, addLog, startBot, stopBot, createWalletForBot } = useApp();
   const [isSaving, setIsSaving] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -96,6 +99,13 @@ export function ScalperConfigPage() {
   // 🔥 وضع التحكم (AI / يدوي)
   // ============================================================
   const [controlMode, setControlMode] = useState<'ai' | 'manual'>('ai');
+
+  // ✅ وضع التداول (آلي حسب الشروط / يدوي فوري)
+  const [tradeMode, setTradeMode] = useState<'auto' | 'manual'>('auto');
+  const [isExecutingTrade, setIsExecutingTrade] = useState(false);
+  const [manualTradeAmount, setManualTradeAmount] = useState(50);
+  const [openTrades, setOpenTrades] = useState<any[]>([]);
+  const [loadingTrades, setLoadingTrades] = useState(false);
 
   // ============================================================
   // 🔍 حالات البحث عن العملات
@@ -127,16 +137,7 @@ export function ScalperConfigPage() {
   const [whaleError, setWhaleError] = useState<string | null>(null);
 
   // ============================================================
-  // 📊 حالات المؤشرات الفنية
-  // ============================================================
-  const [technicalIndicators, setTechnicalIndicators] = useState<any>(null);
-  const [priceHistory, setPriceHistory] = useState<number[]>([]);
-
-  // ============================================================
-  // 🌐 الشبكات المدعومة (9 شبكات) - عرض واضح
-  // ============================================================
-  // ============================================================
-  // 🌐 بيانات الشبكات - مصدر واحد للأسماء والألوان والأيقونات
+  // 🌐 الشبكات المدعومة (9 شبكات)
   // ============================================================
   const networkOptions = NETWORKS.map(n => {
     const networkId = String(n.id).toLowerCase();
@@ -154,51 +155,61 @@ export function ScalperConfigPage() {
   });
 
   // ============================================================
-  // ✅ العملات المقترحة (اختصارات لكل شبكة)
+  // 🖼️ الصورة الحقيقية للعملة
+  // DEX Screener يرسل صورة الـ pair في info.imageUrl عند توفرها.
+  // لا ننشئ صورة وهمية: إذا لم توجد صورة نعرض اختصار الرمز فقط.
+  // ============================================================
+  const getTokenImageUrl = (pair: any): string => {
+    const imageUrl =
+      pair?.info?.imageUrl ||
+      pair?.baseToken?.logoURI ||
+      pair?.baseToken?.logoUrl ||
+      '';
+
+    return typeof imageUrl === 'string' && /^https?:\/\//i.test(imageUrl)
+      ? imageUrl
+      : '';
+  };
+
+  // ============================================================
+  // ✅ العملات المقترحة (بدون عملات مستقرة)
   // ============================================================
   const SUGGESTED_TOKENS: Record<string, Array<{ value: string; label: string; address: string }>> = {
     solana: [
       { value: 'SOL', label: 'Solana (SOL)', address: 'So11111111111111111111111111111111111111112' },
-      { value: 'USDC', label: 'USD Coin (USDC)', address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
       { value: 'BONK', label: 'Bonk (BONK)', address: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' },
       { value: 'JUP', label: 'Jupiter (JUP)', address: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' },
       { value: 'WIF', label: 'Dogwifhat (WIF)', address: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm' },
       { value: 'RAY', label: 'Raydium (RAY)', address: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R' },
     ],
     ethereum: [
-      { value: 'ETH', label: 'Ethereum (ETH)', address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' },
-      { value: 'USDC', label: 'USD Coin (USDC)', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' },
-      { value: 'USDT', label: 'Tether (USDT)', address: '0xdAC17F958D2ee523a2206206994597C13D831ec7' },
+      { value: 'ETH', label: 'Ethereum (ETH/WETH)', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2' },
       { value: 'LINK', label: 'Chainlink (LINK)', address: '0x514910771AF9Ca656af840dff83E8264EcF986CA' },
       { value: 'AAVE', label: 'Aave (AAVE)', address: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9' },
     ],
     bsc: [
-      { value: 'BNB', label: 'BNB (BNB)', address: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c' },
-      { value: 'USDT', label: 'Tether (USDT)', address: '0x55d398326f99059fF775485246999027B3197955' },
+      { value: 'BNB', label: 'BNB (WBNB)', address: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c' },
       { value: 'CAKE', label: 'PancakeSwap (CAKE)', address: '0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82' },
     ],
     polygon: [
-      { value: 'POL', label: 'Polygon (POL)', address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' },
-      { value: 'USDC', label: 'USD Coin (USDC)', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359' },
+      { value: 'POL', label: 'Polygon (POL/WMATIC)', address: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270' },
     ],
     arbitrum: [
-      { value: 'ETH', label: 'Arbitrum ETH', address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' },
+      { value: 'ETH', label: 'Arbitrum ETH (WETH)', address: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1' },
       { value: 'ARB', label: 'Arbitrum (ARB)', address: '0x912CE59144191C1204E64559FE8253a0b49C6549' },
     ],
     base: [
-      { value: 'ETH', label: 'Base ETH', address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' },
-      { value: 'USDC', label: 'USD Coin (USDC)', address: '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA' },
+      { value: 'ETH', label: 'Base ETH (WETH)', address: '0x4200000000000000000000000000000000000006' },
     ],
     avalanche: [
-      { value: 'AVAX', label: 'Avalanche (AVAX)', address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' },
+      { value: 'AVAX', label: 'Avalanche (AVAX/WAVAX)', address: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7' },
     ],
     optimism: [
-      { value: 'ETH', label: 'Optimism ETH', address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' },
+      { value: 'ETH', label: 'Optimism ETH (WETH)', address: '0x4200000000000000000000000000000000000006' },
       { value: 'OP', label: 'Optimism (OP)', address: '0x4200000000000000000000000000000000000042' },
     ],
     robinhood: [
-      { value: 'ETH', label: 'Robinhood ETH', address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' },
-      { value: 'USDC', label: 'USD Coin (USDC)', address: '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA' },
+      { value: 'ETH', label: 'Robinhood ETH (WETH)', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2' },
     ],
   };
 
@@ -206,8 +217,9 @@ export function ScalperConfigPage() {
   // 🔧 إعدادات البوت
   // ============================================================
   const [config, setConfig] = useState({
-    targetToken: 'USDC',
-    targetTokenAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    targetToken: '',
+    targetTokenAddress: '',
+    targetTokenImageUrl: '',
     totalAmountUsd: 1000,
     amountPerTrade: 50,
     maxOpenTrades: 5,
@@ -224,38 +236,29 @@ export function ScalperConfigPage() {
   // ============================================================
   // 📊 حساب المؤشرات الفنية
   // ============================================================
+  const [priceHistory, setPriceHistory] = useState<number[]>([]);
+  const [technicalIndicators, setTechnicalIndicators] = useState<any>(null);
+
   const calculateIndicators = (prices: number[]) => {
     if (prices.length < 20) return null;
-    
-    // RSI
     const rsi = calculateRSI(prices);
-    
-    // المتوسطات المتحركة
     const ma20 = calculateMA(prices, 20);
     const ma50 = calculateMA(prices, 50);
-    
-    // الدعم والمقاومة
     const { support, resistance } = calculateSupportResistance(prices);
-    
-    // التقلب
     const volatility = calculateVolatility(prices);
-    
     return { rsi, ma20, ma50, support, resistance, volatility };
   };
 
   const calculateRSI = (prices: number[], period: number = 14): number => {
     if (prices.length < period + 1) return 50;
-    
     let gains = 0, losses = 0;
     for (let i = prices.length - period; i < prices.length; i++) {
       const diff = prices[i] - prices[i - 1];
       if (diff >= 0) gains += diff;
       else losses += Math.abs(diff);
     }
-    
     const avgGain = gains / period;
     const avgLoss = losses / period;
-    
     if (avgLoss === 0) return 100;
     const rs = avgGain / avgLoss;
     return 100 - (100 / (1 + rs));
@@ -272,10 +275,7 @@ export function ScalperConfigPage() {
     const sorted = [...recent].sort((a, b) => a - b);
     const supportIndex = Math.floor(sorted.length * 0.1);
     const resistanceIndex = Math.floor(sorted.length * 0.9);
-    return {
-      support: sorted[supportIndex],
-      resistance: sorted[resistanceIndex],
-    };
+    return { support: sorted[supportIndex], resistance: sorted[resistanceIndex] };
   };
 
   const calculateVolatility = (prices: number[]): number => {
@@ -298,7 +298,6 @@ export function ScalperConfigPage() {
         `https://api.dexscreener.com/latest/dex/search?q=${tokenSymbol}`
       );
       const data = await response.json();
-      
       if (data.pairs && data.pairs.length > 0) {
         const pair = data.pairs.find((p: any) => p.chainId === network);
         if (pair) {
@@ -308,12 +307,10 @@ export function ScalperConfigPage() {
             if (newHistory.length > 100) newHistory.shift();
             return newHistory;
           });
-          
           if (priceHistory.length > 20) {
             const indicators = calculateIndicators(priceHistory);
             setTechnicalIndicators(indicators);
           }
-          
           return {
             price,
             volume: pair.volume?.h24 || 0,
@@ -332,17 +329,14 @@ export function ScalperConfigPage() {
   };
 
   // ============================================================
-  // 🐋 جلب بيانات الحيتان من Helius
+  // 🐋 جلب بيانات الحيتان
   // ============================================================
   const fetchWhaleData = async (tokenAddress: string) => {
     if (!tokenAddress) return;
-    
     setWhaleLoading(true);
     setWhaleError(null);
-    
     try {
       const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
-      
       const response = await fetch(`${WORKER_URL}/solana`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -353,14 +347,11 @@ export function ScalperConfigPage() {
           params: [tokenAddress, { limit: 100 }]
         }),
       });
-      
       const data = await response.json();
-      
       if (data.result) {
         const accounts = data.result;
         const largeWallets = accounts.filter((a: any) => a.balance > 100000);
         const totalBalance = accounts.reduce((sum: number, a: any) => sum + a.balance, 0);
-        
         setWhaleData({
           totalWhales: largeWallets.length,
           whalePercentage: (largeWallets.length / accounts.length) * 100,
@@ -379,158 +370,7 @@ export function ScalperConfigPage() {
   };
 
   // ============================================================
-  // 🔍 البحث عن العملات (معدل بالكامل)
-  // ============================================================
-  const handleSearchTokens = async (networkFilter: string = selectedNetworkFilter) => {
-    const query = searchQuery.trim();
-    if (!query) {
-      setSearchError('❌ الرجاء إدخال رمز أو عنوان العملة');
-      return;
-    }
-
-    setSearchLoading(true);
-    setSearchError(null);
-    setSearchResults([]);
-
-    try {
-      const response = await fetch(
-        `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      const pairs = Array.isArray(data.pairs) ? data.pairs : [];
-
-      // البحث بالاسم/الرمز يعيد أزواجاً من عدة شبكات.
-      // لا نخلط الشبكات: الفلترة تتم بواسطة chainId الحقيقي القادم من DEX Screener.
-      const filtered = networkFilter === 'all'
-        ? pairs
-        : pairs.filter((p: any) =>
-            String(p.chainId || '').toLowerCase() === networkFilter.toLowerCase()
-          );
-
-      const results = filtered
-        .filter((p: any) => p.baseToken?.address)
-        .map((p: any) => {
-          const chainId = String(p.chainId || 'unknown').toLowerCase();
-          const networkOption = networkOptions.find(n => n.value === chainId);
-
-          return {
-            symbol: p.baseToken.symbol || 'UNKNOWN',
-            // لا نستخدم اسم الشبكة كاسم للعملة إذا أعادته الـAPI بالخطأ.
-            name: (p.baseToken.name &&
-              p.baseToken.name.toLowerCase() !== getNetworkName(chainId).toLowerCase())
-              ? p.baseToken.name
-              : (p.baseToken.symbol || 'Unknown'),
-            address: p.baseToken.address || '',
-            price: parseFloat(p.priceUsd || 0),
-            priceDisplay: `$${parseFloat(p.priceUsd || 0).toFixed(6)}`,
-            change: parseFloat(p.priceChange?.h24 || 0),
-            changeDisplay: `${parseFloat(p.priceChange?.h24 || 0).toFixed(2)}%`,
-            liquidity: Number(p.liquidity?.usd || 0),
-            volume: Number(p.volume?.h24 || 0),
-            dexId: p.dexId || '',
-            url: p.url || '',
-            network: chainId,
-            networkName: networkOption?.name || getNetworkName(chainId) || chainId,
-            networkIcon: networkOption?.icon || getNetworkIcon(chainId) || '🌐',
-            networkColor: networkOption?.color || getNetworkColor(chainId) || '#64748b',
-            pairCreatedAt: p.pairCreatedAt || Date.now(),
-          };
-        });
-
-      // إزالة التكرار باستخدام الشبكة + العنوان، وليس العنوان وحده.
-      // نفس عنوان العقد قد يظهر على أكثر من شبكة.
-      const uniqueResults = results.reduce((acc: any[], token: any) => {
-        const key = `${token.network}:${token.address.toLowerCase()}`;
-        const existingIndex = acc.findIndex(
-          t => `${t.network}:${String(t.address).toLowerCase()}` === key
-        );
-
-        if (existingIndex === -1) {
-          acc.push(token);
-        } else if (token.liquidity > acc[existingIndex].liquidity) {
-          acc[existingIndex] = token;
-        }
-
-        return acc;
-      }, []);
-
-      const filteredResults = applyTokenFilter(uniqueResults);
-      setSearchResults(filteredResults);
-      setAllFetchedTokens(filteredResults);
-
-      if (filteredResults.length > 0) {
-        const networkLabel = networkFilter === 'all'
-          ? 'جميع الشبكات'
-          : (networkOptions.find(n => n.value === networkFilter)?.name || getNetworkName(networkFilter));
-
-        await addLog(
-          'SUCCESS',
-          `✅ تم العثور على ${filteredResults.length} عملة على ${networkLabel}`
-        );
-      } else {
-        setSearchError(
-          networkFilter === 'all'
-            ? `❌ لم يتم العثور على "${query}"`
-            : `❌ لم يتم العثور على "${query}" على ${getNetworkName(networkFilter)}`
-        );
-      }
-    } catch (error) {
-      console.error('❌ فشل البحث:', error);
-      setSearchError(
-        `❌ فشل البحث: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`
-      );
-    } finally {
-      setSearchLoading(false);
-    }
-  };
-
-  // ============================================================
-  // 🎯 تطبيق فلاتر العملات في مكان واحد
-  // ============================================================
-  const applyTokenFilter = (tokens: any[]) => {
-    const uniqueTokens = [...tokens];
-
-    switch (tokenFilter) {
-      case 'good':
-        return uniqueTokens.filter(t =>
-          t.liquidity > 50000 && t.change > 0 && t.volume > 100000
-        );
-
-      case 'new': {
-        const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-        return uniqueTokens.filter(t => t.pairCreatedAt > oneDayAgo);
-      }
-
-      case 'volume':
-        return [...uniqueTokens].sort((a, b) => b.volume - a.volume);
-
-      case 'liquid':
-        return [...uniqueTokens].sort((a, b) => b.liquidity - a.liquidity);
-
-      case 'momentum':
-        return uniqueTokens
-          .filter(t => t.change > 10 && t.volume > 50000 && t.liquidity > 20000)
-          .sort((a, b) => b.change - a.change);
-
-      default:
-        return uniqueTokens;
-    }
-  };
-
-  // ============================================================
-  // 📥 جلب العملات من نفس مصدر الأسواق الحقيقي
-  // ============================================================
-  // مهم:
-  // لا نستخدم /search?q=اسم الشبكة لجلب جميع العملات.
-  // ذلك endpoint للبحث النصي، وليس لاكتشاف أزواج الشبكة.
-  // صفحة MarketsPage عندك تستخدم discoverAllPairs()، لذلك نستخدم
-  // نفس المصدر هنا حتى تكون العملات المعروضة هي نفسها العملات
-  // التي يمكن تحليلها والتداول عليها في النظام.
+  // 🔍 البحث عن العملات (معدل)
   // ============================================================
   const fetchAllTokens = async (networkFilter: string = selectedNetworkFilter) => {
     setSearchLoading(true);
@@ -547,15 +387,11 @@ export function ScalperConfigPage() {
         return;
       }
 
-      // جلب الأزواج من نفس discoverAllPairs المستخدم في MarketsPage.
-      // عند اختيار شبكة واحدة يتم استدعاؤها مرة واحدة فقط.
-      // عند اختيار الكل يتم جلب كل شبكة على حدة ثم الدمج.
       const results = await Promise.all(
         networksToFetch.map(async (network) => {
           try {
             const result = await discoverAllPairs(network.value as any);
             const pairs = Array.isArray(result?.pairs) ? result.pairs : [];
-
             return pairs
               .filter((p: any) => {
                 if (!p?.baseToken?.address) return false;
@@ -567,17 +403,14 @@ export function ScalperConfigPage() {
                 const symbol = String(p.baseToken?.symbol || 'UNKNOWN').trim();
                 const rawName = String(p.baseToken?.name || '').trim();
                 const networkName = networkOption.name || getNetworkName(chainId);
-
-                // لا نستبدل اسم العملة باسم الشبكة.
-                // إذا كانت الـAPI أعادت اسم الشبكة كاسم للعملة، نستخدم الرمز.
                 const name = rawName && rawName.toLowerCase() !== String(networkName).toLowerCase()
                   ? rawName
                   : symbol;
-
                 return {
                   symbol,
                   name,
                   address: String(p.baseToken.address),
+                  imageUrl: getTokenImageUrl(p),
                   price: Number.parseFloat(p.priceUsd || '0') || 0,
                   priceDisplay: `$${(Number.parseFloat(p.priceUsd || '0') || 0).toFixed(6)}`,
                   change: Number.parseFloat(p.priceChange?.h24 || '0') || 0,
@@ -603,29 +436,23 @@ export function ScalperConfigPage() {
 
       const discoveredTokens = results.flat();
 
-      // إزالة تكرار العملة داخل نفس الشبكة فقط.
-      // نفس العقد على شبكتين مختلفتين يبقى عملتين منفصلتين.
       const uniqueTokens = discoveredTokens.reduce((acc: any[], token: any) => {
         const key = `${token.network}:${String(token.address).toLowerCase()}`;
         const existingIndex = acc.findIndex(
           t => `${t.network}:${String(t.address).toLowerCase()}` === key
         );
-
         if (existingIndex === -1) {
           acc.push(token);
         } else {
-          // إذا ظهرت العملة في أكثر من DEX، نحتفظ بالزوج صاحب السيولة الأعلى.
           const existing = acc[existingIndex];
           if (token.liquidity > existing.liquidity) {
             acc[existingIndex] = token;
           }
         }
-
         return acc;
       }, []);
 
       const filteredTokens = applyTokenFilter(uniqueTokens);
-
       setSearchResults(filteredTokens.slice(0, 200));
       setAllFetchedTokens(filteredTokens);
 
@@ -639,24 +466,134 @@ export function ScalperConfigPage() {
         const networkLabel = networkFilter === 'all'
           ? 'جميع الشبكات'
           : (networkOptions.find(n => n.value === networkFilter)?.name || getNetworkName(networkFilter));
-
-        await addLog(
-          'SUCCESS',
-          `✅ تم اكتشاف ${filteredTokens.length} عملة حقيقية من ${networkLabel}`
-        );
+        await addLog('SUCCESS', `✅ تم اكتشاف ${filteredTokens.length} عملة حقيقية من ${networkLabel}`);
       }
     } catch (error) {
       console.error('❌ فشل اكتشاف العملات:', error);
-      setSearchError(
-        `❌ فشل اكتشاف العملات: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`
-      );
+      setSearchError(`❌ فشل اكتشاف العملات: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
     } finally {
       setSearchLoading(false);
     }
   };
 
+  const handleSearchTokens = async (networkFilter: string = selectedNetworkFilter) => {
+    const query = searchQuery.trim();
+    if (!query) {
+      setSearchError('❌ الرجاء إدخال رمز أو عنوان العملة');
+      return;
+    }
+
+    setSearchLoading(true);
+    setSearchError(null);
+    setSearchResults([]);
+
+    try {
+      const response = await fetch(
+        `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`
+      );
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const data = await response.json();
+      const pairs = Array.isArray(data.pairs) ? data.pairs : [];
+
+      const filtered = networkFilter === 'all'
+        ? pairs
+        : pairs.filter((p: any) =>
+            String(p.chainId || '').toLowerCase() === networkFilter.toLowerCase()
+          );
+
+      const results = filtered
+        .filter((p: any) => p.baseToken?.address)
+        .map((p: any) => {
+          const chainId = String(p.chainId || 'unknown').toLowerCase();
+          const networkOption = networkOptions.find(n => n.value === chainId);
+          return {
+            symbol: p.baseToken.symbol || 'UNKNOWN',
+            name: (p.baseToken.name &&
+              p.baseToken.name.toLowerCase() !== getNetworkName(chainId).toLowerCase())
+              ? p.baseToken.name
+              : (p.baseToken.symbol || 'Unknown'),
+            address: p.baseToken.address || '',
+            price: parseFloat(p.priceUsd || 0),
+            priceDisplay: `$${parseFloat(p.priceUsd || 0).toFixed(6)}`,
+            change: parseFloat(p.priceChange?.h24 || 0),
+            changeDisplay: `${parseFloat(p.priceChange?.h24 || 0).toFixed(2)}%`,
+            liquidity: Number(p.liquidity?.usd || 0),
+            volume: Number(p.volume?.h24 || 0),
+            dexId: p.dexId || '',
+            url: p.url || '',
+            network: chainId,
+            networkName: networkOption?.name || getNetworkName(chainId) || chainId,
+            networkIcon: networkOption?.icon || getNetworkIcon(chainId) || '🌐',
+            networkColor: networkOption?.color || getNetworkColor(chainId) || '#64748b',
+            pairCreatedAt: p.pairCreatedAt || Date.now(),
+          };
+        });
+
+      const uniqueResults = results.reduce((acc: any[], token: any) => {
+        const key = `${token.network}:${token.address.toLowerCase()}`;
+        const existingIndex = acc.findIndex(
+          t => `${t.network}:${String(t.address).toLowerCase()}` === key
+        );
+        if (existingIndex === -1) {
+          acc.push(token);
+        } else if (token.liquidity > acc[existingIndex].liquidity) {
+          acc[existingIndex] = token;
+        }
+        return acc;
+      }, []);
+
+      const filteredResults = applyTokenFilter(uniqueResults);
+      setSearchResults(filteredResults);
+      setAllFetchedTokens(filteredResults);
+
+      if (filteredResults.length > 0) {
+        const networkLabel = networkFilter === 'all'
+          ? 'جميع الشبكات'
+          : (networkOptions.find(n => n.value === networkFilter)?.name || getNetworkName(networkFilter));
+        await addLog('SUCCESS', `✅ تم العثور على ${filteredResults.length} عملة على ${networkLabel}`);
+      } else {
+        setSearchError(
+          networkFilter === 'all'
+            ? `❌ لم يتم العثور على "${query}"`
+            : `❌ لم يتم العثور على "${query}" على ${getNetworkName(networkFilter)}`
+        );
+      }
+    } catch (error) {
+      console.error('❌ فشل البحث:', error);
+      setSearchError(`❌ فشل البحث: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const applyTokenFilter = (tokens: any[]) => {
+    const uniqueTokens = [...tokens];
+    switch (tokenFilter) {
+      case 'good':
+        return uniqueTokens.filter(t =>
+          t.liquidity > 50000 && t.change > 0 && t.volume > 100000
+        );
+      case 'new': {
+        const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+        return uniqueTokens.filter(t => t.pairCreatedAt > oneDayAgo);
+      }
+      case 'volume':
+        return [...uniqueTokens].sort((a, b) => b.volume - a.volume);
+      case 'liquid':
+        return [...uniqueTokens].sort((a, b) => b.liquidity - a.liquidity);
+      case 'momentum':
+        return uniqueTokens
+          .filter(t => t.change > 10 && t.volume > 50000 && t.liquidity > 20000)
+          .sort((a, b) => b.change - a.change);
+      default:
+        return uniqueTokens;
+    }
+  };
+
   // ============================================================
-  // 🧠 تحليل Gemini AI
+  // 🧠 تحليل Gemini AI (معدل)
   // ============================================================
   const handleAIAnalysis = async () => {
     if (!config.targetToken || !config.targetTokenAddress) {
@@ -671,8 +608,26 @@ export function ScalperConfigPage() {
     try {
       const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
       
-      const tokenData = await fetchTokenData(config.targetToken, config.network);
+      // ✅ استخدم العنوان مباشرة بدلاً من الرمز
+      const dexResponse = await fetch(
+        `https://api.dexscreener.com/latest/dex/search?q=${config.targetTokenAddress}`
+      );
+      const dexData = await dexResponse.json();
       
+      let tokenData = null;
+      if (dexData.pairs && dexData.pairs.length > 0) {
+        const pair = dexData.pairs.find((p: any) => p.chainId === config.network);
+        if (pair) {
+          tokenData = {
+            price: parseFloat(pair.priceUsd || 0),
+            imageUrl: getTokenImageUrl(pair),
+            liquidity: pair.liquidity?.usd || 0,
+            volume: pair.volume?.h24 || 0,
+            priceChange: pair.priceChange?.h24 || 0,
+          };
+        }
+      }
+
       if (!tokenData) {
         setAiError('❌ لا توجد بيانات كافية للتحليل');
         setAiLoading(false);
@@ -708,9 +663,6 @@ export function ScalperConfigPage() {
     }
   };
 
-  // ============================================================
-  // 📊 تحليل شامل للعملة (AI + حيتان + مؤشرات)
-  // ============================================================
   const handleFullAnalysis = async () => {
     await Promise.all([
       handleAIAnalysis(),
@@ -722,11 +674,14 @@ export function ScalperConfigPage() {
   // 📝 اختيار عملة من نتائج البحث
   // ============================================================
   const selectTokenFromSearch = (token: any) => {
+    const network = String(token.network || config.network).toLowerCase();
+    
     setConfig({
       ...config,
       targetToken: token.symbol,
       targetTokenAddress: token.address,
-      network: String(token.network || config.network).toLowerCase(),
+      targetTokenImageUrl: token.imageUrl || '',
+      network: network,
       isManualToken: false,
     });
     setCustomTokenInput(token.symbol);
@@ -736,7 +691,19 @@ export function ScalperConfigPage() {
     setAiAnalysis(null);
     setAiError(null);
     setWhaleData(null);
-    addLog('SUCCESS', `✅ تم اختيار العملة ${token.symbol} على ${getNetworkName(token.network || config.network)}`);
+    
+    // ✅ إنشاء محفظة للشبكة المختارة تلقائياً
+    if (scalperBot) {
+      createWalletForBot(scalperBot.id, network, user?.id || '')
+        .then(result => {
+          if (result.success) {
+            addLog('SUCCESS', `💰 تم إنشاء محفظة لـ ${getNetworkName(network)} تلقائياً`);
+          }
+        })
+        .catch(() => {});
+    }
+    
+    addLog('SUCCESS', `✅ تم اختيار العملة ${token.symbol} على ${getNetworkName(network)}`);
   };
 
   // ============================================================
@@ -750,7 +717,7 @@ export function ScalperConfigPage() {
   };
 
   // ============================================================
-  // 💾 حفظ الإعدادات
+  // 💾 حفظ الإعدادات (مع إنشاء محفظة تلقائي)
   // ============================================================
   const handleSave = async () => {
     if (!user?.id || !scalperBot) {
@@ -777,8 +744,21 @@ export function ScalperConfigPage() {
         config: JSON.stringify({
           ...config,
           controlMode,
+          tradeMode,
         }),
       }, user.id);
+
+      // ✅ إنشاء محفظة للشبكة المختارة تلقائياً
+      try {
+        const walletResult = await createWalletForBot(scalperBot.id, config.network, user.id);
+        if (walletResult.success) {
+          await addLog('SUCCESS', `💰 تم إنشاء محفظة لـ ${getNetworkName(config.network)} تلقائياً`);
+        } else {
+          await addLog('INFO', `ℹ️ محفظة ${getNetworkName(config.network)} موجودة مسبقاً`);
+        }
+      } catch (walletError) {
+        console.warn('⚠️ فشل إنشاء المحفظة التلقائية:', walletError);
+      }
 
       setSaveSuccess(true);
       await addLog('SUCCESS', `✅ تم حفظ إعدادات Scalper X للعملة ${config.targetToken} على ${getNetworkName(config.network)}`);
@@ -813,6 +793,75 @@ export function ScalperConfigPage() {
   };
 
   // ============================================================
+  // 🖐️ تنفيذ صفقة يدوية فورية (شراء/بيع)
+  // ============================================================
+  const handleManualTrade = async (side: 'buy' | 'sell') => {
+    if (!user?.id || !scalperBot) {
+      await addLog('ERROR', '❌ لا يوجد بوت Scalper');
+      return;
+    }
+
+    if (!config.targetToken || !config.targetTokenAddress) {
+      await addLog('ERROR', '❌ الرجاء اختيار عملة أولاً');
+      return;
+    }
+
+    const amount = manualTradeAmount || config.amountPerTrade || 50;
+    
+    setIsExecutingTrade(true);
+    try {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+      
+      const response = await fetch(`${WORKER_URL}/execute-trade?userId=${user.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botId: scalperBot.id,
+          side: side,
+          tokenAddress: config.targetTokenAddress,
+          amountUsd: amount,
+          tokenSymbol: config.targetToken,
+          network: config.network,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        await addLog('SUCCESS', `✅ تم ${side === 'buy' ? 'شراء' : 'بيع'} ${amount}$ من ${config.targetToken} بنجاح`);
+        // تحديث قائمة الصفقات المفتوحة
+        await loadOpenTrades();
+      } else {
+        await addLog('ERROR', `❌ فشل ${side === 'buy' ? 'الشراء' : 'البيع'}: ${result.error}`);
+      }
+    } catch (error) {
+      await addLog('ERROR', `❌ فشل تنفيذ الصفقة: ${error}`);
+    } finally {
+      setIsExecutingTrade(false);
+    }
+  };
+
+  // ============================================================
+  // 📊 جلب الصفقات المفتوحة
+  // ============================================================
+  const loadOpenTrades = async () => {
+    if (!user?.id || !scalperBot) return;
+    
+    setLoadingTrades(true);
+    try {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+      const response = await fetch(`${WORKER_URL}/open-trades?botId=${scalperBot.id}&userId=${user.id}`);
+      const result = await response.json();
+      if (result.success && result.data) {
+        setOpenTrades(result.data.filter((t: any) => t.is_open === 1));
+      }
+    } catch (error) {
+      console.error('❌ فشل جلب الصفقات المفتوحة:', error);
+    } finally {
+      setLoadingTrades(false);
+    }
+  };
+
+  // ============================================================
   // 🔄 تحميل البوت
   // ============================================================
   const scalperBot = botInstances.find(b => b.bot_type === 'scalper');
@@ -829,14 +878,17 @@ export function ScalperConfigPage() {
         const savedConfig = JSON.parse(scalperBot.config);
         setConfig(prev => ({ ...prev, ...savedConfig }));
         setIsRunning(scalperBot.status === 'running');
-        if (savedConfig.controlMode) {
-          setControlMode(savedConfig.controlMode);
-        }
-      } catch {
-        // استخدام الإعدادات الافتراضية
-      }
+        if (savedConfig.controlMode) setControlMode(savedConfig.controlMode);
+        if (savedConfig.tradeMode) setTradeMode(savedConfig.tradeMode);
+      } catch { /* استخدام الإعدادات الافتراضية */ }
     }
   }, [scalperBot]);
+
+  useEffect(() => {
+    if (scalperBot && user?.id) {
+      loadOpenTrades();
+    }
+  }, [scalperBot, user]);
 
   // ============================================================
   // 📥 جلب العملات عند تغيير الشبكة أو الفلتر
@@ -870,7 +922,7 @@ export function ScalperConfigPage() {
             <span className="text-sm font-normal text-[#64748b]">تداول سريع ذكي</span>
           </h2>
           <p className="text-sm text-[#64748b] mt-1">
-            تداول سريع على <span className="text-[#f97316] font-medium">أي عملة</span> من <span className="text-white font-medium">9 شبكات</span> مع صفقات متعددة
+            تداول سريع على <span className="text-[#f97316] font-medium">أي عملة</span> من الشبكات المتاحة مع صفقات متعددة
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -917,32 +969,34 @@ export function ScalperConfigPage() {
       )}
 
       {/* ✅ أزرار التحكم (AI / يدوي) */}
-      <div className="flex gap-3">
-        <button 
-          onClick={() => setControlMode('ai')}
-          className={`flex-1 px-4 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-            controlMode === 'ai' 
-              ? 'bg-[#8b5cf6] text-white shadow-lg shadow-[#8b5cf6]/20' 
-              : 'bg-[#1e1e2f] text-[#94a3b8] hover:text-white'
-          }`}
-        >
-          <BrainCircuit className="w-5 h-5" />
-          🧠 وضع الذكاء الاصطناعي
-          <span className="text-xs opacity-60">(Gemini AI)</span>
-        </button>
-        <button 
-          onClick={() => setControlMode('manual')}
-          className={`flex-1 px-4 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-            controlMode === 'manual' 
-              ? 'bg-[#3b82f6] text-white shadow-lg shadow-[#3b82f6]/20' 
-              : 'bg-[#1e1e2f] text-[#94a3b8] hover:text-white'
-          }`}
-        >
-          <Settings2 className="w-5 h-5" />
-          🖐️ وضع يدوي
-          <span className="text-xs opacity-60">(تحكم كامل)</span>
-        </button>
-      </div>
+      {scalperBot && (
+        <div className="flex gap-3">
+          <button 
+            onClick={() => setControlMode('ai')}
+            className={`flex-1 px-4 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+              controlMode === 'ai' 
+                ? 'bg-[#8b5cf6] text-white shadow-lg shadow-[#8b5cf6]/20' 
+                : 'bg-[#1e1e2f] text-[#94a3b8] hover:text-white'
+            }`}
+          >
+            <BrainCircuit className="w-5 h-5" />
+            🧠 وضع الذكاء الاصطناعي
+            <span className="text-xs opacity-60">(Gemini AI)</span>
+          </button>
+          <button 
+            onClick={() => setControlMode('manual')}
+            className={`flex-1 px-4 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+              controlMode === 'manual' 
+                ? 'bg-[#3b82f6] text-white shadow-lg shadow-[#3b82f6]/20' 
+                : 'bg-[#1e1e2f] text-[#94a3b8] hover:text-white'
+            }`}
+          >
+            <Settings2 className="w-5 h-5" />
+            🖐️ وضع يدوي
+            <span className="text-xs opacity-60">(تحكم كامل)</span>
+          </button>
+        </div>
+      )}
 
       {/* حالة البوت */}
       {scalperBot && (
@@ -955,7 +1009,7 @@ export function ScalperConfigPage() {
               </div>
               <div>
                 <p className="text-xs text-[#64748b]">العملة المستهدفة</p>
-                <p className="text-sm font-medium text-[#f97316]">{config.targetToken}</p>
+                <p className="text-sm font-medium text-[#f97316]">{config.targetToken || '—'}</p>
               </div>
               <div>
                 <p className="text-xs text-[#64748b]">الشبكة</p>
@@ -983,293 +1037,422 @@ export function ScalperConfigPage() {
       )}
 
       {/* ============================================================
-          🎯 اختيار العملة
+          🎯 اختيار العملة (نسخة مبسطة)
       ============================================================ */}
-      <GlassCard className="p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Search className="w-5 h-5 text-[#f97316]" />
-            <h3 className="text-sm font-semibold text-white">🎯 اختيار العملة المستهدفة</h3>
-            <span className="text-xs text-[#64748b]">(ابحث في 9 شبكات)</span>
-          </div>
-          <div className="flex gap-2">
+      {scalperBot && (
+        <GlassCard className="p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Search className="w-5 h-5 text-[#f97316]" />
+              <h3 className="text-sm font-semibold text-white">🎯 اختيار العملة المستهدفة</h3>
+              <span className="text-xs text-[#64748b]">(اختر من الشبكات المتاحة)</span>
+            </div>
             <Button 
               variant="scalper" 
               size="sm"
               icon={<Globe className="w-4 h-4" />}
-              onClick={() => {
-                setShowTokenSearch(true);
-              }}
+              onClick={() => setShowTokenSearch(true)}
             >
               🔍 تصفح العملات
             </Button>
           </div>
-        </div>
 
-        {/* اختيار الشبكة + العملة */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm text-[#94a3b8] block mb-1">🌐 الشبكة</label>
-            <select
-              value={config.network}
-              onChange={(e) => {
-                const newNetwork = e.target.value;
-                setConfig({ ...config, network: newNetwork });
-                const suggestions = SUGGESTED_TOKENS[newNetwork] || [];
-                if (suggestions.length > 0 && !config.isManualToken) {
-                  setConfig({
-                    ...config,
-                    network: newNetwork,
-                    targetToken: suggestions[0].value,
-                    targetTokenAddress: suggestions[0].address,
-                    isManualToken: false,
-                  });
-                  setCustomTokenInput(suggestions[0].value);
-                }
-                setAiAnalysis(null);
-                setAiError(null);
-                setWhaleData(null);
-              }}
-              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-            >
-              {networkOptions.map((n) => (
-                <option key={n.value} value={n.value}>
-                  {n.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-[10px] text-[#64748b] mt-1">🌍 اختر الشبكة التي ستتداول عليها</p>
-          </div>
+          {/* عرض العملة المختارة (بدون قوائم) */}
+          {config.targetToken && config.targetTokenAddress ? (
+            <div className="p-4 bg-[#0a0a0f] rounded-xl border border-[#f97316]/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-[#0d151c] border border-white/10 overflow-hidden flex items-center justify-center flex-shrink-0">
+                    {config.targetTokenImageUrl ? (
+                      <img
+                        src={config.targetTokenImageUrl}
+                        alt={config.targetToken}
+                        className="w-full h-full object-cover"
+                        loading="eager"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <span className="text-sm font-bold text-[#f97316]">{config.targetToken.slice(0, 3)}</span>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-white">
+                      العملة المختارة: <span className="text-[#f97316]">{config.targetToken}</span>
+                      <span className="text-xs text-[#64748b] ml-2">({getNetworkName(config.network)})</span>
+                    </p>
+                    {config.targetTokenAddress && (
+                      <div className="flex items-center gap-1">
+                        <p className="text-[10px] font-mono text-[#64748b] truncate max-w-[200px]">
+                          {config.targetTokenAddress.slice(0, 12)}...{config.targetTokenAddress.slice(-8)}
+                        </p>
+                        <button 
+                          onClick={() => copyToClipboard(config.targetTokenAddress, `عنوان ${config.targetToken}`)}
+                          className="p-0.5 hover:bg-slate-700 rounded transition-colors"
+                        >
+                          {copiedAddress === config.targetTokenAddress ? (
+                            <CheckCircle className="w-3 h-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3 h-3 text-slate-500 hover:text-white" />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <Button 
+                  variant="secondary" 
+                  size="sm"
+                  onClick={() => setShowTokenSearch(true)}
+                  icon={<RefreshCw className="w-4 h-4" />}
+                >
+                  تغيير
+                </Button>
+              </div>
 
-          <div>
-            <label className="text-sm text-[#94a3b8] block mb-1">💰 العملة</label>
-            <div className="flex gap-2">
-              <select
-                value={config.isManualToken ? '__manual__' : config.targetToken}
-                onChange={(e) => {
-                  if (e.target.value === '__manual__') {
-                    setConfig({ ...config, isManualToken: true });
-                    return;
-                  }
-                  const suggestions = SUGGESTED_TOKENS[config.network] || [];
-                  const found = suggestions.find(t => t.value === e.target.value);
-                  if (found) {
-                    setConfig({
-                      ...config,
-                      targetToken: found.value,
-                      targetTokenAddress: found.address,
-                      isManualToken: false,
-                    });
-                    setCustomTokenInput('');
-                    setAiAnalysis(null);
-                    setAiError(null);
-                    setWhaleData(null);
-                  }
-                }}
-                className="flex-1 bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-              >
-                <option value="">-- اختر عملة --</option>
-                {(SUGGESTED_TOKENS[config.network] || []).map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-                <option value="__manual__">✏️ عملة مخصصة...</option>
-              </select>
+              {/* 🧠 تحليل Gemini */}
+              {aiLoading && (
+                <div className="mt-3 p-3 bg-[#8b5cf6]/5 border border-[#8b5cf6]/20 rounded-xl flex items-center justify-center gap-3">
+                  <Loader2 className="w-4 h-4 text-[#8b5cf6] animate-spin" />
+                  <p className="text-xs text-[#94a3b8]">🧠 Gemini AI يحلل {config.targetToken}...</p>
+                </div>
+              )}
+
+              {aiError && (
+                <div className="mt-3 p-2 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                  <p className="text-xs text-red-400">{aiError}</p>
+                </div>
+              )}
+
+              {aiAnalysis && (
+                <div className="mt-3 p-3 bg-[#8b5cf6]/5 border border-[#8b5cf6]/30 rounded-xl">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <BrainCircuit className="w-4 h-4 text-[#8b5cf6]" />
+                      <h4 className="text-xs font-semibold text-white">🧠 تحليل الذكاء الاصطناعي</h4>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                      aiAnalysis.recommendation === 'strong_buy' || aiAnalysis.recommendation === 'buy' 
+                        ? 'bg-emerald-500/20 text-emerald-400' 
+                        : aiAnalysis.recommendation === 'sell' || aiAnalysis.recommendation === 'strong_sell'
+                        ? 'bg-red-500/20 text-red-400'
+                        : 'bg-amber-500/20 text-amber-400'
+                    }`}>
+                      {aiAnalysis.recommendation === 'strong_buy' ? '🟢 شراء قوي' :
+                       aiAnalysis.recommendation === 'buy' ? '🟢 شراء' :
+                       aiAnalysis.recommendation === 'hold' ? '🟡 احتفاظ' :
+                       aiAnalysis.recommendation === 'sell' ? '🔴 بيع' : '🔴 بيع قوي'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#94a3b8] leading-relaxed">{aiAnalysis.summary}</p>
+                  <div className="grid grid-cols-3 gap-2 mt-2">
+                    <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
+                      <p className="text-[8px] text-[#64748b]">الثقة</p>
+                      <p className="text-xs font-bold text-[#8b5cf6]">{aiAnalysis.confidence}%</p>
+                    </div>
+                    <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
+                      <p className="text-[8px] text-[#64748b]">المخاطرة</p>
+                      <p className={`text-xs font-bold ${
+                        aiAnalysis.riskLevel === 'low' ? 'text-emerald-400' :
+                        aiAnalysis.riskLevel === 'medium' ? 'text-amber-400' : 'text-red-400'
+                      }`}>
+                        {aiAnalysis.riskLevel === 'low' ? 'منخفضة' :
+                         aiAnalysis.riskLevel === 'medium' ? 'متوسطة' : 'عالية'}
+                      </p>
+                    </div>
+                    <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
+                      <p className="text-[8px] text-[#64748b]">السعر المستهدف</p>
+                      <p className="text-xs font-bold text-white">${aiAnalysis.priceTarget?.toFixed(6) || '—'}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="p-4 bg-[#0a0a0f] rounded-xl border border-dashed border-[#1e1e2f] text-center">
+              <p className="text-sm text-[#64748b]">⚠️ لم يتم اختيار عملة بعد</p>
               <Button 
-                variant="secondary" 
+                variant="scalper" 
                 size="sm"
-                onClick={() => {
-                  setShowTokenSearch(true);
-                }}
+                className="mt-2"
+                onClick={() => setShowTokenSearch(true)}
                 icon={<Search className="w-4 h-4" />}
               >
-                بحث
+                🔍 تصفح العملات
               </Button>
             </div>
-            <p className="text-[10px] text-[#64748b] mt-1">🔍 ابحث عن أي عملة على الشبكة المختارة</p>
-          </div>
-        </div>
-
-        {/* حقل عنوان العقد */}
-        {config.isManualToken && (
-          <div className="mt-4 pt-4 border-t border-[#1e1e2f]">
-            <label className="text-sm text-[#94a3b8] block mb-1">
-              📋 عنوان العقد (Token Address) 
-              <span className="text-[#ef4444] text-xs ml-1">* مطلوب للعملات المخصصة</span>
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={config.targetTokenAddress}
-                onChange={(e) => setConfig({ ...config, targetTokenAddress: e.target.value })}
-                placeholder="أدخل عنوان العقد (مثال: 0x... أو So111...) "
-                className="flex-1 bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white placeholder-[#64748b] focus:outline-none focus:border-[#f97316] transition-colors font-mono text-xs"
-              />
-              <button
-                onClick={() => setConfig({ ...config, targetTokenAddress: '' })}
-                className="px-3 py-2.5 bg-[#1e1e2f] hover:bg-[#2a2a3f] text-[#94a3b8] rounded-xl transition-colors"
-              >
-                ✕
-              </button>
-            </div>
-            <p className="text-[10px] text-[#64748b] mt-1">⚠️ عنوان العقد ضروري لتحديد العملة بدقة</p>
-          </div>
-        )}
-
-        {/* عرض العملة المختارة مع تحليل شامل */}
-        <div className="mt-4 p-3 bg-[#0a0a0f] rounded-xl">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-[#f97316]/20 flex items-center justify-center">
-                <Zap className="w-4 h-4 text-[#f97316]" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-white">
-                  العملة المختارة: <span className="text-[#f97316]">{config.targetToken}</span>
-                  <span className="text-xs text-[#64748b] ml-2">({getNetworkName(config.network)})</span>
-                </p>
-                {config.targetTokenAddress && (
-                  <div className="flex items-center gap-1">
-                    <p className="text-[10px] font-mono text-[#64748b] truncate max-w-[200px]">
-                      {config.targetTokenAddress.slice(0, 12)}...{config.targetTokenAddress.slice(-8)}
-                    </p>
-                    <button 
-                      onClick={() => copyToClipboard(config.targetTokenAddress, `عنوان ${config.targetToken}`)}
-                      className="p-0.5 hover:bg-slate-700 rounded transition-colors"
-                    >
-                      {copiedAddress === config.targetTokenAddress ? (
-                        <CheckCircle className="w-3 h-3 text-emerald-400" />
-                      ) : (
-                        <Copy className="w-3 h-3 text-slate-500 hover:text-white" />
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-            <Button
-              variant="ai"
-              size="sm"
-              onClick={handleFullAnalysis}
-              disabled={aiLoading || whaleLoading}
-              icon={aiLoading || whaleLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BrainCircuit className="w-4 h-4" />}
-            >
-              {aiLoading || whaleLoading ? 'جاري التحليل...' : '🧠 تحليل شامل'}
-            </Button>
-          </div>
-
-          {/* ============================================================
-              🧠 نتائج تحليل Gemini
-          ============================================================ */}
-          {aiLoading && (
-            <div className="mt-3 p-3 bg-[#8b5cf6]/5 border border-[#8b5cf6]/20 rounded-xl flex items-center justify-center gap-3">
-              <Loader2 className="w-4 h-4 text-[#8b5cf6] animate-spin" />
-              <p className="text-xs text-[#94a3b8]">🧠 Gemini AI يحلل {config.targetToken}...</p>
-            </div>
           )}
-
-          {aiError && (
-            <div className="mt-3 p-2 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <p className="text-xs text-red-400">{aiError}</p>
-            </div>
-          )}
-
-          {aiAnalysis && (
-            <div className="mt-3 p-3 bg-[#8b5cf6]/5 border border-[#8b5cf6]/30 rounded-xl">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <BrainCircuit className="w-4 h-4 text-[#8b5cf6]" />
-                  <h4 className="text-xs font-semibold text-white">🧠 تحليل الذكاء الاصطناعي</h4>
-                </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full ${
-                  aiAnalysis.recommendation === 'strong_buy' || aiAnalysis.recommendation === 'buy' 
-                    ? 'bg-emerald-500/20 text-emerald-400' 
-                    : aiAnalysis.recommendation === 'sell' || aiAnalysis.recommendation === 'strong_sell'
-                    ? 'bg-red-500/20 text-red-400'
-                    : 'bg-amber-500/20 text-amber-400'
-                }`}>
-                  {aiAnalysis.recommendation === 'strong_buy' ? '🟢 شراء قوي' :
-                   aiAnalysis.recommendation === 'buy' ? '🟢 شراء' :
-                   aiAnalysis.recommendation === 'hold' ? '🟡 احتفاظ' :
-                   aiAnalysis.recommendation === 'sell' ? '🔴 بيع' : '🔴 بيع قوي'}
-                </span>
-              </div>
-              
-              <p className="text-xs text-[#94a3b8] leading-relaxed">{aiAnalysis.summary}</p>
-              
-              <div className="grid grid-cols-3 gap-2 mt-2">
-                <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
-                  <p className="text-[8px] text-[#64748b]">الثقة</p>
-                  <p className="text-xs font-bold text-[#8b5cf6]">{aiAnalysis.confidence}%</p>
-                </div>
-                <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
-                  <p className="text-[8px] text-[#64748b]">المخاطرة</p>
-                  <p className={`text-xs font-bold ${
-                    aiAnalysis.riskLevel === 'low' ? 'text-emerald-400' :
-                    aiAnalysis.riskLevel === 'medium' ? 'text-amber-400' : 'text-red-400'
-                  }`}>
-                    {aiAnalysis.riskLevel === 'low' ? 'منخفضة' :
-                     aiAnalysis.riskLevel === 'medium' ? 'متوسطة' : 'عالية'}
-                  </p>
-                </div>
-                <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
-                  <p className="text-[8px] text-[#64748b]">السعر المستهدف</p>
-                  <p className="text-xs font-bold text-white">${aiAnalysis.priceTarget?.toFixed(6) || '—'}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ============================================================
-              🐋 بيانات الحيتان
-          ============================================================ */}
-          {whaleLoading && (
-            <div className="mt-3 p-3 bg-[#f97316]/5 border border-[#f97316]/20 rounded-xl flex items-center justify-center gap-3">
-              <Loader2 className="w-4 h-4 text-[#f97316] animate-spin" />
-              <p className="text-xs text-[#94a3b8]">🐋 جاري تحليل نشاط الحيتان...</p>
-            </div>
-          )}
-
-          {whaleError && (
-            <div className="mt-3 p-2 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <p className="text-xs text-red-400">{whaleError}</p>
-            </div>
-          )}
-
-          {whaleData && (
-            <div className="mt-3 p-3 bg-[#f97316]/5 border border-[#f97316]/30 rounded-xl">
-              <div className="flex items-center gap-2 mb-2">
-                <Users className="w-4 h-4 text-[#f97316]" />
-                <h4 className="text-xs font-semibold text-white">🐋 نشاط الحيتان</h4>
-              </div>
-              <div className="grid grid-cols-4 gap-2">
-                <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
-                  <p className="text-[8px] text-[#64748b]">إجمالي الحيتان</p>
-                  <p className="text-xs font-bold text-white">{whaleData.totalWhales}</p>
-                </div>
-                <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
-                  <p className="text-[8px] text-[#64748b]">نسبة الحيتان</p>
-                  <p className="text-xs font-bold text-white">{whaleData.whalePercentage.toFixed(1)}%</p>
-                </div>
-                <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
-                  <p className="text-[8px] text-[#64748b]">أكبر حوت</p>
-                  <p className="text-xs font-bold text-white">${(whaleData.topWhaleBalance / 1000).toFixed(1)}K</p>
-                </div>
-                <div className="bg-[#0a0a0f] rounded-lg p-2 text-center">
-                  <p className="text-[8px] text-[#64748b]">إجمالي المقتنيات</p>
-                  <p className="text-xs font-bold text-white">{whaleData.accounts}</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </GlassCard>
+        </GlassCard>
+      )}
 
       {/* ============================================================
-          🆕 نافذة البحث عن العملات (Modal) - معدل بالكامل
+          🔄 تبديل وضع التداول (آلي / يدوي فوري)
+      ============================================================ */}
+      {scalperBot && (
+        <div className="flex items-center gap-4 p-4 bg-[#0a0a0f] rounded-xl border border-[#1e1e2f]">
+          <span className="text-sm text-[#94a3b8]">📊 وضع التداول:</span>
+          <button
+            onClick={() => setTradeMode('auto')}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              tradeMode === 'auto'
+                ? 'bg-[#f97316] text-white shadow-lg shadow-[#f97316]/20'
+                : 'bg-[#1e1e2f] text-[#94a3b8] hover:text-white'
+            }`}
+          >
+            🤖 آلي (حسب الشروط)
+          </button>
+          <button
+            onClick={() => setTradeMode('manual')}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              tradeMode === 'manual'
+                ? 'bg-[#3b82f6] text-white shadow-lg shadow-[#3b82f6]/20'
+                : 'bg-[#1e1e2f] text-[#94a3b8] hover:text-white'
+            }`}
+          >
+            🖐️ يدوي (فوري)
+          </button>
+        </div>
+      )}
+
+      {/* ============================================================
+          🖐️ أزرار الشراء والبيع (تظهر فقط في الوضع اليدوي)
+      ============================================================ */}
+      {scalperBot && tradeMode === 'manual' && (
+        <div className="space-y-3">
+          <div className="flex gap-3 p-4 bg-[#0a0a0f] rounded-xl border border-[#3b82f6]/30">
+            <div className="flex-1">
+              <label className="text-xs text-[#94a3b8] block mb-1">💰 المبلغ لكل صفقة ($)</label>
+              <input
+                type="number"
+                value={manualTradeAmount}
+                onChange={(e) => setManualTradeAmount(Number(e.target.value))}
+                min="1"
+                step="5"
+                className="w-full bg-[#1e1e2f] border border-[#2a2a3f] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#3b82f6] transition-colors"
+              />
+            </div>
+            <div className="flex-1 flex items-end gap-2">
+              <Button
+                variant="success"
+                size="lg"
+                className="flex-1"
+                onClick={() => handleManualTrade('buy')}
+                disabled={isExecutingTrade || !config.targetTokenAddress}
+                icon={isExecutingTrade ? <Loader2 className="w-4 h-4 animate-spin" /> : <TrendingUp className="w-4 h-4" />}
+              >
+                {isExecutingTrade ? 'جاري...' : '🟢 شراء'}
+              </Button>
+              <Button
+                variant="danger"
+                size="lg"
+                className="flex-1"
+                onClick={() => handleManualTrade('sell')}
+                disabled={isExecutingTrade || !config.targetTokenAddress}
+                icon={isExecutingTrade ? <Loader2 className="w-4 h-4 animate-spin" /> : <TrendingDown className="w-4 h-4" />}
+              >
+                {isExecutingTrade ? 'جاري...' : '🔴 بيع'}
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs text-[#64748b] text-center">
+            💡 يمكنك فتح <span className="text-white font-medium">أكثر من صفقة</span> في نفس الوقت، كل ضغطة على "شراء" تنشئ صفقة جديدة مستقلة
+          </p>
+        </div>
+      )}
+
+      {/* ============================================================
+          📊 الصفقات المفتوحة (عددها + عرض سريع)
+      ============================================================ */}
+      {scalperBot && (
+        <div className="flex items-center gap-4 p-3 bg-[#0a0a0f] rounded-xl border border-[#1e1e2f]">
+          <div className="flex items-center gap-2">
+            <ListOrdered className="w-4 h-4 text-[#f97316]" />
+            <span className="text-sm text-[#94a3b8]">الصفقات المفتوحة:</span>
+            <span className="text-sm font-bold text-white">{openTrades.length}</span>
+          </div>
+          <button
+            onClick={loadOpenTrades}
+            className="text-xs text-[#64748b] hover:text-white transition-colors flex items-center gap-1"
+          >
+            <RefreshCw className={`w-3 h-3 ${loadingTrades ? 'animate-spin' : ''}`} />
+            تحديث
+          </button>
+          {openTrades.length > 0 && (
+            <div className="text-xs text-[#64748b] flex-1 text-left truncate">
+              آخر صفقة: {openTrades[0]?.token_symbol || '—'} | 
+              السعر: ${openTrades[0]?.price?.toFixed(4) || '—'} | 
+              الكمية: {openTrades[0]?.amount?.toFixed(2) || '—'}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ============================================================
+          ⚙️ الإعدادات الأخرى
+      ============================================================ */}
+      {scalperBot && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">المبلغ الإجمالي ($)</label>
+            <input
+              type="number"
+              value={config.totalAmountUsd}
+              onChange={(e) => setConfig({ ...config, totalAmountUsd: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">المبلغ الكامل المخصص للتداول</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">المبلغ لكل صفقة ($)</label>
+            <input
+              type="number"
+              value={config.amountPerTrade}
+              onChange={(e) => setConfig({ ...config, amountPerTrade: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">المبلغ المستخدم في كل صفقة</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">أقصى صفقات مفتوحة</label>
+            <input
+              type="number"
+              value={config.maxOpenTrades}
+              onChange={(e) => setConfig({ ...config, maxOpenTrades: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">عدد الصفقات التي يمكن فتحها معاً</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">نسبة الانخفاض للشراء (%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={config.buyThreshold}
+              onChange={(e) => setConfig({ ...config, buyThreshold: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">مثال: -2% يعني شراء عند انخفاض 2%</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">نسبة الربح المستهدف (%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={config.takeProfit}
+              onChange={(e) => setConfig({ ...config, takeProfit: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">يغلق الصفقة عند تحقيق هذه النسبة</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">وقف الخسارة (%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={config.stopLoss}
+              onChange={(e) => setConfig({ ...config, stopLoss: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">يغلق الصفقة عند هذه الخسارة</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">وقف متحرك (%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={config.trailingStop}
+              onChange={(e) => setConfig({ ...config, trailingStop: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">يتبع السعر عند الارتفاع لحماية الأرباح</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">مدة الصفقة القصوى (ساعات)</label>
+            <input
+              type="number"
+              value={config.maxTradeDuration}
+              onChange={(e) => setConfig({ ...config, maxTradeDuration: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">تغلق الصفقة تلقائياً بعد هذه المدة</p>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <label className="text-sm text-[#94a3b8] block mb-1">الفاصل بين الصفقات (دقائق)</label>
+            <input
+              type="number"
+              value={config.minTradeInterval}
+              onChange={(e) => setConfig({ ...config, minTradeInterval: Number(e.target.value) })}
+              className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
+            />
+            <p className="text-[10px] text-[#64748b] mt-1">أقل فترة بين صفقتين متتاليتين</p>
+          </GlassCard>
+        </div>
+      )}
+
+      {/* ============================================================
+          🚀 أزرار الإجراء
+      ============================================================ */}
+      {scalperBot && (
+        <div className="flex flex-wrap gap-4">
+          <Button 
+            variant="scalper" 
+            size="lg"
+            onClick={handleSave}
+            disabled={isSaving}
+            icon={isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          >
+            {isSaving ? 'جاري الحفظ...' : '💾 حفظ الإعدادات'}
+          </Button>
+
+          <Button 
+            variant={isRunning ? 'danger' : 'success'} 
+            size="lg"
+            onClick={handleStartStop}
+            icon={isRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+          >
+            {isRunning ? '⏹️ إيقاف البوت' : '▶️ تشغيل البوت'}
+          </Button>
+        </div>
+      )}
+
+      {/* ============================================================
+          ℹ️ معلومات إضافية
+      ============================================================ */}
+      {scalperBot && (
+        <GlassCard className="p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full bg-[#f97316]/20 flex items-center justify-center flex-shrink-0">
+              <Zap className="w-4 h-4 text-[#f97316]" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-white">كيف يعمل Scalper X؟</p>
+              <ul className="text-xs text-[#64748b] mt-1 space-y-1 list-disc list-inside">
+                <li>يراقب سعر <span className="text-[#f97316] font-medium">{config.targetToken || 'العملة المختارة'}</span> على شبكة <span className="text-white font-medium">{getNetworkName(config.network)}</span></li>
+                <li>يشتري عند انخفاض السعر بنسبة <span className="text-white">{Math.abs(config.buyThreshold)}%</span></li>
+                <li>يبيع عند تحقيق ربح <span className="text-[#10b981]">{config.takeProfit}%</span> أو خسارة <span className="text-[#ef4444]">{Math.abs(config.stopLoss)}%</span></li>
+                <li>يمكن فتح <span className="text-white">{config.maxOpenTrades}</span> صفقات على نفس العملة</li>
+                <li>يغلق الصفقات تلقائياً بعد <span className="text-white">{config.maxTradeDuration}</span> ساعة</li>
+              </ul>
+              <p className="text-[10px] text-[#64748b] mt-2">
+                🔄 البوت يعمل كل 30 ثانية لاكتشاف فرص جديدة
+              </p>
+            </div>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* ============================================================
+          🔍 مودال البحث عن العملات (مبسط)
       ============================================================ */}
       {showTokenSearch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -1279,20 +1462,20 @@ export function ScalperConfigPage() {
               <div className="flex items-center gap-2">
                 <Search className="w-5 h-5 text-[#f97316]" />
                 <h3 className="text-lg font-bold text-white">🔍 تصفح العملات</h3>
-                <span className="text-xs text-[#64748b]">من 9 شبكات</span>
+                <span className="text-xs text-[#64748b]">من الشبكات المتاحة</span>
               </div>
               <button 
                 onClick={() => {
-                setShowTokenSearch(false);
-                setIsNetworkFilterOpen(false);
-              }}
+                  setShowTokenSearch(false);
+                  setIsNetworkFilterOpen(false);
+                }}
                 className="text-[#64748b] hover:text-white transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Search Bar + Filter */}
+            {/* Search Bar */}
             <div className="p-4 border-b border-[#1e1e2f]">
               <div className="flex flex-wrap gap-2">
                 <div className="flex-1 min-w-[200px]">
@@ -1306,9 +1489,6 @@ export function ScalperConfigPage() {
                   />
                 </div>
                 
-                {/* ✅ قائمة الشبكات المنسدلة المخصصة
-                    لا نستخدم <select> هنا لأن المتصفح لا يضمن عرض
-                    الألوان/الأيقونات داخل <option>. */}
                 <div className="relative min-w-[190px]">
                   <button
                     type="button"
@@ -1392,7 +1572,7 @@ export function ScalperConfigPage() {
                 
                 <Button 
                   variant="scalper"
-                  onClick={handleSearchTokens}
+                  onClick={() => handleSearchTokens()}
                   disabled={searchLoading}
                   icon={searchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                 >
@@ -1400,7 +1580,7 @@ export function ScalperConfigPage() {
                 </Button>
                 <Button 
                   variant="secondary"
-                  onClick={fetchAllTokens}
+                  onClick={() => fetchAllTokens()}
                   disabled={searchLoading}
                   icon={<RefreshCw className={`w-4 h-4 ${searchLoading ? 'animate-spin' : ''}`} />}
                 >
@@ -1408,7 +1588,7 @@ export function ScalperConfigPage() {
                 </Button>
               </div>
               
-              {/* فلتر العملات */}
+              {/* Filters */}
               <div className="flex flex-wrap items-center gap-2 mt-3">
                 <span className="text-xs text-[#64748b] flex items-center gap-1">
                   <Filter className="w-3 h-3" />
@@ -1485,22 +1665,13 @@ export function ScalperConfigPage() {
                     {networkOptions.find(n => n.value === selectedNetworkFilter)?.label}
                   </span>
                 )}
-                {tokenFilter !== 'all' && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-[#f97316]/20 text-[#f97316]">
-                    {tokenFilter === 'good' ? '⭐ جيدة' :
-                     tokenFilter === 'new' ? '🆕 جديدة' :
-                     tokenFilter === 'volume' ? '📈 حجم' :
-                     tokenFilter === 'liquid' ? '💧 سيولة' :
-                     tokenFilter === 'momentum' ? '⚡ زخم' : ''}
-                  </span>
-                )}
               </div>
               {searchError && (
                 <p className="text-xs text-red-400 mt-2">{searchError}</p>
               )}
             </div>
 
-            {/* Results - مع عرض اسم الشبكة الصحيح */}
+            {/* Results */}
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
               {searchResults.length === 0 && !searchLoading && !searchError && (
                 <div className="text-center py-12">
@@ -1541,24 +1712,36 @@ export function ScalperConfigPage() {
                     }`}
                   >
                     <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-white font-bold text-xs"
-                           style={{ backgroundColor: networkColor || '#f97316' }}>
-                        {token.symbol?.slice(0, 2) || '??'}
+                      <div
+                        className="w-11 h-11 rounded-full overflow-hidden flex items-center justify-center flex-shrink-0 text-white font-bold text-xs border border-white/10 bg-[#101923]"
+                        style={{ boxShadow: `0 0 0 1px ${networkColor}20` }}
+                      >
+                        {token.imageUrl ? (
+                          <img
+                            src={token.imageUrl}
+                            alt={token.symbol || 'token'}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                              const parent = e.currentTarget.parentElement;
+                              if (parent) {
+                                parent.textContent = (token.symbol?.slice(0, 2) || '??').toUpperCase();
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span>{token.symbol?.slice(0, 2) || '??'}</span>
+                        )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="font-medium text-white text-sm">{token.symbol}</p>
                           <p className="text-xs text-[#94a3b8] truncate max-w-[150px]">{token.name}</p>
-                          
-                          {/* ✅ عرض الشبكة بشكل واضح مع الأيقونة واللون */}
                           <span className="text-[8px] px-1.5 py-0.5 rounded font-medium"
-                                style={{ 
-                                  backgroundColor: `${networkColor}30`, 
-                                  color: networkColor 
-                                }}>
+                                style={{ backgroundColor: `${networkColor}30`, color: networkColor }}>
                             {networkIcon} {networkName}
                           </span>
-                          
                           {isGood && (
                             <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">⭐ جيدة</span>
                           )}
@@ -1570,12 +1753,8 @@ export function ScalperConfigPage() {
                           )}
                         </div>
                         <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                          <span className="text-[10px] text-[#94a3b8]">
-                            💰 ${(token.liquidity / 1000).toFixed(1)}K
-                          </span>
-                          <span className="text-[10px] text-[#94a3b8]">
-                            📊 ${(token.volume / 1000).toFixed(1)}K
-                          </span>
+                          <span className="text-[10px] text-[#94a3b8]">💰 ${(token.liquidity / 1000).toFixed(1)}K</span>
+                          <span className="text-[10px] text-[#94a3b8]">📊 ${(token.volume / 1000).toFixed(1)}K</span>
                           <button 
                             onClick={(e) => { e.stopPropagation(); copyToClipboard(token.address, `عنوان ${token.symbol}`); }}
                             className="p-0.5 hover:bg-slate-700 rounded transition-colors"
@@ -1600,169 +1779,12 @@ export function ScalperConfigPage() {
               })}
             </div>
 
-            {/* Footer */}
             <div className="p-3 border-t border-[#1e1e2f] text-xs text-[#64748b] text-center">
               💡 اضغط على أي عملة لاختيارها كهدف للبوت
             </div>
           </div>
         </div>
       )}
-
-      {/* ============================================================
-          ⚙️ الإعدادات الأخرى
-      ============================================================ */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">المبلغ الإجمالي ($)</label>
-          <input
-            type="number"
-            value={config.totalAmountUsd}
-            onChange={(e) => setConfig({ ...config, totalAmountUsd: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">المبلغ الكامل المخصص للتداول</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">المبلغ لكل صفقة ($)</label>
-          <input
-            type="number"
-            value={config.amountPerTrade}
-            onChange={(e) => setConfig({ ...config, amountPerTrade: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">المبلغ المستخدم في كل صفقة</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">أقصى صفقات مفتوحة</label>
-          <input
-            type="number"
-            value={config.maxOpenTrades}
-            onChange={(e) => setConfig({ ...config, maxOpenTrades: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">عدد الصفقات التي يمكن فتحها معاً</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">نسبة الانخفاض للشراء (%)</label>
-          <input
-            type="number"
-            step="0.1"
-            value={config.buyThreshold}
-            onChange={(e) => setConfig({ ...config, buyThreshold: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">مثال: -2% يعني شراء عند انخفاض 2%</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">نسبة الربح المستهدف (%)</label>
-          <input
-            type="number"
-            step="0.1"
-            value={config.takeProfit}
-            onChange={(e) => setConfig({ ...config, takeProfit: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">يغلق الصفقة عند تحقيق هذه النسبة</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">وقف الخسارة (%)</label>
-          <input
-            type="number"
-            step="0.1"
-            value={config.stopLoss}
-            onChange={(e) => setConfig({ ...config, stopLoss: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">يغلق الصفقة عند هذه الخسارة</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">وقف متحرك (%)</label>
-          <input
-            type="number"
-            step="0.1"
-            value={config.trailingStop}
-            onChange={(e) => setConfig({ ...config, trailingStop: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">يتبع السعر عند الارتفاع لحماية الأرباح</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">مدة الصفقة القصوى (ساعات)</label>
-          <input
-            type="number"
-            value={config.maxTradeDuration}
-            onChange={(e) => setConfig({ ...config, maxTradeDuration: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">تغلق الصفقة تلقائياً بعد هذه المدة</p>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <label className="text-sm text-[#94a3b8] block mb-1">الفاصل بين الصفقات (دقائق)</label>
-          <input
-            type="number"
-            value={config.minTradeInterval}
-            onChange={(e) => setConfig({ ...config, minTradeInterval: Number(e.target.value) })}
-            className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#f97316] transition-colors"
-          />
-          <p className="text-[10px] text-[#64748b] mt-1">أقل فترة بين صفقتين متتاليتين</p>
-        </GlassCard>
-      </div>
-
-      {/* ============================================================
-          🚀 أزرار الإجراء
-      ============================================================ */}
-      <div className="flex flex-wrap gap-4">
-        <Button 
-          variant="scalper" 
-          size="lg"
-          onClick={handleSave}
-          disabled={isSaving}
-          icon={isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-        >
-          {isSaving ? 'جاري الحفظ...' : '💾 حفظ الإعدادات'}
-        </Button>
-
-        <Button 
-          variant={isRunning ? 'danger' : 'success'} 
-          size="lg"
-          onClick={handleStartStop}
-          icon={isRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-        >
-          {isRunning ? '⏹️ إيقاف البوت' : '▶️ تشغيل البوت'}
-        </Button>
-      </div>
-
-      {/* ============================================================
-          ℹ️ معلومات إضافية
-      ============================================================ */}
-      <GlassCard className="p-4">
-        <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-full bg-[#f97316]/20 flex items-center justify-center flex-shrink-0">
-            <Zap className="w-4 h-4 text-[#f97316]" />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-white">كيف يعمل Scalper X؟</p>
-            <ul className="text-xs text-[#64748b] mt-1 space-y-1 list-disc list-inside">
-              <li>يراقب سعر <span className="text-[#f97316] font-medium">{config.targetToken}</span> على شبكة <span className="text-white font-medium">{getNetworkName(config.network)}</span></li>
-              <li>يشتري عند انخفاض السعر بنسبة <span className="text-white">{Math.abs(config.buyThreshold)}%</span></li>
-              <li>يبيع عند تحقيق ربح <span className="text-[#10b981]">{config.takeProfit}%</span> أو خسارة <span className="text-[#ef4444]">{Math.abs(config.stopLoss)}%</span></li>
-              <li>يمكن فتح <span className="text-white">{config.maxOpenTrades}</span> صفقات على نفس العملة</li>
-              <li>يغلق الصفقات تلقائياً بعد <span className="text-white">{config.maxTradeDuration}</span> ساعة</li>
-            </ul>
-            <p className="text-[10px] text-[#64748b] mt-2">
-              🔄 البوت يعمل كل 30 ثانية لاكتشاف فرص جديدة
-            </p>
-          </div>
-        </div>
-      </GlassCard>
     </div>
   );
 }

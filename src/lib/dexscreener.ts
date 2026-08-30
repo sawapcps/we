@@ -10,7 +10,7 @@ interface DexResponse {
 }
 
 // ============================================================
-// ? ÇäÏèÇä ÇäÃÓÇÓêÉ
+// ? Ø§Ù„Ø¯ÙˆØ§Ù„ Ø§Ù„Ø£Ø³Ø§Ø³ÙŠØ©
 // ============================================================
 
 export async function searchPairs(query: string): Promise<TokenPair[]> {
@@ -53,12 +53,12 @@ export async function searchByNetwork(network: ChainId): Promise<TokenPair[]> {
 }
 
 // ============================================================
-// ? ÏÇäÉ ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ åæ DexScreener
+// ? Ø¯Ø§Ù„Ø© Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© Ù…Ù† DexScreener
 // ============================================================
 
 export async function getNewPairsFromDex(network: ChainId): Promise<TokenPair[]> {
   try {
-    // ? ÇäÈÍË Ùæ ÙåäÇÊ ÌÏêÏÉ ÈÇÓÊÎÏÇå ãäåÇÊ åáÊÇÍêÉ
+    // ? Ø§Ù„Ø¨Ø­Ø« Ø¹Ù† Ø¹Ù…Ù„Ø§Øª Ø¬Ø¯ÙŠØ¯Ø© Ø¨Ø§Ø³ØªØ®Ø¯Ø§Ù… ÙƒÙ„Ù…Ø§Øª Ù…ÙØªØ§Ø­ÙŠØ©
     const queries = ['new', 'launch', 'recent', 'just launched', '24h'];
     let allPairs: TokenPair[] = [];
     
@@ -67,11 +67,11 @@ export async function getNewPairsFromDex(network: ChainId): Promise<TokenPair[]>
         const results = await searchPairs(`${query} ${network}`);
         allPairs = [...allPairs, ...results];
       } catch (e) {
-        // ÊÌÇçä ÇäÃÎ×ÇÁ
+        // ØªØ¬Ø§Ù‡Ù„ Ø§Ù„Ø£Ø®Ø·Ø§Ø¡
       }
     }
     
-    // ? ÅÒÇäÉ ÇäåãÑÑÇÊ
+    // ? Ø¥Ø²Ø§Ù„Ø© Ø§Ù„Ù…ÙƒØ±Ø±Ø§Øª
     const seen = new Set<string>();
     const unique = allPairs.filter(p => {
       const key = `${p.chainId}:${p.pairAddress}`;
@@ -80,7 +80,7 @@ export async function getNewPairsFromDex(network: ChainId): Promise<TokenPair[]>
       return true;
     });
     
-    // ? áäÊÑ ÇäÙåäÇÊ ÇäÌÏêÏÉ (Ãâä åæ 24 ÓÇÙÉ)
+    // ? ÙÙ„ØªØ± Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© (Ø£Ù‚Ù„ Ù…Ù† 24 Ø³Ø§Ø¹Ø©)
     const now = Date.now();
     return unique.filter(p => {
       if (!p.pairCreatedAt) return false;
@@ -89,13 +89,13 @@ export async function getNewPairsFromDex(network: ChainId): Promise<TokenPair[]>
     });
     
   } catch (error) {
-    console.error('? áÔä ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ åæ DexScreener:', error);
+    console.error('? ÙØ´Ù„ Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© Ù…Ù† DexScreener:', error);
     return [];
   }
 }
 
 // ============================================================
-// ? ÏÇäÉ ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ ÌÏÇë (Ãâä åæ ÓÇÙÉ)
+// ? Ø¯Ø§Ù„Ø© Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© Ø¬Ø¯Ø§Ù‹ (Ø£Ù‚Ù„ Ù…Ù† Ø³Ø§Ø¹Ø©)
 // ============================================================
 
 export async function getVeryNewPairs(network: ChainId): Promise<TokenPair[]> {
@@ -108,7 +108,7 @@ export async function getVeryNewPairs(network: ChainId): Promise<TokenPair[]> {
         const results = await searchPairs(`${query} ${network}`);
         allPairs = [...allPairs, ...results];
       } catch (e) {
-        // ÊÌÇçä ÇäÃÎ×ÇÁ
+        // ØªØ¬Ø§Ù‡Ù„ Ø§Ù„Ø£Ø®Ø·Ø§Ø¡
       }
     }
     
@@ -120,22 +120,22 @@ export async function getVeryNewPairs(network: ChainId): Promise<TokenPair[]> {
       return true;
     });
     
-    // ? áäÊÑ ÇäÙåäÇÊ ÇäÌÏêÏÉ ÌÏÇë (Ãâä åæ ÓÇÙÉ)
+    // ? ÙÙ„ØªØ± Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© Ø¬Ø¯Ø§Ù‹ (Ø£Ù‚Ù„ Ù…Ù† Ø³Ø§Ø¹Ø©)
     const now = Date.now();
     return unique.filter(p => {
       if (!p.pairCreatedAt) return false;
       const ageMinutes = (now - p.pairCreatedAt) / (1000 * 60);
-      return ageMinutes < 60; // Ãâä åæ ÓÇÙÉ
+      return ageMinutes < 60; // Ø£Ù‚Ù„ Ù…Ù† Ø³Ø§Ø¹Ø©
     });
     
   } catch (error) {
-    console.error('? áÔä ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ ÌÏÇë:', error);
+    console.error('? ÙØ´Ù„ Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© Ø¬Ø¯Ø§Ù‹:', error);
     return [];
   }
 }
 
 // ============================================================
-// ? ÏèÇä discovery ÇäÃÕäêÉ
+// ? Ø¯ÙˆØ§Ù„ discovery Ø§Ù„Ø£ØµÙ„ÙŠØ©
 // ============================================================
 
 export interface NetworkDiscoveryResult {

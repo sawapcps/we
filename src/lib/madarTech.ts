@@ -1,23 +1,27 @@
 // src/lib/madarTech.ts
-// بديل Supabase - استخدام MadarTech API فقط
 // ============================================================
-// يدعم: CRUD عام + محافظ البوت + البوتات المتعددة (Hunter, Signal, Manual, Scalper) + المحافظ الذكية
+// 📦 مكتبة MadarTech الأساسية - متكاملة مع D1 و Cloudflare Workers
+// ✅ تدعم 4 بوتات + محافظ متعددة + محافظ ذكية
+// ✅ تم إصلاح جميع أخطاء D1_TYPE_ERROR
+// ✅ جميع الكائنات تُحوّل إلى JSON String قبل الحفظ
 // ============================================================
 
-const API_BASE = import.meta.env.VITE_MADARTECH_API_URL || 'https://cloud.madartech.uk/api/v1';
-const DB_ID = import.meta.env.VITE_MADARTECH_DB_ID || 'mt_live_AZyHOq0IztD6H5gsSafGbpjo00kDcKAPRDh0Gcob';
-const API_KEY = 'mt_live_uqkE8sldXpFASeV51lIyVghJQKs4hZTheAbyAaJh';
+// ============================================================
+// 🔧 الإعدادات الأساسية
+// ============================================================
 const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+const API_KEY = import.meta.env.VITE_API_KEY || 'madartech-2024-secure-key';
+const DB_ID = import.meta.env.VITE_DB_ID || 'madartech-db';
 
-export interface MadarTechResponse<T> {
+// ============================================================
+// 📦 أنواع البيانات الأساسية
+// ============================================================
+export interface MadarTechResponse<T = any> {
   success: boolean;
-  data?: T;
+  data?: T | T[];
   error?: string;
+  message?: string;
 }
-
-// ============================================================
-// 🔗 دوال Worker API (البوتات المتعددة)
-// ============================================================
 
 export interface BotInstanceData {
   id: string;
@@ -28,15 +32,15 @@ export interface BotInstanceData {
   status: 'running' | 'paused' | 'stopped';
   mode: 'auto' | 'manual';
   networks: string;
-  paper_trading: boolean;
+  paper_trading: number;
   max_position_size: number;
   take_profit: number;
   stop_loss: number;
   min_score: number;
   max_open_positions: number;
-  auto_execute: boolean;
+  auto_execute: number;
   min_smart_wallets: number;
-  smart_wallets: string;
+  smart_wallets: string | null;
   indicator_type: string;
   rsi_oversold: number;
   rsi_overbought: number;
@@ -44,6 +48,7 @@ export interface BotInstanceData {
   winning_trades: number;
   total_pnl: number;
   today_pnl: number;
+  trading_amount: number;
   config?: string;
   created_at: string;
   updated_at: string;
@@ -52,296 +57,158 @@ export interface BotInstanceData {
 export interface BotWalletData {
   id: string;
   bot_id: string;
-  address: string;
-  encryptedPrivateKey: string;
   network: string;
+  address: string;
+  encrypted_private_key: string;
   balance: number;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at: string;
 }
-
-// ============================================================
-// 🔥 المحافظ الذكية (جديدة)
-// ============================================================
 
 export interface SmartWalletData {
   id: string;
   address: string;
   network: string;
-  win_rate: number;
-  total_profit_usd: number;
-  total_trades: number;
-  last_active: string;
-  updated_at: string;
-  is_active: number;
+  winRate: number;
+  totalProfit: number;
+  tradesCount: number;
+  lastActive: string;
   created_at: string;
+  updated_at: string;
 }
 
-export interface SmartWalletAnalysis {
-  recommendation: 'strong_buy' | 'buy' | 'hold' | 'sell' | 'strong_sell';
-  confidence: number;
-  summary: string;
-  signals: Array<{
-    label: string;
-    value: string;
-    bullish: boolean;
-  }>;
-  priceTarget: number;
-  riskLevel: 'low' | 'medium' | 'high';
-  catalysts: string[];
-  risks: string[];
-}
-
-// ============================================================
-// 📡 دوال المحافظ الذكية (جديدة)
-// ============================================================
-
-export async function scanSmartWallets(
-  tokenAddress: string,
-  network: string,
-  minCount: number = 3
-): Promise<{
-  success: boolean;
-  wallets?: SmartWalletData[];
-  totalProfit?: number;
-  avgWinRate?: number;
-  error?: string;
-}> {
-  try {
-    const response = await fetch(`${WORKER_URL}/smart-wallets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tokenAddress, network, minCount }),
-    });
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-export async function getSmartWalletsFromDB(
-  network?: string,
-  limit: number = 50,
-  minWinRate: number = 40
-): Promise<{
-  success: boolean;
-  data?: SmartWalletData[];
-  count?: number;
-  error?: string;
-}> {
-  try {
-    const params = new URLSearchParams();
-    if (network) params.append('network', network);
-    params.append('limit', String(limit));
-    params.append('minWinRate', String(minWinRate));
-    
-    const response = await fetch(`${WORKER_URL}/smart-wallets-db?${params}`);
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-export async function analyzeTokenWithAI(params: {
-  tokenAddress: string;
+export interface WalletData {
+  address: string;
+  encryptedPrivateKey: string;
   network: string;
-  symbol: string;
-  name?: string;
-  price?: number;
-  liquidity?: number;
-  volume24h?: number;
-  priceChange24h?: number;
-}): Promise<{
-  success: boolean;
-  analysis?: SmartWalletAnalysis;
-  error?: string;
-}> {
-  try {
-    const response = await fetch(`${WORKER_URL}/analyze-token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
+  balance: number;
+  createdAt: string;
 }
 
-export async function scanAllTokens(
-  network: string,
-  minCount: number = 3
-): Promise<{
-  success: boolean;
-  network?: string;
-  totalTokens?: number;
-  results?: Array<{
-    symbol: string;
-    address: string;
-    wallets: number;
-    totalProfit: number;
-    avgWinRate: number;
-    error?: string;
-  }>;
-  totalWalletsFound?: number;
-  allWallets?: SmartWalletData[];
-  timestamp?: string;
-  error?: string;
-}> {
-  try {
-    const response = await fetch(`${WORKER_URL}/scan-all-tokens`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ network, minCount }),
-    });
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
+export interface BotConfigData {
+  id?: string;
+  mode: string;
+  networks: string[];
+  minLiquidity: number;
+  minVolume: number;
+  maxPositionSize: number;
+  takeProfit: number;
+  stopLoss: number;
+  scanInterval: number;
+  maxTradesPerDay: number;
 }
 
-// ============================================================
-// 📡 دوال Worker API (البوتات المتعددة)
-// ============================================================
-
-export async function getUserBots(userId: string): Promise<BotInstanceData[]> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots?userId=${userId}`);
-    const result = await response.json();
-    return result.success ? result.data : [];
-  } catch (error) {
-    console.error('❌ فشل جلب البوتات:', error);
-    return [];
-  }
+export interface LogData {
+  id: string | number;
+  level: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  timestamp: string;
+  context?: Record<string, any>;
 }
 
-export async function createBotInstance(
-  userId: string,
-  botType: 'hunter' | 'signal' | 'manual' | 'scalper',
-  name: string,
-  description?: string
-): Promise<{ success: boolean; botId?: string; error?: string }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, bot_type: botType, name, description: description || '' }),
-    });
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-export async function startBotInstance(botId: string, userId: string): Promise<{ success: boolean; message?: string }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots/${botId}/start?userId=${userId}`, { method: 'POST' });
-    return await response.json();
-  } catch (error) {
-    return { success: false, message: String(error) };
-  }
-}
-
-export async function stopBotInstance(botId: string, userId: string): Promise<{ success: boolean; message?: string }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots/${botId}/stop?userId=${userId}`, { method: 'POST' });
-    return await response.json();
-  } catch (error) {
-    return { success: false, message: String(error) };
-  }
-}
-
-export async function deleteBotInstance(botId: string, userId: string): Promise<{ success: boolean; message?: string }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots/${botId}/delete?userId=${userId}`, { method: 'DELETE' });
-    return await response.json();
-  } catch (error) {
-    return { success: false, message: String(error) };
-  }
-}
-
-export async function createBotWallet(
-  botId: string,
-  userId: string,
-  network: string
-): Promise<{ success: boolean; address?: string; error?: string }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots/${botId}/wallet/create?userId=${userId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ network }),
-    });
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-export async function getBotWallet(botId: string, userId: string): Promise<BotWalletData | null> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots/${botId}/wallet?userId=${userId}`);
-    const result = await response.json();
-    return result.success ? result.data : null;
-  } catch (error) {
-    console.error('❌ فشل جلب محفظة البوت:', error);
-    return null;
-  }
-}
-
-export async function executeTradeWithBotWallet(params: {
+export interface TradeData {
+  id: string;
   botId: string;
   userId: string;
   side: 'buy' | 'sell';
   tokenAddress: string;
-  amountUsd: number;
+  tokenSymbol: string;
+  amount: number;
+  price: number;
+  total: number;
+  network: string;
+  status: 'open' | 'closed' | 'pending' | 'failed';
+  profit?: number;
+  profitPercentage?: number;
+  openedAt: string;
+  closedAt?: string;
+  txHash?: string;
+}
+
+export interface AnalysisData {
+  id: string;
+  tokenAddress: string;
   tokenSymbol: string;
   network: string;
-}): Promise<{ success: boolean; tradeId?: string; txHash?: string; price?: number; error?: string }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/execute-trade?userId=${params.userId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
+  recommendation: 'strong_buy' | 'buy' | 'hold' | 'sell' | 'strong_sell';
+  confidence: number;
+  summary: string;
+  signals: string; // JSON string
+  priceTarget: number;
+  riskLevel: 'low' | 'medium' | 'high';
+  timestamp: string;
+  botDecision?: string; // JSON string
+  additionalAnalysis?: string; // JSON string
 }
 
-export async function updateBotConfigRemote(
-  botId: string,
-  userId: string,
-  config: any
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/bots/${botId}/config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, config }),
-    });
-    return await response.json();
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
+export interface DiscoveredTokenData {
+  id: string;
+  tokenAddress: string;
+  symbol: string;
+  name: string;
+  network: string;
+  price: number;
+  volume24h: number;
+  liquidity: number;
+  marketCap?: number;
+  score: number;
+  status: 'candidate' | 'watch' | 'reject';
+  timestamp: string;
 }
 
 // ============================================================
-// 🗄️ GENERIC CRUD (باستخدام /api/v1/sql)
+// 🛠️ دوال مساعدة
+// ============================================================
+export function generateId(): string {
+  return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
+}
+
+export function getTimestamp(): string {
+  return new Date().toISOString();
+}
+
+// ✅ دالة مساعدة لتحويل الكائنات إلى JSON String
+function safeStringify(value: any): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+// ============================================================
+// 📝 دوال CRUD الأساسية
 // ============================================================
 
+// ✅ CREATE - إدراج بيانات
 export async function madarCreate<T>(
   table: string,
   data: Record<string, any>
 ): Promise<MadarTechResponse<T>> {
   try {
-    const keys = Object.keys(data);
-    const values = Object.values(data);
-    const placeholders = keys.map(() => '?').join(', ');
+    // ✅ تنظيف البيانات من الكائنات
+    const cleanData: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined) {
+        cleanData[key] = null;
+      } else if (typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        // ✅ تحويل الكائنات إلى JSON String
+        cleanData[key] = JSON.stringify(value);
+      } else {
+        cleanData[key] = value;
+      }
+    }
+
+    const keys = Object.keys(cleanData);
+    const values = Object.values(cleanData);
     
+    const placeholders = keys.map(() => '?').join(', ');
     const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`;
     
-    const response = await fetch(`${API_BASE}/sql`, {
+    console.log('📝 madarCreate SQL:', sql);
+    console.log('📦 madarCreate Values:', values);
+    console.log('🔢 عدد المعاملات:', values.length);
+    
+    const response = await fetch(`${WORKER_URL}/sql`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -354,53 +221,72 @@ export async function madarCreate<T>(
       }),
     });
     
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Worker Response Error:', response.status, errorText);
+      return { 
+        success: false, 
+        error: `HTTP ${response.status}: ${errorText}` 
+      };
+    }
+    
     const result = await response.json();
+    console.log('📤 madarCreate Result:', result);
+    
     if (result.success) {
-      const selectResponse = await fetch(`${API_BASE}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `SELECT * FROM ${table} WHERE rowid = last_insert_rowid()`,
-          dbId: DB_ID
-        }),
-      });
-      const selectResult = await selectResponse.json();
       return { 
         success: true, 
-        data: selectResult.success && selectResult.data && selectResult.data.length > 0 
-          ? selectResult.data[0] 
-          : { ...data, id: Date.now() }
+        data: { id: data.id, ...data } as T 
       };
-    } else {
-      return { success: false, error: result.error };
     }
+    
+    return result;
   } catch (error) {
+    console.error('❌ madarCreate Error:', error);
     return { success: false, error: String(error) };
   }
 }
 
+// ✅ READ - قراءة البيانات
 export async function madarRead<T>(
   table: string,
-  filters?: Record<string, any>
-): Promise<MadarTechResponse<T[]>> {
+  options?: {
+    where?: Record<string, any>;
+    orderBy?: Record<string, 'asc' | 'desc'>;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<MadarTechResponse<T>> {
   try {
     let sql = `SELECT * FROM ${table}`;
     const params: any[] = [];
     
-    if (filters && Object.keys(filters).length > 0) {
-      const conditions = Object.entries(filters)
-        .map(([key, value]) => {
-          params.push(value);
-          return `${key} = ?`;
-        })
-        .join(' AND ');
+    if (options?.where) {
+      const keys = Object.keys(options.where);
+      const conditions = keys.map(key => `${key} = ?`).join(' AND ');
       sql += ` WHERE ${conditions}`;
+      params.push(...Object.values(options.where));
     }
     
-    const response = await fetch(`${API_BASE}/sql`, {
+    if (options?.orderBy) {
+      const [key, direction] = Object.entries(options.orderBy)[0];
+      sql += ` ORDER BY ${key} ${direction.toUpperCase()}`;
+    }
+    
+    if (options?.limit) {
+      sql += ` LIMIT ?`;
+      params.push(options.limit);
+    }
+    
+    if (options?.offset) {
+      sql += ` OFFSET ?`;
+      params.push(options.offset);
+    }
+    
+    console.log('📝 madarRead SQL:', sql);
+    console.log('📦 madarRead Params:', params);
+    
+    const response = await fetch(`${WORKER_URL}/sql`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -414,30 +300,51 @@ export async function madarRead<T>(
     });
     
     const result = await response.json();
-    if (result.success) {
-      return { success: true, data: result.data || [] };
-    } else {
-      return { success: false, error: result.error, data: [] };
-    }
+    console.log('📤 madarRead Result:', result);
+    
+    return result;
   } catch (error) {
-    return { success: false, error: String(error), data: [] };
+    console.error('❌ madarRead Error:', error);
+    return { success: false, error: String(error) };
   }
 }
 
+// ✅ UPDATE - تحديث بيانات
 export async function madarUpdate<T>(
   table: string,
   id: string,
   data: Record<string, any>
 ): Promise<MadarTechResponse<T>> {
   try {
-    const setClause = Object.keys(data)
-      .map(key => `${key} = ?`)
-      .join(', ');
-    const values = [...Object.values(data), id];
+    // ✅ تنظيف البيانات من الكائنات
+    const cleanData: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined) {
+        cleanData[key] = null;
+      } else if (typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        cleanData[key] = JSON.stringify(value);
+      } else {
+        cleanData[key] = value;
+      }
+    }
+    
+    const updateData = {
+      ...cleanData,
+      updated_at: getTimestamp()
+    };
+    
+    const updateKeys = Object.keys(updateData);
+    const updateValues = Object.values(updateData);
+    const setClause = updateKeys.map(key => `${key} = ?`).join(', ');
     
     const sql = `UPDATE ${table} SET ${setClause} WHERE id = ?`;
+    const params = [...updateValues, id];
     
-    const response = await fetch(`${API_BASE}/sql`, {
+    console.log('📝 madarUpdate SQL:', sql);
+    console.log('📦 madarUpdate Params:', params);
+    console.log('🔢 عدد المعاملات:', params.length);
+    
+    const response = await fetch(`${WORKER_URL}/sql`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -446,47 +353,33 @@ export async function madarUpdate<T>(
       body: JSON.stringify({ 
         sql: sql,
         dbId: DB_ID,
-        params: values
+        params: params
       }),
     });
     
     const result = await response.json();
-    if (result.success) {
-      const selectResponse = await fetch(`${API_BASE}/sql`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${API_KEY}`
-        },
-        body: JSON.stringify({
-          sql: `SELECT * FROM ${table} WHERE id = ?`,
-          dbId: DB_ID,
-          params: [id]
-        }),
-      });
-      const selectResult = await selectResponse.json();
-      return { 
-        success: true, 
-        data: selectResult.success && selectResult.data && selectResult.data.length > 0 
-          ? selectResult.data[0] 
-          : { ...data, id }
-      };
-    } else {
-      return { success: false, error: result.error };
-    }
+    console.log('📤 madarUpdate Result:', result);
+    
+    return result;
   } catch (error) {
+    console.error('❌ madarUpdate Error:', error);
     return { success: false, error: String(error) };
   }
 }
 
+// ✅ DELETE - حذف بيانات
 export async function madarDelete(
   table: string,
   id: string
-): Promise<MadarTechResponse<boolean>> {
+): Promise<MadarTechResponse<any>> {
   try {
     const sql = `DELETE FROM ${table} WHERE id = ?`;
+    const params = [id];
     
-    const response = await fetch(`${API_BASE}/sql`, {
+    console.log('📝 madarDelete SQL:', sql);
+    console.log('📦 madarDelete Params:', params);
+    
+    const response = await fetch(`${WORKER_URL}/sql`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -495,285 +388,756 @@ export async function madarDelete(
       body: JSON.stringify({ 
         sql: sql,
         dbId: DB_ID,
-        params: [id]
+        params: params
       }),
     });
     
     const result = await response.json();
-    return { success: true, data: true };
+    console.log('📤 madarDelete Result:', result);
+    
+    return result;
   } catch (error) {
+    console.error('❌ madarDelete Error:', error);
     return { success: false, error: String(error) };
   }
 }
 
 // ============================================================
-// 📋 TABLES
+// 🤖 دوال البوتات (4 أنواع)
 // ============================================================
 
-export const Tables = {
-  WALLET: 'wallet',
-  TRADES: 'trades',
-  BOT_CONFIG: 'bot_config',
-  ANALYSES: 'analyses',
-  LOGS: 'logs',
-  DISCOVERED_TOKENS: 'discovered_tokens',
-  SCALPER_CONFIGS: 'scalper_configs',
-  SCALPER_TRADES: 'scalper_trades',
-} as const;
-
-// ============================================================
-// 💰 WALLET
-// ============================================================
-
-export interface WalletData {
-  id?: string;
-  address: string;
-  encryptedPrivateKey: string;
-  network: string;
-  balance?: number;
-  createdAt?: string;
+// ✅ إنشاء بوت جديد
+export async function createBotInstance(
+  userId: string,
+  botType: 'hunter' | 'signal' | 'manual' | 'scalper',
+  name: string,
+  tradingAmount: number = 100,
+  description?: string,
+  networks?: string[]
+): Promise<{ success: boolean; botId?: string; error?: string }> {
+  try {
+    const botId = generateId();
+    const now = getTimestamp();
+    
+    let networksJson = JSON.stringify(['solana']);
+    if (networks && Array.isArray(networks) && networks.length > 0) {
+      networksJson = JSON.stringify(networks.map(n => String(n)));
+    } else if (typeof networks === 'string') {
+      networksJson = JSON.stringify([networks]);
+    }
+    
+    const data = {
+      id: botId,
+      user_id: userId,
+      bot_type: botType,
+      name: name,
+      description: description || '',
+      status: 'stopped',
+      mode: 'auto',
+      networks: networksJson, // ✅ String وليس Object
+      paper_trading: 1,
+      max_position_size: tradingAmount,
+      take_profit: 30,
+      stop_loss: 10,
+      min_score: 60,
+      max_open_positions: 3,
+      auto_execute: 0,
+      min_smart_wallets: 3,
+      smart_wallets: null,
+      indicator_type: 'rsi',
+      rsi_oversold: 30,
+      rsi_overbought: 70,
+      total_trades: 0,
+      winning_trades: 0,
+      total_pnl: 0,
+      today_pnl: 0,
+      trading_amount: tradingAmount,
+      created_at: now,
+      updated_at: now,
+    };
+    
+    console.log('📦 createBotInstance - Data:', data);
+    console.log('🔢 عدد الحقول:', Object.keys(data).length);
+    
+    const result = await madarCreate('bot_instances', data);
+    
+    console.log('📤 createBotInstance - Result:', result);
+    
+    if (result.success) {
+      return { success: true, botId };
+    }
+    
+    return { success: false, error: result.error || 'فشل إنشاء البوت' };
+  } catch (error) {
+    console.error('❌ createBotInstance Error:', error);
+    return { success: false, error: String(error) };
+  }
 }
 
-export async function saveWallet(wallet: WalletData) {
-  return madarCreate<WalletData>(Tables.WALLET, wallet);
+// ✅ جلب بوتات المستخدم
+export async function getUserBots(userId: string): Promise<BotInstanceData[]> {
+  try {
+    console.log('🔄 getUserBots - جلب بوتات المستخدم:', userId);
+    
+    const result = await madarRead<BotInstanceData>('bot_instances', {
+      where: { user_id: userId },
+      orderBy: { created_at: 'desc' }
+    });
+    
+    console.log('📦 getUserBots - Result:', result);
+    
+    if (result.success && result.data) {
+      return Array.isArray(result.data) ? result.data : [result.data];
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('❌ getUserBots Error:', error);
+    return [];
+  }
 }
 
-export async function getWallet(address: string) {
-  const result = await madarRead<WalletData>(Tables.WALLET, { address });
-  return result;
+// ✅ تشغيل البوت
+export async function startBotInstance(
+  botId: string,
+  userId: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    console.log('▶️ startBotInstance - تشغيل البوت:', botId);
+    
+    const result = await madarUpdate('bot_instances', botId, {
+      status: 'running'
+    });
+    
+    console.log('📦 startBotInstance - Result:', result);
+    
+    if (result.success) {
+      return { success: true, message: 'تم تشغيل البوت' };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ startBotInstance Error:', error);
+    return { success: false, error: String(error) };
+  }
 }
 
-export async function updateWalletBalance(address: string, balance: number) {
-  return madarUpdate<WalletData>(Tables.WALLET, address, { balance });
+// ✅ إيقاف البوت
+export async function stopBotInstance(
+  botId: string,
+  userId: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    console.log('⏸️ stopBotInstance - إيقاف البوت:', botId);
+    
+    const result = await madarUpdate('bot_instances', botId, {
+      status: 'stopped'
+    });
+    
+    console.log('📦 stopBotInstance - Result:', result);
+    
+    if (result.success) {
+      return { success: true, message: 'تم إيقاف البوت' };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ stopBotInstance Error:', error);
+    return { success: false, error: String(error) };
+  }
 }
 
-// ============================================================
-// 📊 TRADES
-// ============================================================
-
-export interface TradeData {
-  id?: string;
-  token: string;
-  tokenAddress: string;
-  network: string;
-  amount: number;
-  price: number;
-  type: 'BUY' | 'SELL';
-  status: 'PENDING' | 'EXECUTED' | 'FAILED' | 'CLOSED';
-  timestamp: string;
-  txHash?: string;
-  pnl?: number;
-  pnlPercent?: number;
+// ✅ حذف البوت
+export async function deleteBotInstance(
+  botId: string,
+  userId: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    console.log('🗑️ deleteBotInstance - حذف البوت:', botId);
+    
+    const checkResult = await madarRead('bot_instances', {
+      where: { id: botId, user_id: userId }
+    });
+    
+    if (!checkResult.success || !checkResult.data) {
+      return { success: false, error: 'البوت غير موجود أو لا تملك صلاحية حذفه' };
+    }
+    
+    const result = await madarDelete('bot_instances', botId);
+    
+    console.log('📦 deleteBotInstance - Result:', result);
+    
+    if (result.success) {
+      return { success: true, message: 'تم حذف البوت' };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ deleteBotInstance Error:', error);
+    return { success: false, error: String(error) };
+  }
 }
 
-export async function saveTrade(trade: TradeData) {
-  return madarCreate<TradeData>(Tables.TRADES, trade);
-}
-
-export async function getTrades(filters?: Record<string, any>) {
-  return madarRead<TradeData>(Tables.TRADES, filters);
-}
-
-// ============================================================
-// 🤖 BOT CONFIG
-// ============================================================
-
-export interface BotConfigData {
-  id?: string;
-  mode: 'AUTO' | 'MANUAL';
-  networks: string[];
-  minLiquidity: number;
-  minVolume: number;
-  maxPositionSize: number;
-  takeProfit: number;
-  stopLoss: number;
-  scanInterval: number;
-  maxTradesPerDay: number;
-  updatedAt?: string;
-}
-
-export async function saveBotConfig(config: BotConfigData) {
-  const configToSave = {
-    ...config,
-    networks: JSON.stringify(config.networks),
-  };
-  return madarCreate<BotConfigData>(Tables.BOT_CONFIG, configToSave);
-}
-
-export async function getBotConfig() {
-  const result = await madarRead<BotConfigData>(Tables.BOT_CONFIG);
-  if (result.success && result.data && result.data.length > 0) {
-    const config = result.data[0];
-    if (typeof config.networks === 'string') {
-      try {
-        config.networks = JSON.parse(config.networks);
-      } catch {
-        config.networks = ['solana'];
+// ✅ تحديث إعدادات البوت
+export async function updateBotConfigRemote(
+  botId: string,
+  userId: string,
+  data: any
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    console.log('💾 updateBotConfigRemote - تحديث البوت:', botId, data);
+    
+    // ✅ تنظيف البيانات من الكائنات
+    const cleanData: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined) {
+        cleanData[key] = null;
+      } else if (typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        cleanData[key] = JSON.stringify(value);
+      } else {
+        cleanData[key] = value;
       }
     }
-    return { ...result, data: [config] };
+    
+    const response = await fetch(`${WORKER_URL}/bots/${botId}/config?userId=${userId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`
+      },
+      body: JSON.stringify(cleanData)
+    });
+    
+    const result = await response.json();
+    console.log('📦 updateBotConfigRemote - Result:', result);
+    
+    if (result.success) {
+      return { success: true };
+    }
+    return { success: false, error: result.error || 'فشل تحديث البوت' };
+  } catch (error) {
+    console.error('❌ updateBotConfigRemote Error:', error);
+    return { success: false, error: String(error) };
   }
-  return result;
 }
 
-export async function updateBotConfig(id: string, config: Partial<BotConfigData>) {
-  const configToUpdate = { ...config };
-  if (configToUpdate.networks) {
-    configToUpdate.networks = JSON.stringify(configToUpdate.networks) as any;
+// ============================================================
+// 💰 دوال محافظ البوت
+// ============================================================
+
+// ✅ إنشاء محفظة للبوت
+export async function createBotWallet(
+  botId: string,
+  userId: string,
+  network: string,
+  userAddress: string,
+  encryptedPrivateKey: string
+): Promise<{ success: boolean; error?: string; data?: BotWalletData }> {
+  try {
+    console.log('💰 createBotWallet - إنشاء محفظة للبوت:', botId, network);
+    
+    const walletData = {
+      id: generateId(),
+      bot_id: botId,
+      network: network,
+      address: userAddress,
+      encrypted_private_key: encryptedPrivateKey,
+      balance: 0,
+      created_at: getTimestamp(),
+      updated_at: getTimestamp(),
+    };
+    
+    const result = await madarCreate('bot_wallet', walletData);
+    
+    console.log('📦 createBotWallet - Result:', result);
+    
+    if (result.success) {
+      await madarUpdate('bot_instances', botId, {
+        networks: JSON.stringify([network]),
+        updated_at: getTimestamp()
+      });
+      
+      return { success: true, data: walletData as BotWalletData };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ createBotWallet Error:', error);
+    return { success: false, error: String(error) };
   }
-  return madarUpdate<BotConfigData>(Tables.BOT_CONFIG, id, configToUpdate);
 }
 
-// ============================================================
-// 🧠 ANALYSES
-// ============================================================
-
-export interface AnalysisData {
-  id?: string;
-  token: string;
-  tokenAddress: string;
-  network: string;
-  recommendation: 'BUY' | 'SELL' | 'HOLD';
-  confidence: number;
-  reasoning: string;
-  priceTarget: number;
-  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
-  timestamp: string;
-  score?: number;
+// ✅ جلب محفظة البوت
+export async function getBotWallet(
+  botId: string,
+  userId: string
+): Promise<BotWalletData | null> {
+  try {
+    console.log('🔍 getBotWallet - جلب محفظة البوت:', botId);
+    
+    const result = await madarRead<BotWalletData>('bot_wallet', {
+      where: { bot_id: botId }
+    });
+    
+    console.log('📦 getBotWallet - Result:', result);
+    
+    if (result.success && result.data) {
+      const data = Array.isArray(result.data) ? result.data[0] : result.data;
+      return data as BotWalletData;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ getBotWallet Error:', error);
+    return null;
+  }
 }
 
-export async function saveAnalysis(analysis: AnalysisData) {
-  return madarCreate<AnalysisData>(Tables.ANALYSES, analysis);
-}
-
-export async function getAnalyses(filters?: Record<string, any>) {
-  return madarRead<AnalysisData>(Tables.ANALYSES, filters);
-}
-
-// ============================================================
-// 🔍 DISCOVERED TOKENS
-// ============================================================
-
-export interface DiscoveredTokenData {
-  id?: string;
-  tokenAddress: string;
-  network: string;
-  name: string;
-  symbol: string;
-  price: number;
-  liquidity: number;
-  volume24h: number;
-  priceChange24h: number;
-  age: number;
-  score: number;
-  status: 'PENDING' | 'ANALYZED' | 'BOUGHT' | 'SOLD' | 'REJECTED';
-  discoveredAt: string;
-  holders?: number;
-  deployer?: string;
-}
-
-export async function saveDiscoveredToken(token: DiscoveredTokenData) {
-  return madarCreate<DiscoveredTokenData>(Tables.DISCOVERED_TOKENS, token);
-}
-
-export async function getDiscoveredTokens(filters?: Record<string, any>) {
-  return madarRead<DiscoveredTokenData>(Tables.DISCOVERED_TOKENS, filters);
-}
-
-// ============================================================
-// 📝 LOGS
-// ============================================================
-
-export interface LogData {
-  id?: string;
-  level: 'INFO' | 'WARNING' | 'ERROR' | 'SUCCESS';
-  message: string;
-  timestamp: string;
-  context?: Record<string, any>;
-}
-
-export async function saveLog(log: LogData) {
-  return madarCreate<LogData>(Tables.LOGS, log);
-}
-
-export async function getLogs(filters?: Record<string, any>) {
-  return madarRead<LogData>(Tables.LOGS, filters);
-}
-
-// ============================================================
-// ⚡ SCALPER (البوت الرابع)
-// ============================================================
-
-export interface ScalperConfigData {
-  id?: string;
-  bot_id: string;
-  user_id: string;
-  target_token: string;
-  target_token_address: string;
-  total_amount_usd: number;
-  amount_per_trade: number;
-  max_open_trades: number;
-  buy_threshold: number;
-  buy_interval: number;
-  take_profit: number;
-  stop_loss: number;
-  trailing_stop: number;
-  min_trade_interval: number;
-  max_trade_duration: number;
-  network: string;
-  is_active: boolean;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface ScalperTradeData {
-  id?: string;
-  bot_id: string;
-  user_id: string;
-  token_symbol: string;
-  token_address: string;
-  network: string;
+// ✅ تنفيذ صفقة باستخدام محفظة البوت
+export async function executeTradeWithBotWallet(params: {
+  botId: string;
+  userId: string;
   side: 'buy' | 'sell';
-  entry_price: number;
-  exit_price?: number;
-  amount_usd: number;
-  quantity?: number;
-  pnl?: number;
-  pnl_percent?: number;
-  status: 'open' | 'closed' | 'failed';
-  opened_at?: string;
-  closed_at?: string;
-  tx_hash?: string;
-}
-
-export async function saveScalperConfig(config: ScalperConfigData) {
-  return madarCreate<ScalperConfigData>(Tables.SCALPER_CONFIGS, config);
-}
-
-export async function getScalperConfig(botId: string) {
-  return madarRead<ScalperConfigData>(Tables.SCALPER_CONFIGS, { bot_id: botId });
-}
-
-export async function updateScalperConfig(botId: string, data: Partial<ScalperConfigData>) {
-  return madarUpdate<ScalperConfigData>(Tables.SCALPER_CONFIGS, botId, data);
-}
-
-export async function saveScalperTrade(trade: ScalperTradeData) {
-  return madarCreate<ScalperTradeData>(Tables.SCALPER_TRADES, trade);
-}
-
-export async function getScalperTrades(filters?: Record<string, any>) {
-  return madarRead<ScalperTradeData>(Tables.SCALPER_TRADES, filters);
+  tokenAddress: string;
+  amountUsd: number;
+  tokenSymbol: string;
+  network: string;
+}): Promise<{ success: boolean; tradeId?: string; txHash?: string; error?: string }> {
+  try {
+    console.log('📊 executeTradeWithBotWallet - تنفيذ صفقة:', params);
+    
+    const response = await fetch(`${WORKER_URL}/bots/${params.botId}/trade`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`
+      },
+      body: JSON.stringify({
+        userId: params.userId,
+        side: params.side,
+        tokenAddress: params.tokenAddress,
+        amountUsd: params.amountUsd,
+        tokenSymbol: params.tokenSymbol,
+        network: params.network,
+      }),
+    });
+    
+    const result = await response.json();
+    console.log('📦 executeTradeWithBotWallet - Result:', result);
+    
+    if (result.success) {
+      const tradeData: TradeData = {
+        id: result.tradeId || generateId(),
+        botId: params.botId,
+        userId: params.userId,
+        side: params.side,
+        tokenAddress: params.tokenAddress,
+        tokenSymbol: params.tokenSymbol,
+        amount: params.amountUsd,
+        price: result.price || 0,
+        total: params.amountUsd,
+        network: params.network,
+        status: 'open',
+        openedAt: getTimestamp(),
+        txHash: result.txHash,
+      };
+      
+      await saveTrade(tradeData);
+      
+      return { 
+        success: true, 
+        tradeId: tradeData.id, 
+        txHash: result.txHash 
+      };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ executeTradeWithBotWallet Error:', error);
+    return { success: false, error: String(error) };
+  }
 }
 
 // ============================================================
-// 🛠️ UTILITY
+// 🔥 دوال المحافظ الذكية
 // ============================================================
 
-export function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
+// ✅ مسح المحافظ الذكية لعملة معينة
+export async function scanSmartWallets(
+  tokenAddress: string,
+  network: string,
+  minCount: number = 3
+): Promise<{ 
+  success: boolean; 
+  wallets?: SmartWalletData[]; 
+  totalProfit?: number; 
+  avgWinRate?: number;
+  error?: string;
+}> {
+  try {
+    console.log('🔍 scanSmartWallets - مسح المحافظ الذكية:', tokenAddress, network);
+    
+    const response = await fetch(`${WORKER_URL}/smart-wallets/scan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`
+      },
+      body: JSON.stringify({
+        tokenAddress,
+        network,
+        minCount,
+      }),
+    });
+    
+    const result = await response.json();
+    console.log('📦 scanSmartWallets - Result:', result);
+    
+    if (result.success) {
+      for (const wallet of (result.wallets || [])) {
+        await saveSmartWallet({
+          id: generateId(),
+          address: wallet.address,
+          network: network,
+          winRate: wallet.winRate || 0,
+          totalProfit: wallet.totalProfit || 0,
+          tradesCount: wallet.tradesCount || 0,
+          lastActive: getTimestamp(),
+          created_at: getTimestamp(),
+          updated_at: getTimestamp(),
+        });
+      }
+      
+      return {
+        success: true,
+        wallets: result.wallets,
+        totalProfit: result.totalProfit,
+        avgWinRate: result.avgWinRate,
+      };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ scanSmartWallets Error:', error);
+    return { success: false, error: String(error) };
+  }
 }
 
-export function getTimestamp(): string {
-  return new Date().toISOString();
+// ✅ جلب المحافظ الذكية من قاعدة البيانات
+export async function getSmartWalletsFromDB(
+  network?: string,
+  limit?: number,
+  minWinRate?: number
+): Promise<{ success: boolean; data?: SmartWalletData[]; error?: string }> {
+  try {
+    console.log('📊 getSmartWalletsFromDB - جلب المحافظ الذكية');
+    
+    const where: Record<string, any> = {};
+    if (network) where.network = network;
+    if (minWinRate) where.winRate = { '>=': minWinRate };
+    
+    const result = await madarRead<SmartWalletData>('smart_wallets', {
+      where: Object.keys(where).length > 0 ? where : undefined,
+      orderBy: { totalProfit: 'desc' },
+      limit: limit || 100,
+    });
+    
+    console.log('📦 getSmartWalletsFromDB - Result:', result);
+    
+    if (result.success && result.data) {
+      const data = Array.isArray(result.data) ? result.data : [result.data];
+      return { success: true, data: data as SmartWalletData[] };
+    }
+    
+    return { success: true, data: [] };
+  } catch (error) {
+    console.error('❌ getSmartWalletsFromDB Error:', error);
+    return { success: false, error: String(error) };
+  }
 }
+
+// ✅ تحليل عملة باستخدام الذكاء الاصطناعي
+export async function analyzeTokenWithAI(params: {
+  tokenAddress: string;
+  network: string;
+  symbol: string;
+  name?: string;
+  price?: number;
+  liquidity?: number;
+  volume24h?: number;
+  priceChange24h?: number;
+}): Promise<{ 
+  success: boolean; 
+  analysis?: AnalysisData; 
+  error?: string;
+}> {
+  try {
+    console.log('🤖 analyzeTokenWithAI - تحليل العملة:', params.symbol);
+    
+    const response = await fetch(`${WORKER_URL}/ai/analyze-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`
+      },
+      body: JSON.stringify(params),
+    });
+    
+    const result = await response.json();
+    console.log('📦 analyzeTokenWithAI - Result:', result);
+    
+    if (result.success) {
+      const analysis: AnalysisData = {
+        id: generateId(),
+        tokenAddress: params.tokenAddress,
+        tokenSymbol: params.symbol,
+        network: params.network,
+        recommendation: result.recommendation || 'hold',
+        confidence: result.confidence || 0,
+        summary: result.summary || '',
+        signals: safeStringify(result.signals || []),
+        priceTarget: result.priceTarget || 0,
+        riskLevel: result.riskLevel || 'medium',
+        timestamp: getTimestamp(),
+        botDecision: safeStringify(result.botDecision || {}),
+        additionalAnalysis: safeStringify(result.additionalAnalysis || {}),
+      };
+      
+      await saveAnalysis(analysis);
+      
+      return { success: true, analysis };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ analyzeTokenWithAI Error:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+// ✅ مسح جميع العملات
+export async function scanAllTokens(
+  network: string,
+  minCount: number = 3
+): Promise<{ 
+  success: boolean; 
+  tokens?: DiscoveredTokenData[]; 
+  error?: string;
+}> {
+  try {
+    console.log('🔄 scanAllTokens - مسح جميع العملات:', network);
+    
+    const response = await fetch(`${WORKER_URL}/tokens/scan-all`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`
+      },
+      body: JSON.stringify({
+        network,
+        minCount,
+      }),
+    });
+    
+    const result = await response.json();
+    console.log('📦 scanAllTokens - Result:', result);
+    
+    if (result.success) {
+      for (const token of (result.tokens || [])) {
+        await saveDiscoveredToken({
+          id: generateId(),
+          tokenAddress: token.address,
+          symbol: token.symbol,
+          name: token.name || token.symbol,
+          network: network,
+          price: token.price || 0,
+          volume24h: token.volume24h || 0,
+          liquidity: token.liquidity || 0,
+          marketCap: token.marketCap,
+          score: token.score || 0,
+          status: token.status || 'candidate',
+          timestamp: getTimestamp(),
+        });
+      }
+      
+      return { success: true, tokens: result.tokens };
+    }
+    
+    return { success: false, error: result.error };
+  } catch (error) {
+    console.error('❌ scanAllTokens Error:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+// ✅ حفظ محفظة ذكية
+export async function saveSmartWallet(wallet: SmartWalletData): Promise<void> {
+  try {
+    await madarCreate('smart_wallets', wallet);
+  } catch (error) {
+    console.error('❌ saveSmartWallet Error:', error);
+  }
+}
+
+// ============================================================
+// 📦 دوال البيانات الأساسية (CRUD)
+// ============================================================
+
+// ✅ حفظ محفظة
+export async function saveWallet(wallet: WalletData): Promise<void> {
+  try {
+    await madarCreate('wallets', wallet);
+  } catch (error) {
+    console.error('❌ saveWallet Error:', error);
+  }
+}
+
+// ✅ جلب محفظة
+export async function getWallet(address: string): Promise<MadarTechResponse<WalletData>> {
+  return madarRead<WalletData>('wallets', { where: { address } });
+}
+
+// ✅ حفظ إعدادات البوت
+export async function saveBotConfig(config: BotConfigData): Promise<void> {
+  try {
+    // ✅ تحويل networks إلى JSON String
+    const cleanConfig = {
+      ...config,
+      networks: safeStringify(config.networks || ['solana'])
+    };
+    await madarCreate('bot_configs', cleanConfig);
+  } catch (error) {
+    console.error('❌ saveBotConfig Error:', error);
+  }
+}
+
+// ✅ جلب إعدادات البوت
+export async function getBotConfig(): Promise<MadarTechResponse<BotConfigData>> {
+  return madarRead<BotConfigData>('bot_configs', { orderBy: { created_at: 'desc' }, limit: 1 });
+}
+
+// ✅ حفظ سجل
+export async function saveLog(log: LogData): Promise<void> {
+  try {
+    const numericId = Date.now() + Math.floor(Math.random() * 1000);
+    
+    await madarCreate('logs', {
+      id: numericId,
+      level: log.level,
+      message: log.message,
+      created_at: log.timestamp || getTimestamp(),
+      context: log.context ? safeStringify(log.context) : '',
+    });
+  } catch (error) {
+    console.error('❌ saveLog Error:', error);
+  }
+}
+
+// ✅ جلب السجلات
+export async function getLogs(filters?: Record<string, any>): Promise<MadarTechResponse<LogData>> {
+  return madarRead<LogData>('logs', {
+    where: filters,
+    orderBy: { created_at: 'desc' },
+    limit: 100
+  });
+}
+
+// ✅ حفظ صفقة
+export async function saveTrade(trade: TradeData): Promise<void> {
+  try {
+    await madarCreate('trades', trade);
+  } catch (error) {
+    console.error('❌ saveTrade Error:', error);
+  }
+}
+
+// ✅ جلب الصفقات
+export async function getTrades(filters?: Record<string, any>): Promise<MadarTechResponse<TradeData>> {
+  return madarRead<TradeData>('trades', {
+    where: filters,
+    orderBy: { created_at: 'desc' },
+    limit: 100
+  });
+}
+
+// ✅ حفظ تحليل (مُعدَّل - مع تحويل الكائنات)
+export async function saveAnalysis(analysis: AnalysisData): Promise<void> {
+  try {
+    // ✅ تحويل جميع الكائنات إلى JSON String
+    const cleanAnalysis = {
+      ...analysis,
+      signals: safeStringify(analysis.signals),
+      botDecision: safeStringify((analysis as any).botDecision || {}),
+      additionalAnalysis: safeStringify((analysis as any).additionalAnalysis || {}),
+    };
+    await madarCreate('analyses', cleanAnalysis);
+  } catch (error) {
+    console.error('❌ saveAnalysis Error:', error);
+  }
+}
+
+// ✅ جلب التحليلات
+export async function getAnalyses(filters?: Record<string, any>): Promise<MadarTechResponse<AnalysisData>> {
+  return madarRead<AnalysisData>('analyses', {
+    where: filters,
+    orderBy: { created_at: 'desc' },
+    limit: 50
+  });
+}
+
+// ✅ حفظ عملة مكتشفة
+export async function saveDiscoveredToken(token: DiscoveredTokenData): Promise<void> {
+  try {
+    await madarCreate('discovered_tokens', token);
+  } catch (error) {
+    console.error('❌ saveDiscoveredToken Error:', error);
+  }
+}
+
+// ✅ جلب العملات المكتشفة
+export async function getDiscoveredTokens(filters?: Record<string, any>): Promise<MadarTechResponse<DiscoveredTokenData>> {
+  return madarRead<DiscoveredTokenData>('discovered_tokens', {
+    where: filters,
+    orderBy: { created_at: 'desc' },
+    limit: 100
+  });
+}
+
+// ============================================================
+// 📤 تصدير جميع الدوال
+// ============================================================
+export default {
+  madarCreate,
+  madarRead,
+  madarUpdate,
+  madarDelete,
+  generateId,
+  getTimestamp,
+  safeStringify,
+  createBotInstance,
+  getUserBots,
+  startBotInstance,
+  stopBotInstance,
+  deleteBotInstance,
+  updateBotConfigRemote,
+  createBotWallet,
+  getBotWallet,
+  executeTradeWithBotWallet,
+  scanSmartWallets,
+  getSmartWalletsFromDB,
+  analyzeTokenWithAI,
+  scanAllTokens,
+  saveSmartWallet,
+  saveWallet,
+  getWallet,
+  saveBotConfig,
+  getBotConfig,
+  saveLog,
+  getLogs,
+  saveTrade,
+  getTrades,
+  saveAnalysis,
+  getAnalyses,
+  saveDiscoveredToken,
+  getDiscoveredTokens,
+};

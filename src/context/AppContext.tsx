@@ -2,8 +2,9 @@
 // ============================================================
 // سياق التطبيق الرئيسي - يدعم 4 بوتات + محافظ متعددة (داخلية وخارجية) + المحافظ الذكية
 // ============================================================
+import { TradingBot } from '../lib/botEngine';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
 import {
   madarRead,
   saveBotConfig,
@@ -45,6 +46,11 @@ import {
 } from '../lib/madarTech';
 import { BotWalletManager, BotWalletData } from '../lib/wallet';
 import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/accounts';
+
+// ============================================================
+// WORKER URL
+// ============================================================
+const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 
 // ============================================================
 // 🔗 دعم محافظ متعددة (خارجية)
@@ -200,11 +206,12 @@ class WalletConnectWallet implements WalletProvider {
   }
 }
 
-// ============================================================
-// WORKER URL
-// ============================================================
-const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
-
+export interface Notification {
+    id: string;
+    type: 'success' | 'error' | 'warning' | 'info';
+    message: string;
+    timestamp: string;
+}
 // ============================================================
 // الأنواع
 // ============================================================
@@ -308,6 +315,7 @@ interface AppContextType {
     totalDeposited: number;
     totalWithdrawn: number;
     netBalance: number;
+    feePercentage: number;
     tradesCount: number;
   } | null;
   loadUserStats: () => Promise<void>;
@@ -322,7 +330,7 @@ interface AppContextType {
   // ============================================================
   botInstances: BotInstanceData[];
   loadBotInstances: (userId?: string) => Promise<void>;
-  createBot: (type: 'hunter' | 'signal' | 'manual' | 'scalper', name: string, userId?: string) => Promise<void>;
+  createBot: (type: 'hunter' | 'signal' | 'manual' | 'scalper', name: string, userId?: string, tradingAmount?: number) => Promise<void>;
   startBot: (botId: string, userId?: string) => Promise<void>;
   stopBot: (botId: string, userId?: string) => Promise<void>;
   deleteBot: (botId: string, userId?: string) => Promise<void>;
@@ -338,6 +346,15 @@ interface AppContextType {
     network: string;
     userId?: string;
   }) => Promise<{ success: boolean; tradeId?: string; txHash?: string; error?: string }>;
+  
+    // ✅ الإشعارات
+  notifications: Notification[];
+  addNotification: (type: 'success' | 'error' | 'warning' | 'info', message: string) => void;
+  removeNotification: (id: string) => void;
+    clearAllNotifications: () => Promise<void>;
+  // ✅ دوال التحويل بين المحافظ (جديدة)
+  transferToBot: (botId: string, amount: number, network: string) => Promise<{ success: boolean; message: string }>;
+  transferFromBot: (botId: string, amount: number, network: string) => Promise<{ success: boolean; message: string }>;
 }
 
 // ============================================================
@@ -367,10 +384,7 @@ interface AppProviderProps {
 }
 
 export function AppProvider({ children }: AppProviderProps) {
-  // ============================================================
-  // الحالات الأساسية
-  // ============================================================
-    console.log('🔄 AppProvider: بدء التشغيل');
+  console.log('🔄 AppProvider: بدء التشغيل');
 
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [botWallets, setBotWallets] = useState<BotWalletData[]>([]);
@@ -386,7 +400,73 @@ export function AppProvider({ children }: AppProviderProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [userStats, setUserStats] = useState<AppContextType['userStats']>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
 
+  // ✅ استرجاع الإشعارات المحفوظة
+  useEffect(() => {
+    const saved = localStorage.getItem('notifications');
+    if (saved) {
+        try {
+            setNotifications(JSON.parse(saved));
+        } catch {}
+    }
+  }, []);
+
+  // ✅✅✅ دالة إضافة الإشعارات
+  const addNotification = useCallback((type: 'success' | 'error' | 'warning' | 'info', message: string) => {
+    const id = generateId();
+    const newNotification = { id, type, message, timestamp: getTimestamp() };
+    
+    setNotifications(prev => {
+        const updated = [...prev, newNotification];
+        localStorage.setItem('notifications', JSON.stringify(updated));
+        return updated;
+    });
+  }, []);
+// ✅✅✅ دالة إضافة السجلات (addLog) - يجب تعريفها أولاً
+const addLog = useCallback(async (level: LogData['level'], message: string, context?: Record<string, any>) => {
+  const log: LogData = {
+    id: generateId(),
+    level,
+    message,
+    timestamp: getTimestamp(),
+    context,
+  };
+  await saveLog(log);
+  setLogs(prev => [log, ...prev]);
+}, []);
+
+// ✅✅✅ دالة حذف الإشعارات
+const removeNotification = useCallback((id: string) => {
+  setNotifications(prev => {
+    const updated = prev.filter(n => n.id !== id);
+    localStorage.setItem('notifications', JSON.stringify(updated));
+    return updated;
+  });
+}, []);
+
+// ✅ مسح كل الإشعارات من قاعدة البيانات
+// ✅ دالة مسح جميع الإشعارات
+const clearAllNotifications = useCallback(async () => {
+  try {
+    const response = await fetch(`${WORKER_URL}/notifications/clear`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        app_id: 'hunter',
+        userId: user?.id
+      })
+    });
+    const result = await response.json();
+    if (result.success) {
+      setNotifications([]);
+      localStorage.setItem('notifications', JSON.stringify([]));
+      await addLog('SUCCESS', '🗑️ تم مسح جميع الإشعارات');
+    }
+  } catch (error) {
+    console.error('❌ فشل مسح الإشعارات:', error);
+  }
+}, [user?.id, addLog]);
   // ============================================================
   // 🔥 حالات المحافظ الذكية (جديدة)
   // ============================================================
@@ -421,6 +501,7 @@ export function AppProvider({ children }: AppProviderProps) {
   const hasLoadedUserWallets = useRef(false);
   const hasLoadedBotInstances = useRef(false);
   const isLoadingWallets = useRef(false);
+const botInstancesRef = useRef<Map<string, TradingBot>>(new Map());
 
   // ============================================================
   // 🔗 دوال المحافظ المتعددة (خارجية)
@@ -566,9 +647,25 @@ export function AppProvider({ children }: AppProviderProps) {
     try {
       console.log('🔄 جاري تحميل محافظ البوت...');
       const botWallet = BotWalletManager.getInstance();
-      const networks = botConfig?.networks || ['solana'];
       
-      for (const network of networks) {
+      const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
+      
+      let networks: string[] = ['solana'];
+      try {
+          if (typeof botConfig?.networks === 'string') {
+              const parsed = JSON.parse(botConfig.networks);
+              if (Array.isArray(parsed)) networks = parsed;
+          } else if (Array.isArray(botConfig?.networks)) {
+              networks = botConfig.networks;
+          }
+      } catch {
+          networks = ['solana'];
+      }
+      
+      const validNetworks = networks.filter(n => VALID_NETWORKS.includes(n));
+      console.log('🌐 الشبكات الصالحة:', validNetworks);
+      
+      for (const network of validNetworks) {
         await botWallet.init(network);
       }
       
@@ -585,6 +682,7 @@ export function AppProvider({ children }: AppProviderProps) {
     return botWallets.find(w => w.network === network) || null;
   };
 
+  // ✅✅✅ refreshBotBalance هنا!
   const refreshBotBalance = async (network: string): Promise<number> => {
     try {
       const botWallet = BotWalletManager.getInstance();
@@ -594,7 +692,6 @@ export function AppProvider({ children }: AppProviderProps) {
       return 0;
     }
   };
-
   // ============================================================
   // USER WALLETS (الفردية) - مع منع التكرار
   // ============================================================
@@ -720,63 +817,123 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   };
 
-  const createBot = async (type: 'hunter' | 'signal' | 'manual' | 'scalper', name: string, userId?: string) => {
+   // ✅ createBot - معدل لدعم tradingAmount
+  const createBot = async (
+    type: 'hunter' | 'signal' | 'manual' | 'scalper', 
+    name: string, 
+    userId?: string,
+    tradingAmount: number = 100
+  ) => {
     const uid = userId || currentUserId || user?.id;
     if (!uid) throw new Error('لا يوجد userId');
     
     try {
-      const result = await createBotInstance(uid, type, name);
+      const result = await createBotInstance(uid, type, name, tradingAmount);
       if (result.success) {
         hasLoadedBotInstances.current = false;
         await loadBotInstances(uid);
-        await addLog('SUCCESS', `✅ تم إنشاء البوت ${name}`);
+        await addLog('SUCCESS', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
+        addNotification('success', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`); // ✅
       } else {
         await addLog('ERROR', `❌ فشل إنشاء البوت: ${result.error}`);
+        addNotification('error', `❌ فشل إنشاء البوت: ${result.error}`); // ✅
       }
       return result;
     } catch (error) {
       await addLog('ERROR', `❌ فشل إنشاء البوت: ${error}`);
+      addNotification('error', `❌ فشل إنشاء البوت`); // ✅
       throw error;
     }
   };
 
-  const startBot = async (botId: string, userId?: string) => {
-    const uid = userId || currentUserId || user?.id;
-    if (!uid) throw new Error('لا يوجد userId');
-    
-    try {
-      const result = await startBotInstance(botId, uid);
-      if (result.success) {
-        await loadBotInstances(uid);
-        await addLog('SUCCESS', `▶️ تم تشغيل البوت`);
-      } else {
-        await addLog('ERROR', `❌ فشل تشغيل البوت: ${result.message}`);
+const startBot = async (botId: string, userId?: string) => {
+  const uid = userId || currentUserId || user?.id;
+  if (!uid) throw new Error('لا يوجد userId');
+
+  try {
+    const result = await startBotInstance(botId, uid);
+    if (result.success) {
+      // ✅ إنشاء البوت الفعلي
+      const botData = await getUserBots(uid).then(bots => bots.find(b => b.id === botId));
+      if (botData) {
+        const config = {
+          mode: botData.mode || 'auto',
+          networks: JSON.parse(botData.networks || '["solana"]'),
+          tradingAmount: botData.trading_amount || 100,
+          maxPositionUsd: botData.max_position_size || 100,
+          takeProfitPct: botData.take_profit || 30,
+          stopLossPct: botData.stop_loss || 10,
+          minLiquidityUsd: 50000,
+          minVolume24h: 100000,
+          minPriceChange24h: 0,
+          maxTradesPerDay: 10,
+          tradeIntervalSec: 5,
+          aiAssist: true,
+          status: 'running',
+          password: '',
+        };
+        
+        // ✅ إنشاء كائن البوت
+        const bot = new TradingBot(
+          config,
+          uid,
+          (log) => console.log('[BOT LOG]', log),
+          (trade) => console.log('[BOT TRADE]', trade),
+          botId
+        );
+        
+        // ✅ تشغيل البوت
+        bot.start();
+        
+        // ✅ تخزين مرجع البوت
+        botInstancesRef.current.set(botId, bot);
+        console.log(`✅ TradingBot started for ${botId}`);
       }
-      return result;
-    } catch (error) {
-      await addLog('ERROR', `❌ فشل تشغيل البوت: ${error}`);
-      throw error;
+
+      await loadBotInstances(uid);
+      await addLog('SUCCESS', `▶️ تم تشغيل البوت`);
+      addNotification('success', `▶️ تم تشغيل البوت بنجاح`);
+    } else {
+      await addLog('ERROR', `❌ فشل تشغيل البوت: ${result.message}`);
+      addNotification('error', `❌ فشل تشغيل البوت: ${result.message}`);
     }
-  };
+    return result;
+  } catch (error) {
+    await addLog('ERROR', `❌ فشل تشغيل البوت: ${error}`);
+    addNotification('error', `❌ فشل تشغيل البوت`);
+    throw error;
+  }
+};
 
   const stopBot = async (botId: string, userId?: string) => {
-    const uid = userId || currentUserId || user?.id;
-    if (!uid) throw new Error('لا يوجد userId');
-    
-    try {
-      const result = await stopBotInstance(botId, uid);
-      if (result.success) {
-        await loadBotInstances(uid);
-        await addLog('INFO', `⏸️ تم إيقاف البوت`);
-      } else {
-        await addLog('ERROR', `❌ فشل إيقاف البوت: ${result.message}`);
-      }
-      return result;
-    } catch (error) {
-      await addLog('ERROR', `❌ فشل إيقاف البوت: ${error}`);
-      throw error;
+  const uid = userId || currentUserId || user?.id;
+  if (!uid) throw new Error('لا يوجد userId');
+
+  try {
+    // ✅ إيقاف البوت الفعلي (TradingBot)
+    const bot = botInstancesRef.current.get(botId);
+    if (bot) {
+      bot.stop();
+      botInstancesRef.current.delete(botId);
+      console.log(`⏹️ TradingBot stopped for ${botId}`);
     }
-  };
+
+    const result = await stopBotInstance(botId, uid);
+    if (result.success) {
+      await loadBotInstances(uid);
+      await addLog('INFO', `⏸️ تم إيقاف البوت`);
+      addNotification('warning', `⏸️ تم إيقاف البوت`);
+    } else {
+      await addLog('ERROR', `❌ فشل إيقاف البوت: ${result.message}`);
+      addNotification('error', `❌ فشل إيقاف البوت: ${result.message}`);
+    }
+    return result;
+  } catch (error) {
+    await addLog('ERROR', `❌ فشل إيقاف البوت: ${error}`);
+    addNotification('error', `❌ فشل إيقاف البوت`);
+    throw error;
+  }
+};
 
   const deleteBot = async (botId: string, userId?: string) => {
     const uid = userId || currentUserId || user?.id;
@@ -788,34 +945,60 @@ export function AppProvider({ children }: AppProviderProps) {
         hasLoadedBotInstances.current = false;
         await loadBotInstances(uid);
         await addLog('SUCCESS', `🗑️ تم حذف البوت`);
+        addNotification('success', `🗑️ تم حذف البوت`); // ✅
       } else {
         await addLog('ERROR', `❌ فشل حذف البوت: ${result.message}`);
+        addNotification('error', `❌ فشل حذف البوت: ${result.message}`); // ✅
       }
       return result;
     } catch (error) {
       await addLog('ERROR', `❌ فشل حذف البوت: ${error}`);
+      addNotification('error', `❌ فشل حذف البوت`); // ✅
       throw error;
     }
   };
 
   // ============================================================
-  // 🔥 إنشاء محفظة للبوت (داخلية)
+  // 🔥 إنشاء محفظة للبوت (معدل - يستخدم محفظة المستخدم)
   // ============================================================
-  
   const createWalletForBot = async (botId: string, network: string, userId?: string) => {
     const uid = userId || currentUserId || user?.id;
     if (!uid) throw new Error('لا يوجد userId');
+
+    // ✅✅✅ فحص: هل المحفظة موجودة مسبقاً للبوت؟
+    const existingWallet = await getBotWallet(botId, uid);
+    if (existingWallet && existingWallet.network === network) {
+      console.log(`✅ محفظة ${network} موجودة مسبقاً للبوت`);
+      await addLog('SUCCESS', `✅ محفظة ${network} موجودة مسبقاً`);
+      addNotification('success', `✅ محفظة ${network} موجودة مسبقاً`); // ✅
+      return { success: true, data: existingWallet };
+    }
+
+    // 🔍 البحث عن محفظة المستخدم
+    let userWallet = userWallets.find(w => w.network === network);
     
+    // ✅ إذا لم توجد - أنشئها تلقائياً
+    if (!userWallet) {
+      console.log(`⚠️ لا توجد محفظة ${network} - جاري إنشائها...`);
+      userWallet = await AccountManager.createUserWallet(uid, network);
+      hasLoadedUserWallets.current = false;
+      await loadUserWallets();
+      addNotification('success', `💰 تم إنشاء محفظة ${network} جديدة`); // ✅
+    }
+
     try {
-      const result = await createBotWallet(botId, uid, network);
+      const result = await createBotWallet(botId, uid, network, userWallet.address, userWallet.encryptedPrivateKey);
       if (result.success) {
-        await addLog('SUCCESS', `💰 تم إنشاء محفظة للبوت: ${result.address}`);
+        await addLog('SUCCESS', `💰 تم ربط محفظة ${network} بالبوت`);
+        addNotification('success', `💰 تم ربط محفظة ${network} بالبوت`); // ✅
       } else {
-        await addLog('ERROR', `❌ فشل إنشاء المحفظة: ${result.error}`);
+        await addLog('ERROR', `❌ فشل ربط المحفظة: ${result.error}`);
+        addNotification('error', `❌ فشل ربط المحفظة: ${result.error}`); // ✅
       }
       return result;
     } catch (error) {
-      await addLog('ERROR', `❌ فشل إنشاء المحفظة: ${error}`);
+      await addLog('ERROR', `❌ فشل ربط المحفظة: ${error}`);
+      addNotification('error', `❌ فشل ربط المحفظة`); // ✅
       throw error;
     }
   };
@@ -826,27 +1009,48 @@ export function AppProvider({ children }: AppProviderProps) {
     return getBotWallet(botId, uid);
   };
 
+  // ✅ updateBotConfig - معدل لدعم الشبكات
   const updateBotConfig = async (botId: string, data: any, userId?: string) => {
     const uid = userId || currentUserId || user?.id;
     if (!uid) throw new Error('لا يوجد userId');
     
     try {
+      // 1. تحديث الإعدادات العامة (config JSON)
       const result = await updateBotConfigRemote(botId, uid, data);
       
       if (result.success) {
+        // 2. إذا كان هناك شبكات جديدة، قم بتحديثها عبر المسار الجديد
+        if (data.networks && Array.isArray(data.networks) && data.networks.length > 0) {
+          const networkResponse = await fetch(`${WORKER_URL}/bots/${botId}/networks?userId=${uid}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ networks: data.networks }),
+          });
+          const networkResult = await networkResponse.json();
+          if (!networkResult.success) {
+            await addLog('WARNING', `⚠️ تم تحديث الإعدادات ولكن فشل تحديث الشبكات: ${networkResult.error}`);
+            addNotification('warning', `⚠️ فشل تحديث الشبكات`); // ✅
+          } else {
+            await addLog('SUCCESS', `✅ تم تحديث الشبكة إلى ${data.networks.join(', ')}`);
+            addNotification('success', `✅ تم تحديث الشبكة إلى ${data.networks.join(', ')}`); // ✅
+          }
+        }
+        
         await loadBotInstances(uid);
         await addLog('SUCCESS', `✅ تم تحديث إعدادات البوت`);
+        addNotification('success', `✅ تم تحديث إعدادات البوت`); // ✅
       } else {
         await addLog('ERROR', `❌ فشل تحديث الإعدادات: ${result.error}`);
+        addNotification('error', `❌ فشل تحديث الإعدادات: ${result.error}`); // ✅
       }
       return result;
     } catch (error) {
       await addLog('ERROR', `❌ فشل تحديث الإعدادات: ${error}`);
+      addNotification('error', `❌ فشل تحديث الإعدادات`); // ✅
       throw error;
     }
   };
-
-  const executeTrade = async (params: {
+   const executeTrade = async (params: {
     botId: string;
     side: 'buy' | 'sell';
     tokenAddress: string;
@@ -858,7 +1062,64 @@ export function AppProvider({ children }: AppProviderProps) {
     const uid = params.userId || currentUserId || user?.id;
     if (!uid) throw new Error('لا يوجد userId');
     
-    return executeTradeWithBotWallet({ ...params, userId: uid });
+    const result = await executeTradeWithBotWallet({ ...params, userId: uid });
+    
+    if (!result.success) {
+      addNotification('error', `❌ فشل ${params.side === 'buy' ? 'شراء' : 'بيع'} ${params.tokenSymbol}: ${result.error}`);
+    } else {
+      addNotification('success', `✅ تم ${params.side === 'buy' ? 'شراء' : 'بيع'} ${params.tokenSymbol} بمبلغ $${params.amountUsd}`);
+    }
+    
+    return result;
+  };
+  // ============================================================
+  // ✅ دوال التحويل بين المحافظ (جديدة)
+  // ============================================================
+
+  const transferToBot = async (botId: string, amount: number, network: string) => {
+    if (!user) return { success: false, message: 'المستخدم غير موجود' };
+    
+    try {
+      const response = await fetch(`${WORKER_URL}/bots/${botId}/transfer-to-bot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, amount, network }),
+      });
+      const result = await response.json();
+      
+      if (result.success) {
+        await loadUserWallets();
+        await loadUserStats();
+        await addLog('SUCCESS', `✅ تحويل ${amount} من ${network} إلى البوت`);
+      }
+      
+      return result;
+    } catch (error) {
+      return { success: false, message: String(error) };
+    }
+  };
+
+  const transferFromBot = async (botId: string, amount: number, network: string) => {
+    if (!user) return { success: false, message: 'المستخدم غير موجود' };
+    
+    try {
+      const response = await fetch(`${WORKER_URL}/bots/${botId}/transfer-to-user`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, amount, network }),
+      });
+      const result = await response.json();
+      
+      if (result.success) {
+        await loadUserWallets();
+        await loadUserStats();
+        await addLog('SUCCESS', `✅ سحب ${amount} من البوت إلى ${network}`);
+      }
+      
+      return result;
+    } catch (error) {
+      return { success: false, message: String(error) };
+    }
   };
 
   // ============================================================
@@ -893,16 +1154,16 @@ export function AppProvider({ children }: AppProviderProps) {
     return newWallet;
   };
 
-  const loadBotConfig = async () => {
+ const loadBotConfig = async () => {
     setIsLoading(true);
     try {
       const result = await getBotConfig();
       if (result.success && result.data && result.data.length > 0) {
         setBotConfigState(result.data[0]);
       } else {
-        const newConfig = { ...defaultBotConfig, id: generateId() };
-        await saveBotConfig(newConfig);
-        setBotConfigState(newConfig);
+        // ✅ لا تحفظ config جديد - فقط استخدم الافتراضي
+        // هذا يمنع UNIQUE constraint والحلقة اللانهائية
+        setBotConfigState(defaultBotConfig);
       }
     } catch (error) {
       console.error('Failed to load bot config:', error);
@@ -1000,18 +1261,8 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   };
 
-  const addLog = async (level: LogData['level'], message: string, context?: Record<string, any>) => {
-    const log: LogData = {
-      id: generateId(),
-      level,
-      message,
-      timestamp: getTimestamp(),
-      context,
-    };
-    await saveLog(log);
-    setLogs(prev => [log, ...prev]);
-  };
-
+  
+    
   // ============================================================
   // USER STATS & TRANSACTIONS
   // ============================================================
@@ -1092,7 +1343,6 @@ export function AppProvider({ children }: AppProviderProps) {
     }
   }, [botConfig]);
 
-  // ✅ محسّن: تحميل محافظ المستخدم عند تغيير user.id فقط
   useEffect(() => {
     if (user) {
       hasLoadedUserWallets.current = false;
@@ -1101,31 +1351,33 @@ export function AppProvider({ children }: AppProviderProps) {
       loadUserStats();
       loadTransactions();
     }
-  }, [user?.id]); // ← استخدم user.id بدلاً من user
-
-  useEffect(() => {
-    if (user?.id && !hasLoadedBotInstances.current) {
-      hasLoadedBotInstances.current = true;
-      setCurrentUserId(user.id);
-      loadBotInstances(user.id);
-    } else if (!user) {
-      setBotInstances([]);
-      hasLoadedBotInstances.current = false;
-    }
   }, [user?.id]);
 
+ useEffect(() => {
+  console.log('🔍 useEffect user.id changed:', user?.id);
+  
+  if (user?.id) {
+    console.log('🔄 جاري تحميل البوتات للمستخدم:', user.id);
+    setCurrentUserId(user.id);
+    // ✅ إعادة تعيين hasLoadedBotInstances لضمان التحميل
+    hasLoadedBotInstances.current = false;
+    loadBotInstances(user.id);
+  } else {
+    console.log('❌ لا يوجد مستخدم، إعادة تعيين البوتات');
+    setBotInstances([]);
+    hasLoadedBotInstances.current = false;
+  }
+}, [user?.id]);
   // ============================================================
   // CONTEXT VALUE
   // ============================================================
 
   const value: AppContextType = {
-    // الأساسيات
     wallet,
     setWallet,
     loadWallet,
     createWallet,
     
-    // المحافظ المتعددة (خارجية)
     walletProviders,
     activeWallet,
     walletAddress,
@@ -1136,20 +1388,17 @@ export function AppProvider({ children }: AppProviderProps) {
     walletNetwork,
     signTransaction,
     
-    // محافظ البوت المركزية (داخلية)
     botWallets,
     loadBotWallets,
     getBotWallet,
     refreshBotBalance,
     
-    // محافظ المستخدم (الفردية)
     userWallets,
     loadUserWallets,
     createUserWallet,
     refreshUserBalance,
     getUserWallet,
     
-    // 🔥 المحافظ الذكية (جديدة)
     smartWallets,
     smartWalletStats,
     scanSmartWallets,
@@ -1158,55 +1407,44 @@ export function AppProvider({ children }: AppProviderProps) {
     scanAllTokens,
     smartWalletsLoading,
     
-    // Bot Config
     botConfig,
     setBotConfig,
     loadBotConfig,
     
-    // Trades
     trades,
     loadTrades,
     addTrade,
     
-    // Analyses
     analyses,
     loadAnalyses,
     addAnalysis,
     
-    // Discovered Tokens
     discoveredTokens,
     loadDiscoveredTokens,
     addDiscoveredToken,
     
-    // Logs
     logs,
     loadLogs,
     addLog,
     
-    // Loading & Running
     isLoading,
     setIsLoading,
     isRunning,
     setIsRunning,
     updateBotState,
     
-    // User
     user,
     setUser,
     isAdmin,
     setIsAdmin,
     logout,
     
-    // Stats & Transactions
     userStats,
     loadUserStats,
     transactions,
     loadTransactions,
     addTransaction,
 
-    // ============================================================
-    // 🔥 البوتات المتعددة (4 بوتات)
-    // ============================================================
     botInstances,
     loadBotInstances,
     createBot,
@@ -1217,15 +1455,20 @@ export function AppProvider({ children }: AppProviderProps) {
     getBotWalletData,
     updateBotConfig,
     executeTrade,
+
+     transferToBot,
+    transferFromBot,
+    
+      notifications,
+    addNotification,
+    removeNotification,
+    clearAllNotifications
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
-}
+}  // ✅ قفل AppProvider
 
-// ============================================================
-// HOOK
-// ============================================================
-
+// ✅✅✅ أضف هذا بعد القفل مباشرة:
 export function useApp() {
   const context = useContext(AppContext);
   if (context === undefined) {

@@ -1,11 +1,11 @@
 // src/pages/ManualTradesPage.tsx
-// Full-width trading terminal with DexScreener links + COMMISSION 15%
+// Full-width trading terminal with DexScreener links - No Bot Required
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatUsd } from '../lib/format';
 import { BotWalletManager } from '../lib/wallet';
-import { AccountManager, BotToken, COMMISSION_RATE } from '../lib/accounts';
+import { AccountManager } from '../lib/accounts';
 import { discoverAllPairs } from '../lib/discovery';
 import { NETWORKS, getNetworkName } from '../config/networks';
 import {
@@ -36,6 +36,10 @@ import {
   Zap,
   ArrowRight,
   Coins,
+  Star,
+  Clock,
+  Flame,
+  Rocket,
 } from 'lucide-react';
 
 const ITEMS_PER_PAGE = 60;
@@ -109,6 +113,7 @@ interface TokenMetricProps {
   value: string;
   tone?: 'neutral' | 'positive' | 'negative' | 'warning' | 'info';
   title: string;
+  size?: 'sm' | 'md' | 'lg';
 }
 
 // ============================================================
@@ -151,13 +156,19 @@ function ageText(seconds: number): string {
 // المكونات
 // ============================================================
 
-function Metric({ icon, value, tone = 'neutral', title }: TokenMetricProps) {
+function Metric({ icon, value, tone = 'neutral', title, size = 'md' }: TokenMetricProps) {
+  const sizeClasses = {
+    sm: 'text-[10px] gap-1',
+    md: 'text-[12px] gap-1.5',
+    lg: 'text-[14px] gap-2',
+  };
+  
   return (
     <span
       title={title}
-      className={`inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] ${toneClass[tone]}`}
+      className={`inline-flex min-w-0 items-center whitespace-nowrap font-medium ${sizeClasses[size]} ${toneClass[tone]}`}
     >
-      {icon}
+      <span className="opacity-70">{icon}</span>
       <span>{value}</span>
     </span>
   );
@@ -172,7 +183,7 @@ function TokenAvatar({ signal }: { signal: Signal }) {
         src={signal.imageUrl}
         alt={signal.tokenSymbol}
         onError={() => setFailed(true)}
-        className="h-12 w-12 shrink-0 rounded-lg border border-slate-700 bg-slate-900 object-cover shadow-lg"
+        className="h-14 w-14 shrink-0 rounded-xl border border-slate-700 bg-slate-900 object-cover shadow-lg"
       />
     );
   }
@@ -188,14 +199,14 @@ function TokenAvatar({ signal }: { signal: Signal }) {
   const colorIndex = signal.tokenSymbol?.charCodeAt(0) % colors.length || 0;
 
   return (
-    <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-700/50 bg-gradient-to-br ${colors[colorIndex]} text-sm font-bold text-white shadow-lg`}>
+    <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-slate-700/50 bg-gradient-to-br ${colors[colorIndex]} text-base font-bold text-white shadow-lg`}>
       {signal.tokenSymbol?.slice(0, 1)?.toUpperCase() || '?'}
     </div>
   );
 }
 
 // ============================================================
-// ✅ TokenCard المعدل - يعرض العملة الأساسية للشبكة
+// ✅ TokenCard - نسخة محدثة
 // ============================================================
 
 function TokenCard({
@@ -222,11 +233,15 @@ function TokenCard({
       : 0;
 
   const priceTone =
-    signal.priceChange24h > 0
+    signal.priceChange24h > 5
       ? 'text-emerald-400'
-      : signal.priceChange24h < 0
-        ? 'text-red-400'
-        : 'text-slate-400';
+      : signal.priceChange24h > 0
+        ? 'text-emerald-300'
+        : signal.priceChange24h < -5
+          ? 'text-red-400'
+          : signal.priceChange24h < 0
+            ? 'text-red-300'
+            : 'text-slate-400';
 
   const riskTone =
     signal.score >= 75
@@ -237,101 +252,114 @@ function TokenCard({
 
   const dexUrl = signal.dexUrl || `https://dexscreener.com/${signal.network}/${signal.pairAddress || signal.tokenAddress}`;
 
+  // ✅ تحديد أيقونة بناءً على العمر
+  const getAgeIcon = () => {
+    if (signal.ageInSeconds < 300) return <Flame size={14} className="text-orange-400" />;
+    if (signal.ageInSeconds < 1800) return <Rocket size={14} className="text-cyan-400" />;
+    if (signal.ageInSeconds < 3600) return <Clock size={14} className="text-amber-400" />;
+    return <Clock size={14} className="text-slate-500" />;
+  };
+
   return (
     <article
-      className="group relative rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2.5 transition hover:border-slate-600 hover:bg-slate-800/60 cursor-pointer"
+      className="group relative rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3.5 transition-all duration-300 hover:border-slate-600 hover:bg-slate-800/60 hover:shadow-xl hover:shadow-cyan-500/5 cursor-pointer"
       onClick={() => setExpanded(v => !v)}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-4">
         <TokenAvatar signal={signal} />
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-sm font-bold text-white truncate">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-base font-bold text-white truncate">
               {signal.tokenSymbol}
             </span>
-            <span className="text-[10px] text-slate-400 truncate">
+            <span className="text-[11px] text-slate-400 truncate">
               {signal.tokenName}
             </span>
-            {/* ✅ عرض العملة الأساسية للشبكة */}
-            <span className="text-[8px] px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded-full font-medium">
+            <span className="text-[9px] px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded-full font-medium">
               {nativeToken.symbol}
             </span>
             {signal.paid && (
-              <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full font-medium">
-                Paid
+              <span className="text-[9px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full font-medium">
+                ⭐ Premium
               </span>
             )}
             {signal.liquidityLocked && (
-              <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full font-medium">
+              <span className="text-[9px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full font-medium">
                 🔒 Locked
               </span>
             )}
-            <span className={`text-[10px] font-mono font-semibold ${priceTone}`}>
+            <span className={`text-[11px] font-mono font-bold ${priceTone}`}>
               {signal.priceChange24h >= 0 ? '+' : ''}{signal.priceChange24h.toFixed(1)}%
             </span>
           </div>
 
-          <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
-            <span className="font-mono">{ageText(signal.ageInSeconds)}</span>
+          <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-1">
+            <span className="flex items-center gap-1">
+              {getAgeIcon()}
+              <span className="font-mono">{ageText(signal.ageInSeconds)}</span>
+            </span>
             <span className="text-slate-700">•</span>
             <span>{signal.dexName || signal.network}</span>
             <span className="text-slate-700">•</span>
-            <span className="text-cyan-400">💰 {nativeToken.symbol}</span>
+            <span className="text-cyan-400 font-medium">💰 {nativeToken.symbol}</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1.5 pt-1.5 border-t border-slate-800/60">
-            <Metric icon={<Users size={9} className="text-slate-400" />} value={compactNumber(signal.holders)} tone="neutral" title="Holders" />
-            <Metric icon={<TrendingUp size={9} className="text-emerald-400" />} value={compactNumber(signal.buys)} tone="positive" title="Buys" />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-2 pt-2 border-t border-slate-800/60">
+            <Metric icon={<Users size={14} />} value={compactNumber(signal.holders)} tone="neutral" title="Holders" size="sm" />
+            <Metric icon={<TrendingUp size={14} className="text-emerald-400" />} value={compactNumber(signal.buys)} tone="positive" title="Buys" size="sm" />
             <Metric
-              icon={<TrendingDown size={9} className={sellPressure > 60 ? 'text-red-400' : sellPressure > 40 ? 'text-amber-400' : 'text-emerald-400'} />}
+              icon={<TrendingDown size={14} className={sellPressure > 60 ? 'text-red-400' : sellPressure > 40 ? 'text-amber-400' : 'text-emerald-400'} />}
               value={`${sellPressure}%`}
               tone={sellPressure > 60 ? 'negative' : sellPressure > 40 ? 'warning' : 'positive'}
               title="Sell pressure"
+              size="sm"
             />
-            <Metric icon={<Droplets size={9} className="text-slate-400" />} value={`$${compactNumber(signal.liquidity)}`} tone="neutral" title="Liquidity" />
+            <Metric icon={<Droplets size={14} />} value={`$${compactNumber(signal.liquidity)}`} tone="neutral" title="Liquidity" size="sm" />
             <Metric
-              icon={<Eye size={9} className="text-slate-400" />}
+              icon={<Eye size={14} />}
               value={`${Math.round(signal.whaleActivity || 0)}%`}
               tone={(signal.whaleActivity || 0) >= 60 ? 'positive' : 'neutral'}
               title="Whale activity"
+              size="sm"
             />
             <Metric
-              icon={<ShieldCheck size={9} className={signal.score >= 70 ? 'text-emerald-400' : signal.score >= 50 ? 'text-amber-400' : 'text-red-400'} />}
+              icon={<ShieldCheck size={14} className={signal.score >= 70 ? 'text-emerald-400' : signal.score >= 50 ? 'text-amber-400' : 'text-red-400'} />}
               value={`${signal.score}`}
               tone={riskTone}
               title="Score"
+              size="sm"
             />
-            <Metric icon={<BarChart3 size={9} className="text-slate-400" />} value={`$${compactNumber(signal.marketCap)}`} tone="neutral" title="Market Cap" />
+            <Metric icon={<BarChart3 size={14} />} value={`$${compactNumber(signal.marketCap)}`} tone="neutral" title="Market Cap" size="sm" />
           </div>
 
-          <div className="flex items-center gap-3 text-[9px] text-slate-500 mt-1">
+          <div className="flex items-center gap-4 text-[10px] text-slate-500 mt-1.5">
             <span className="font-mono">TX {compactNumber(signal.txCount)}</span>
             <span className="font-mono">F {priceText(signal.price)}</span>
-            {showAI && <span className="text-violet-400/80 font-medium">AI {signal.confidence}%</span>}
+            {showAI && <span className="text-violet-400/80 font-medium">🤖 AI {signal.confidence}%</span>}
           </div>
         </div>
 
-        <div className="flex flex-col items-end gap-1 min-w-[70px]">
+        <div className="flex flex-col items-end gap-2 min-w-[80px]">
           <div className="text-right">
-            <div className="text-[9px] text-slate-500 font-medium">V</div>
-            <div className="text-[11px] font-bold text-white">${compactNumber(signal.volume)}</div>
+            <div className="text-[10px] text-slate-500 font-medium">Volume</div>
+            <div className="text-[13px] font-bold text-white">${compactNumber(signal.volume)}</div>
           </div>
           <div className="text-right">
-            <div className="text-[9px] text-slate-500 font-medium">MC</div>
-            <div className="text-[11px] font-bold text-white">${compactNumber(signal.marketCap)}</div>
+            <div className="text-[10px] text-slate-500 font-medium">Market Cap</div>
+            <div className="text-[13px] font-bold text-white">${compactNumber(signal.marketCap)}</div>
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); onBuy(); }}
-            className="mt-1 inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/20 px-2.5 py-1 text-[9px] font-bold text-emerald-400 transition-all duration-200"
+            className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 px-4 py-1.5 text-[11px] font-bold text-emerald-400 transition-all duration-200 hover:scale-105"
           >
-            <Zap size={10} className="text-emerald-400" /> Buy {nativeToken.symbol}
+            <Zap size={14} className="text-emerald-400" /> Buy {nativeToken.symbol}
           </button>
         </div>
       </div>
 
-      <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-slate-800/60 text-[8px] text-slate-500">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-800/60 text-[9px] text-slate-500">
+        <div className="flex items-center gap-4">
           <span>FDV: ${compactNumber(signal.fdv)}</span>
           <span className="text-slate-700">|</span>
           <span>Holders: {compactNumber(signal.holders)}</span>
@@ -340,65 +368,65 @@ function TokenCard({
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
-            className="inline-flex items-center gap-0.5 text-cyan-400 hover:text-cyan-300 transition-colors"
+            className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 transition-colors font-medium"
           >
-            <ExternalLink size={10} />
+            <ExternalLink size={12} />
             <span>Chart</span>
           </a>
         </div>
 
-        <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
           <button
             onClick={(e) => { e.stopPropagation(); onSell(); }}
-            className="px-1.5 py-0.5 text-red-400 hover:bg-red-500/10 rounded transition-all"
+            className="px-2 py-0.5 text-red-400 hover:bg-red-500/10 rounded transition-all font-medium text-[10px]"
           >
             Sell {nativeToken.symbol}
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onCopy(); }}
-            className="p-0.5 text-slate-500 hover:text-slate-300 rounded transition-all"
+            className="p-1 text-slate-500 hover:text-slate-300 rounded transition-all"
           >
-            {copied ? <CheckCircle size={9} className="text-emerald-400" /> : <Copy size={9} />}
+            {copied ? <CheckCircle size={12} className="text-emerald-400" /> : <Copy size={12} />}
           </button>
-          {expanded ? <ChevronDown size={9} className="text-slate-500" /> : <ChevronRight size={9} className="text-slate-500" />}
+          {expanded ? <ChevronDown size={12} className="text-slate-500" /> : <ChevronRight size={12} className="text-slate-500" />}
         </div>
       </div>
 
       {expanded && (
-        <div className="mt-2 pt-2 border-t border-slate-800/60 grid grid-cols-2 md:grid-cols-3 gap-1.5 text-[9px]" onClick={(e) => e.stopPropagation()}>
-          <div className="bg-slate-800/50 rounded-lg p-1.5">
-            <div className="text-slate-500 text-[8px]">Address</div>
-            <div className="truncate font-mono text-slate-300">{signal.tokenAddress}</div>
+        <div className="mt-3 pt-3 border-t border-slate-800/60 grid grid-cols-2 md:grid-cols-3 gap-2 text-[10px]" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-slate-800/50 rounded-lg p-2.5">
+            <div className="text-slate-500 text-[9px] font-medium">Address</div>
+            <div className="truncate font-mono text-slate-300 text-[11px]">{signal.tokenAddress}</div>
           </div>
-          <div className="bg-slate-800/50 rounded-lg p-1.5">
-            <div className="text-slate-500 text-[8px]">Network</div>
-            <div className="text-slate-300">{signal.network}</div>
+          <div className="bg-slate-800/50 rounded-lg p-2.5">
+            <div className="text-slate-500 text-[9px] font-medium">Network</div>
+            <div className="text-slate-300 text-[11px]">{signal.network}</div>
           </div>
-          <div className="bg-slate-800/50 rounded-lg p-1.5">
-            <div className="text-slate-500 text-[8px]">Native</div>
-            <div className="text-cyan-400">{nativeToken.symbol}</div>
+          <div className="bg-slate-800/50 rounded-lg p-2.5">
+            <div className="text-slate-500 text-[9px] font-medium">Native Token</div>
+            <div className="text-cyan-400 text-[11px] font-medium">{nativeToken.symbol}</div>
           </div>
-          <div className="bg-slate-800/50 rounded-lg p-1.5">
-            <div className="text-slate-500 text-[8px]">Holders</div>
-            <div className="text-slate-300">{compactNumber(signal.holders)}</div>
+          <div className="bg-slate-800/50 rounded-lg p-2.5">
+            <div className="text-slate-500 text-[9px] font-medium">Holders</div>
+            <div className="text-slate-300 text-[11px]">{compactNumber(signal.holders)}</div>
           </div>
-          <div className="bg-slate-800/50 rounded-lg p-1.5">
-            <div className="text-slate-500 text-[8px]">Top 10</div>
-            <div className="text-slate-300">{Math.round(signal.top10Percent || 0)}%</div>
+          <div className="bg-slate-800/50 rounded-lg p-2.5">
+            <div className="text-slate-500 text-[9px] font-medium">Top 10 Holders</div>
+            <div className="text-slate-300 text-[11px]">{Math.round(signal.top10Percent || 0)}%</div>
           </div>
-          <div className="bg-slate-800/50 rounded-lg p-1.5">
-            <div className="text-slate-500 text-[8px]">Creator</div>
-            <div className="text-slate-300">{Math.round(signal.creatorPercent || 0)}%</div>
+          <div className="bg-slate-800/50 rounded-lg p-2.5">
+            <div className="text-slate-500 text-[9px] font-medium">Creator Holdings</div>
+            <div className="text-slate-300 text-[11px]">{Math.round(signal.creatorPercent || 0)}%</div>
           </div>
-          <div className="col-span-2 md:col-span-3 bg-slate-800/50 rounded-lg p-1.5">
-            <div className="text-slate-500 text-[8px]">DexScreener</div>
+          <div className="col-span-2 md:col-span-3 bg-slate-800/50 rounded-lg p-2.5">
+            <div className="text-slate-500 text-[9px] font-medium">DexScreener</div>
             <a
               href={dexUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-cyan-400 hover:text-cyan-300 text-[10px] flex items-center gap-1 truncate"
+              className="text-cyan-400 hover:text-cyan-300 text-[11px] flex items-center gap-1.5 truncate"
             >
-              <ExternalLink size={10} />
+              <ExternalLink size={13} />
               {dexUrl}
             </a>
           </div>
@@ -409,7 +437,7 @@ function TokenCard({
 }
 
 // ============================================================
-// ✅ Column المعدل
+// ✅ Column - نسخة محدثة
 // ============================================================
 
 function Column({
@@ -439,22 +467,22 @@ function Column({
 }) {
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800/60 bg-slate-900/30 backdrop-blur-sm">
-      <div className="sticky top-0 z-10 border-b border-slate-800/60 bg-slate-900/80 backdrop-blur-sm px-3 py-2.5">
+      <div className="sticky top-0 z-10 border-b border-slate-800/60 bg-slate-900/80 backdrop-blur-sm px-4 py-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className={`h-2.5 w-2.5 rounded-full ${accent} shadow-lg`} />
-            <h2 className="text-[13px] font-bold tracking-wide text-white">{title}</h2>
-            <span className="rounded-full bg-slate-800/60 px-2 py-0.5 text-[8px] font-medium text-slate-400">
+          <div className="flex items-center gap-3">
+            <div className={`h-3 w-3 rounded-full ${accent} shadow-lg shadow-${accent.split(' ')[0]?.replace('bg-', '')}/30`} />
+            <h2 className="text-[15px] font-bold tracking-wide text-white">{title}</h2>
+            <span className="rounded-full bg-slate-800/60 px-2.5 py-0.5 text-[10px] font-medium text-slate-400">
               {count}
             </span>
           </div>
         </div>
-        <div className="text-[8px] text-slate-500 mt-0.5 font-medium">{subtitle}</div>
+        <div className="text-[10px] text-slate-500 mt-0.5 font-medium">{subtitle}</div>
       </div>
 
-      <div className="min-h-[620px] space-y-1.5 overflow-y-auto p-2 scrollbar-thin scrollbar-track-slate-900 scrollbar-thumb-slate-700">
+      <div className="min-h-[620px] space-y-2 overflow-y-auto p-3 scrollbar-thin scrollbar-track-slate-900 scrollbar-thumb-slate-700">
         {signals.length === 0 ? (
-          <div className="flex min-h-[280px] items-center justify-center text-center text-[10px] text-slate-500">
+          <div className="flex min-h-[280px] items-center justify-center text-center text-[11px] text-slate-500">
             لا توجد عملات في هذا القسم
           </div>
         ) : (
@@ -476,7 +504,7 @@ function Column({
 }
 
 // ============================================================
-// ✅ الصفحة الرئيسية المعدلة
+// ✅ الصفحة الرئيسية - نسخة محدثة بالكامل
 // ============================================================
 
 export function ManualTradesPage() {
@@ -507,7 +535,6 @@ export function ManualTradesPage() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [botTokenInfo, setBotTokenInfo] = useState<BotToken | null>(null);
   const [userWallet, setUserWallet] = useState<any>(null);
   const [isLoadingWallet, setIsLoadingWallet] = useState(false);
   const [tradeResult, setTradeResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -517,6 +544,37 @@ export function ManualTradesPage() {
   const availableNetworks = NETWORKS.filter(n => activeNetworks.includes(n.id));
 
   const nativeToken = selectedSignal ? NATIVE_TOKENS[selectedSignal.network] || NATIVE_TOKENS.solana : null;
+
+  // ✅ دوال العملات المستقرة (USDC/USDT)
+  const getStablecoinAddress = (network: string): string => {
+    const STABLECOINS: Record<string, string> = {
+      solana: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      bsc: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+      polygon: '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174',
+      arbitrum: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+      base: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      avalanche: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
+      optimism: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+      robinhood: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+    };
+    return STABLECOINS[network] || STABLECOINS.solana;
+  };
+
+  const getStablecoinPrice = async (network: string): Promise<number> => {
+    try {
+      const address = getStablecoinAddress(network);
+      const response = await fetch(`${import.meta.env.VITE_WORKER_URL}/dex-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tokenAddress: address, network }),
+      });
+      const data = await response.json();
+      return data.data?.price || 1;
+    } catch {
+      return 1;
+    }
+  };
 
   // ============================================================
   // دوال مساعدة
@@ -534,7 +592,7 @@ export function ManualTradesPage() {
     }
   };
 
-  const loadUserWalletAndToken = async () => {
+  const loadUserWallet = async () => {
     if (!user) return;
 
     setIsLoadingWallet(true);
@@ -547,18 +605,6 @@ export function ManualTradesPage() {
       }
 
       setUserWallet(wallet);
-
-      let token = await AccountManager.getBotToken(user.id, selectedNetwork);
-
-      if (!token) {
-        token = await AccountManager.createBotToken(
-          user.id,
-          wallet.id!,
-          selectedNetwork
-        );
-      }
-
-      setBotTokenInfo(token);
     } catch (error: any) {
       addLog('ERROR', `فشل تحميل المحفظة: ${error?.message || String(error)}`);
     } finally {
@@ -787,11 +833,10 @@ export function ManualTradesPage() {
   };
 
   // ============================================================
-  // ✅ تنفيذ الصفقة مع العمولة 15%
+  // ✅ تنفيذ الصفقة - بدون بوت وبدون حدود
   // ============================================================
 
   const executeTrade = async (signal: Signal, action: TradeAction) => {
-    // ✅ إعادة تعيين حالة النتيجة
     setTradeResult(null);
 
     if (!signal.tokenAddress) {
@@ -800,13 +845,7 @@ export function ManualTradesPage() {
     }
 
     if (!user) {
-      addLog('ERROR', 'الرجاء تسجيل الدخول أولًا');
-      return;
-    }
-
-    if (!botTokenInfo || botTokenInfo.status !== 'active') {
-      await loadUserWalletAndToken();
-      addLog('ERROR', 'لا يوجد رمز بوت نشط');
+      addLog('ERROR', 'الرجاء تسجيل الدخول أولاً');
       return;
     }
 
@@ -823,7 +862,6 @@ export function ManualTradesPage() {
         throw new Error('لا توجد محفظة على هذه الشبكة');
       }
 
-      // ✅ جلب الرصيد الحقيقي
       const balance = await AccountManager.getUserWalletBalance(
         user.id,
         signal.network
@@ -835,41 +873,24 @@ export function ManualTradesPage() {
         );
       }
 
-      const canTrade = await AccountManager.canUserTrade(user.id);
-
-      if (!canTrade) {
-        const remaining = await AccountManager.getRemainingTrades(user.id);
-        throw new Error(`تم تجاوز الحد اليومي. المتبقي: ${remaining}`);
-      }
-
-      const validToken = await AccountManager.verifyBotToken(
-        botTokenInfo.token,
-        user.id
-      );
-
-      if (!validToken) {
-        throw new Error('رمز البوت غير صالح');
-      }
-
       const manager = BotWalletManager.getInstance();
       const masterPassword = import.meta.env.VITE_MASTER_PASSWORD;
 
       if (!masterPassword) {
-        throw new Error(
-          'VITE_MASTER_PASSWORD غير مضبوط'
-        );
+        throw new Error('VITE_MASTER_PASSWORD غير مضبوط');
       }
 
-      // ✅ حفظ سعر الدخول لحساب الربح
       const entryPrice = signal.price;
 
-      // ✅ تنفيذ الصفقة
+      const stablecoinPrice = await getStablecoinPrice(signal.network);
+      const amountInUSDC = stablecoinPrice > 0 ? amount / stablecoinPrice : amount;
+
       const result =
         action === 'BUY'
           ? await manager.executeBuyForUser({
               userId: user.id,
               tokenAddress: signal.tokenAddress,
-              amount,
+              amount: amountInUSDC,
               slippage: 0.5,
               password: masterPassword,
               network: signal.network,
@@ -877,7 +898,7 @@ export function ManualTradesPage() {
           : await manager.executeSellForUser({
               userId: user.id,
               tokenAddress: signal.tokenAddress,
-              amount,
+              amount: amountInUSDC,
               slippage: 0.5,
               password: masterPassword,
               network: signal.network,
@@ -887,28 +908,12 @@ export function ManualTradesPage() {
         throw new Error(result.error || 'فشل تنفيذ الصفقة');
       }
 
-      // ✅ حساب الربح وتطبيق العمولة (فقط عند البيع)
       let profitMessage = '';
-      let commissionAmount = 0;
 
       if (action === 'SELL' && result.price && entryPrice) {
         const grossProfit = (result.price - entryPrice) * amount;
         if (grossProfit > 0) {
-          // ✅ تطبيق العمولة 15%
-          const commission = grossProfit * COMMISSION_RATE;
-          commissionAmount = commission;
-          const netProfit = grossProfit - commission;
-
-          // ✅ تحديث رصيد المستخدم وإضافة العمولة
-          await AccountManager.addProfit(user.id, grossProfit, {
-            token: signal.tokenSymbol,
-            amount,
-            price: result.price,
-            txHash: result.txHash!,
-            network: signal.network,
-          });
-
-          profitMessage = `💰 ربح: $${grossProfit.toFixed(2)} | العمولة (15%): $${commission.toFixed(2)} | صافي: $${netProfit.toFixed(2)}`;
+          profitMessage = `💰 ربح: $${grossProfit.toFixed(2)}`;
           addLog('SUCCESS', profitMessage);
         } else if (grossProfit < 0) {
           profitMessage = `📉 خسارة: $${Math.abs(grossProfit).toFixed(2)}`;
@@ -919,10 +924,6 @@ export function ManualTradesPage() {
         }
       }
 
-      await AccountManager.incrementUserTrades(user.id);
-      await AccountManager.updateBotTokenLastUsed(botTokenInfo.id);
-
-      // ✅ تسجيل الصفقة في قاعدة البيانات
       await addTrade({
         id: `manual-${Date.now()}`,
         token: signal.tokenSymbol,
@@ -935,10 +936,9 @@ export function ManualTradesPage() {
         timestamp: new Date().toISOString(),
         txHash: result.txHash || `0x${Date.now()}`,
         userId: user.id,
-        botToken: botTokenInfo.token,
+        botToken: 'manual-trade',
       });
 
-      // ✅ عرض نتيجة الصفقة للمستخدم
       const nativeSymbol = NATIVE_TOKENS[signal.network]?.symbol || 'TOKEN';
       const actionText = action === 'BUY' ? 'شراء' : 'بيع';
       setTradeResult({
@@ -946,7 +946,6 @@ export function ManualTradesPage() {
         message: `✅ تم ${actionText} ${signal.tokenSymbol} بـ ${amount} ${nativeSymbol} بنجاح!${profitMessage ? `\n${profitMessage}` : ''}`,
       });
 
-      // ✅ إغلاق المودال بعد 3 ثوان
       setTimeout(() => {
         setSelectedSignal(null);
         setTradeResult(null);
@@ -983,7 +982,7 @@ export function ManualTradesPage() {
   }, []);
 
   useEffect(() => {
-    if (user) loadUserWalletAndToken();
+    if (user) loadUserWallet();
   }, [user, selectedNetwork]);
 
   useEffect(() => {
@@ -1074,62 +1073,64 @@ export function ManualTradesPage() {
   };
 
   // ============================================================
-  // ✅ واجهة المستخدم
+  // ✅ واجهة المستخدم - نسخة محدثة
   // ============================================================
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      {/* Header */}
-      <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/95 backdrop-blur">
-        <div className="flex h-14 items-center justify-between gap-3 px-4">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-white">🖐️ تداول يدوي</span>
-            <span className="text-xs text-slate-500">|</span>
-            <span className="text-xs text-slate-400">{getNetworkName(selectedNetwork)}</span>
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
+      {/* Header - محدث */}
+      <header className="sticky top-0 z-40 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-xl">
+        <div className="flex h-16 items-center justify-between gap-4 px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-gradient-to-r from-cyan-400 to-emerald-400 bg-clip-text text-transparent">
+              <span className="text-lg font-bold">🖐️ تداول يدوي</span>
+            </div>
+            <span className="text-xs text-slate-600">|</span>
+            <span className="text-sm text-slate-400 font-medium">{getNetworkName(selectedNetwork)}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="hidden lg:flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-2.5 py-1.5">
-              <Search size={13} className="text-slate-500" />
+          <div className="flex items-center gap-3">
+            <div className="hidden lg:flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/50 px-3.5 py-2">
+              <Search size={15} className="text-slate-500" />
               <input
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleDirectSearch(); }}
-                placeholder="بحث..."
-                className="w-36 bg-transparent text-[11px] outline-none placeholder:text-slate-600"
+                placeholder="بحث عن عملة..."
+                className="w-44 bg-transparent text-sm outline-none placeholder:text-slate-600 text-white"
               />
             </div>
             <button
               onClick={() => setShowAI(!showAI)}
-              className={`rounded-lg p-2 transition-all ${showAI ? 'bg-violet-500/20 text-violet-400' : 'text-slate-500'} hover:bg-slate-800`}
+              className={`rounded-xl p-2.5 transition-all ${showAI ? 'bg-violet-500/20 text-violet-400' : 'text-slate-500'} hover:bg-slate-800/50`}
             >
-              <Sparkles size={14} />
+              <Sparkles size={16} />
             </button>
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className={`rounded-lg p-2 transition-all ${showFilters ? 'bg-slate-800 text-white' : 'text-slate-500'} hover:bg-slate-800`}
+              className={`rounded-xl p-2.5 transition-all ${showFilters ? 'bg-slate-800 text-white' : 'text-slate-500'} hover:bg-slate-800/50`}
             >
-              <SlidersHorizontal size={14} />
+              <SlidersHorizontal size={16} />
             </button>
             <button
               onClick={() => fetchAllPairs(selectedNetwork, true)}
               disabled={isSearching}
-              className="rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 px-3 py-1.5 text-[10px] font-bold text-cyan-400 transition-all disabled:opacity-50"
+              className="rounded-xl bg-gradient-to-r from-cyan-500/20 to-emerald-500/20 hover:from-cyan-500/30 hover:to-emerald-500/30 border border-cyan-500/30 px-4 py-2 text-[11px] font-bold text-cyan-400 transition-all duration-200 disabled:opacity-50 hover:scale-105"
             >
-              {isSearching ? <Loader2 size={13} className="animate-spin" /> : 'تحديث'}
+              {isSearching ? <Loader2 size={15} className="animate-spin" /> : '🔄 تحديث'}
             </button>
           </div>
         </div>
       </header>
 
-      <main className="px-4 pb-12 pt-2">
-        {/* Pulse toolbar */}
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-200">Pulse</span>
+      <main className="px-6 pb-16 pt-3">
+        {/* Pulse toolbar - محدث */}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/60 pb-3">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold text-slate-200">📊 Pulse</span>
             <select
               value={selectedNetwork}
               onChange={e => setSelectedNetwork(e.target.value)}
-              className="rounded-md border border-slate-800 bg-slate-900/50 px-2 py-1 text-[9px] text-slate-300 outline-none"
+              className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-1.5 text-[11px] text-slate-300 outline-none focus:border-cyan-500/50"
             >
               {availableNetworks.map(network => (
                 <option key={network.id} value={network.id}>
@@ -1138,21 +1139,21 @@ export function ManualTradesPage() {
               ))}
             </select>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             {[
-              ['all', 'الكل'],
-              ['new', 'جديد'],
-              ['final', 'نهائي'],
-              ['migrated', 'مهاجر'],
+              ['all', '📊 الكل'],
+              ['new', '🆕 جديد'],
+              ['final', '🔥 نهائي'],
+              ['migrated', '🚀 مهاجر'],
             ].map(([id, label]) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setActiveColumn(id as ColumnId | 'all')}
-                className={`rounded-md px-2 py-1 text-[9px] transition-all ${
+                className={`rounded-xl px-3.5 py-1.5 text-[11px] font-medium transition-all duration-200 ${
                   activeColumn === id
-                    ? 'bg-slate-700 text-white'
-                    : 'text-slate-500 hover:bg-slate-800 hover:text-slate-300'
+                    ? 'bg-gradient-to-r from-cyan-500/30 to-emerald-500/30 text-white border border-cyan-500/30'
+                    : 'text-slate-500 hover:bg-slate-800/50 hover:text-slate-300'
                 }`}
               >
                 {label}
@@ -1161,89 +1162,90 @@ export function ManualTradesPage() {
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Filters - محدث */}
         {showFilters && (
-          <div className="mb-2 rounded-xl border border-slate-800 bg-slate-900/30 p-2.5">
-            <div className="flex flex-wrap items-end gap-2">
+          <div className="mb-3 rounded-xl border border-slate-800 bg-slate-900/30 p-3.5 backdrop-blur-sm">
+            <div className="flex flex-wrap items-end gap-3">
               <div>
-                <label className="mb-1 block text-[8px] text-slate-600">سيولة ≥</label>
+                <label className="mb-1 block text-[10px] text-slate-500 font-medium">سيولة ≥</label>
                 <input
                   type="number"
                   value={minLiquidity}
                   onChange={e => setMinLiquidity(Number(e.target.value))}
-                  className="w-28 rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5 text-[9px] outline-none"
+                  className="w-32 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] outline-none focus:border-cyan-500/50"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[8px] text-slate-600">حجم ≥</label>
+                <label className="mb-1 block text-[10px] text-slate-500 font-medium">حجم ≥</label>
                 <input
                   type="number"
                   value={minVolume}
                   onChange={e => setMinVolume(Number(e.target.value))}
-                  className="w-28 rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5 text-[9px] outline-none"
+                  className="w-32 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] outline-none focus:border-cyan-500/50"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[8px] text-slate-600">نتيجة ≥</label>
+                <label className="mb-1 block text-[10px] text-slate-500 font-medium">نتيجة ≥</label>
                 <input
                   type="number"
                   min={0}
                   max={100}
                   value={minScore}
                   onChange={e => setMinScore(Number(e.target.value))}
-                  className="w-20 rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5 text-[9px] outline-none"
+                  className="w-24 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] outline-none focus:border-cyan-500/50"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[8px] text-slate-600">العمر الأقصى</label>
+                <label className="mb-1 block text-[10px] text-slate-500 font-medium">العمر الأقصى</label>
                 <select
                   value={maxAge ?? ''}
                   onChange={e => setMaxAge(e.target.value ? Number(e.target.value) : null)}
-                  className="w-28 rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5 text-[9px] outline-none"
+                  className="w-32 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] outline-none focus:border-cyan-500/50"
                 >
                   <option value="">أي</option>
-                  <option value="60">1 د</option>
-                  <option value="300">5 د</option>
-                  <option value="1800">30 د</option>
-                  <option value="3600">1 س</option>
-                  <option value="21600">6 س</option>
-                  <option value="86400">24 س</option>
+                  <option value="60">1 دقيقة</option>
+                  <option value="300">5 دقائق</option>
+                  <option value="1800">30 دقيقة</option>
+                  <option value="3600">1 ساعة</option>
+                  <option value="21600">6 ساعات</option>
+                  <option value="86400">24 ساعة</option>
                 </select>
               </div>
               <button
                 type="button"
                 onClick={resetFilters}
-                className="rounded-md bg-slate-800 px-3 py-1.5 text-[9px] text-slate-400 hover:text-white"
+                className="rounded-xl bg-slate-800 px-4 py-2 text-[11px] font-medium text-slate-400 hover:text-white transition-all"
               >
-                إعادة تعيين
+                ↩️ إعادة تعيين
               </button>
-              <div className="ml-auto flex items-center gap-3 text-[9px] text-slate-600">
-                <span>العملات <b className="text-slate-300">{filteredSignals.length}</b></span>
-                <span>شراء <b className="text-emerald-400">{buyCount}</b></span>
-                <span>متوسط <b className="text-slate-300">{avgScore.toFixed(0)}</b></span>
+              <div className="ml-auto flex items-center gap-4 text-[11px] text-slate-500">
+                <span>العملات <b className="text-white text-[13px]">{filteredSignals.length}</b></span>
+                <span>شراء <b className="text-emerald-400 text-[13px]">{buyCount}</b></span>
+                <span>متوسط <b className="text-cyan-400 text-[13px]">{avgScore.toFixed(0)}</b></span>
               </div>
             </div>
           </div>
         )}
 
-        {/* Wallet strip */}
+        {/* Wallet strip - محدث (بدون بوت) */}
         {user && (
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/30 px-3 py-1.5">
-            <div className="flex items-center gap-2 text-[9px]">
-              <KeyRound size={11} className="text-violet-400" />
-              <span className="text-slate-500">حالة البوت</span>
-              <span className={botTokenInfo?.status === 'active' ? 'text-emerald-400' : 'text-amber-400'}>
-                {botTokenInfo?.status === 'active' ? '✅ نشط' : '⚠️ غير نشط'}
-              </span>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-500/20 bg-gradient-to-r from-emerald-500/5 to-cyan-500/5 px-4 py-2.5">
+            <div className="flex items-center gap-3 text-[11px]">
+              <Wallet size={16} className="text-emerald-400" />
+              <span className="text-slate-400">المحفظة</span>
               {userWallet && (
-                <span className="font-mono text-slate-600 bg-slate-800/50 px-2 py-0.5 rounded">
+                <span className="font-mono text-slate-300 bg-slate-800/50 px-3 py-1 rounded-lg">
                   {userWallet.address?.slice(0, 8)}...
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[8px] text-slate-600">
-              <ShieldCheck size={10} className="text-emerald-500" />
-              المفاتيح الخاصة غير مكشوفة
+            <div className="flex items-center gap-3 text-[10px]">
+              <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                <CheckCircle size={14} className="text-emerald-500" />
+                ✅ جاهز للتداول
+              </span>
+              <span className="text-slate-600">|</span>
+              <span className="text-slate-500">🔄 عدد الصفقات: غير محدود</span>
             </div>
           </div>
         )}
@@ -1252,16 +1254,16 @@ export function ManualTradesPage() {
         {isSearching && signals.length === 0 ? (
           <div className="flex min-h-[600px] items-center justify-center rounded-xl border border-slate-800 bg-slate-900/30">
             <div className="text-center">
-              <Loader2 className="mx-auto mb-3 animate-spin text-cyan-400" size={30} />
-              <p className="text-[11px] text-slate-500">جاري تحميل البيانات من {getNetworkName(selectedNetwork)}...</p>
+              <Loader2 className="mx-auto mb-4 animate-spin text-cyan-400" size={40} />
+              <p className="text-sm text-slate-400">جاري تحميل البيانات من {getNetworkName(selectedNetwork)}...</p>
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
             <Column
               id="new"
-              title="جديد"
-              subtitle="أزواج جديدة • 0–1 س"
+              title="🆕 جديد"
+              subtitle="أزواج جديدة • 0–1 ساعة"
               count={newPairs.length}
               accent="bg-emerald-400"
               signals={visibleNew}
@@ -1273,8 +1275,8 @@ export function ManualTradesPage() {
             />
             <Column
               id="final"
-              title="المرحلة النهائية"
-              subtitle="أزواج نشطة • 1–24 س"
+              title="🔥 المرحلة النهائية"
+              subtitle="أزواج نشطة • 1–24 ساعة"
               count={finalStretch.length}
               accent="bg-amber-400"
               signals={visibleFinal}
@@ -1286,7 +1288,7 @@ export function ManualTradesPage() {
             />
             <Column
               id="migrated"
-              title="مهاجر"
+              title="🚀 مهاجر"
               subtitle="أزواج مهاجرة / ناضجة"
               count={migrated.length}
               accent="bg-blue-400"
@@ -1301,39 +1303,39 @@ export function ManualTradesPage() {
         )}
 
         {hasMore && !searchQuery.trim() && (
-          <div className="flex justify-center py-3">
+          <div className="flex justify-center py-4">
             <button
               type="button"
               onClick={loadMore}
               disabled={isLoadingMore}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-4 py-2 text-[9px] text-slate-400 hover:text-white disabled:opacity-50"
+              className="inline-flex items-center gap-2.5 rounded-xl border border-slate-800 bg-slate-900/50 px-6 py-3 text-[11px] font-medium text-slate-400 hover:text-white hover:border-slate-600 transition-all disabled:opacity-50"
             >
-              {isLoadingMore && <Loader2 size={11} className="animate-spin" />}
-              تحميل المزيد
+              {isLoadingMore && <Loader2 size={14} className="animate-spin" />}
+              📥 تحميل المزيد
             </button>
           </div>
         )}
       </main>
 
       {/* ============================================================
-          ✅ Trade Modal المعدل - يعرض العملة الأساسية
+          ✅ Trade Modal - نسخة محدثة
           ============================================================ */}
       {selectedSignal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
           onClick={() => !executing && !tradeResult && setSelectedSignal(null)}
         >
           <div
-            className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl"
+            className="w-full max-w-lg rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 to-slate-950 p-6 shadow-2xl shadow-cyan-500/10"
             onClick={e => e.stopPropagation()}
           >
-            <div className="mb-4 flex items-center justify-between">
+            <div className="mb-5 flex items-center justify-between">
               <div>
-                <div className="text-[10px] text-slate-500">
-                  {selectedSignal.recommendation === 'BUY' ? 'أمر شراء' : 'أمر بيع'}
+                <div className="text-[11px] text-slate-500 font-medium">
+                  {selectedSignal.recommendation === 'BUY' ? '📈 أمر شراء' : '📉 أمر بيع'}
                 </div>
-                <h2 className="mt-1 text-lg font-bold text-white">{selectedSignal.tokenSymbol}</h2>
-                <div className="text-[8px] text-cyan-400 font-mono">
+                <h2 className="mt-1 text-2xl font-bold text-white">{selectedSignal.tokenSymbol}</h2>
+                <div className="text-[10px] text-cyan-400 font-mono">
                   الشبكة: {selectedSignal.network} | العملة: {NATIVE_TOKENS[selectedSignal.network]?.symbol || 'TOKEN'}
                 </div>
               </div>
@@ -1341,38 +1343,37 @@ export function ManualTradesPage() {
                 type="button"
                 onClick={() => !executing && !tradeResult && setSelectedSignal(null)}
                 disabled={executing}
-                className="rounded-lg p-2 text-slate-500 hover:bg-slate-800 hover:text-white"
+                className="rounded-xl p-2.5 text-slate-500 hover:bg-slate-800/50 hover:text-white transition-all"
               >
-                <X size={16} />
+                <X size={18} />
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-[10px]">
-              <div className="rounded-lg bg-slate-800/50 p-2">
+            <div className="grid grid-cols-2 gap-3 text-[11px]">
+              <div className="rounded-xl bg-slate-800/50 p-3.5">
                 <div className="text-slate-500">السعر</div>
-                <div className="mt-1 text-slate-200">{priceText(selectedSignal.price)}</div>
+                <div className="mt-1 text-lg font-bold text-white">{priceText(selectedSignal.price)}</div>
               </div>
-              <div className="rounded-lg bg-slate-800/50 p-2">
+              <div className="rounded-xl bg-slate-800/50 p-3.5">
                 <div className="text-slate-500">القيمة السوقية</div>
-                <div className="mt-1 text-slate-200">${compactNumber(selectedSignal.marketCap)}</div>
+                <div className="mt-1 text-lg font-bold text-white">${compactNumber(selectedSignal.marketCap)}</div>
               </div>
-              <div className="rounded-lg bg-slate-800/50 p-2">
+              <div className="rounded-xl bg-slate-800/50 p-3.5">
                 <div className="text-slate-500">السيولة</div>
-                <div className="mt-1 text-slate-200">${compactNumber(selectedSignal.liquidity)}</div>
+                <div className="mt-1 text-lg font-bold text-white">${compactNumber(selectedSignal.liquidity)}</div>
               </div>
-              <div className="rounded-lg bg-slate-800/50 p-2">
+              <div className="rounded-xl bg-slate-800/50 p-3.5">
                 <div className="text-slate-500">النتيجة</div>
-                <div className="mt-1 text-emerald-400">{selectedSignal.score}/100</div>
+                <div className="mt-1 text-lg font-bold text-emerald-400">{selectedSignal.score}/100</div>
               </div>
             </div>
 
-            {/* ✅ عرض العملة الأساسية للشبكة */}
-            <div className="mt-3 rounded-lg bg-cyan-500/10 border border-cyan-500/20 p-2">
-              <div className="flex items-center justify-between text-[9px]">
+            <div className="mt-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 p-3">
+              <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400">💰 العملة المستخدمة للشراء</span>
-                <span className="text-cyan-400 font-bold">
+                <span className="text-cyan-400 font-bold text-base">
                   {NATIVE_TOKENS[selectedSignal.network]?.symbol || 'TOKEN'}
-                  <span className="text-slate-500 text-[8px] ml-1">
+                  <span className="text-slate-500 text-[10px] ml-1.5">
                     ({NATIVE_TOKENS[selectedSignal.network]?.name || ''})
                   </span>
                 </span>
@@ -1380,7 +1381,7 @@ export function ManualTradesPage() {
             </div>
 
             <div className="mt-4">
-              <label className="mb-1.5 block text-[9px] text-slate-500">
+              <label className="mb-1.5 block text-[11px] text-slate-400 font-medium">
                 المبلغ ({NATIVE_TOKENS[selectedSignal.network]?.symbol || 'USD'})
               </label>
               <input
@@ -1389,45 +1390,33 @@ export function ManualTradesPage() {
                 max={100000}
                 value={amount}
                 onChange={e => setAmount(Number(e.target.value))}
-                className="w-full rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm outline-none focus:border-cyan-400"
+                className="w-full rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3 text-base outline-none focus:border-cyan-400 transition-all"
               />
             </div>
 
-            {/* ✅ عرض العمولة المتوقعة */}
-            {selectedSignal.recommendation === 'SELL' && (
-              <div className="mt-2 rounded-lg bg-amber-500/10 border border-amber-500/20 p-2">
-                <div className="flex items-center justify-between text-[8px]">
-                  <span className="text-slate-400">💰 العمولة المتوقعة (15%)</span>
-                  <span className="text-amber-400">
-                    ~${(amount * 0.15).toFixed(2)}
-                  </span>
-                </div>
-              </div>
-            )}
-
             {tradeResult && (
-              <div className={`mt-3 rounded-lg p-3 ${tradeResult.success ? 'bg-emerald-500/20 border border-emerald-500/30' : 'bg-red-500/20 border border-red-500/30'}`}>
-                <p className={`text-[10px] ${tradeResult.success ? 'text-emerald-400' : 'text-red-400'} whitespace-pre-line`}>
+              <div className={`mt-4 rounded-xl p-4 ${tradeResult.success ? 'bg-emerald-500/20 border border-emerald-500/30' : 'bg-red-500/20 border border-red-500/30'}`}>
+                <p className={`text-[12px] ${tradeResult.success ? 'text-emerald-400' : 'text-red-400'} whitespace-pre-line font-medium`}>
                   {tradeResult.message}
                 </p>
               </div>
             )}
 
-            <div className="mt-4 flex gap-2">
+            <div className="mt-5 flex gap-3">
               <button
                 type="button"
-                disabled={executing || !botTokenInfo || !!tradeResult}
+                disabled={executing || !!tradeResult}
                 onClick={() => executeTrade(selectedSignal, selectedSignal.recommendation === 'BUY' ? 'BUY' : 'SELL')}
-                className={`flex-1 rounded-lg py-2.5 text-[11px] font-bold ${
+                className={`flex-1 rounded-xl py-3.5 text-[13px] font-bold transition-all duration-200 ${
                   selectedSignal.recommendation === 'BUY'
-                    ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
-                    : 'bg-red-500 text-white hover:bg-red-400'
-                } disabled:opacity-50`}
+                    ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-400 hover:to-emerald-500 hover:scale-105'
+                    : 'bg-gradient-to-r from-red-500 to-red-600 text-white hover:from-red-400 hover:to-red-500 hover:scale-105'
+                } disabled:opacity-50 disabled:hover:scale-100`}
               >
                 {executing ? (
-                  <Loader2 size={14} className="mx-auto animate-spin" />
+                  <Loader2 size={16} className="mx-auto animate-spin" />
                 ) : tradeResult ? (
-                  'تم التنفيذ ✓'
+                  '✅ تم التنفيذ'
                 ) : (
                   `تأكيد ${selectedSignal.recommendation === 'BUY' ? 'شراء' : 'بيع'}`
                 )}
@@ -1436,35 +1425,35 @@ export function ManualTradesPage() {
                 type="button"
                 disabled={executing}
                 onClick={() => setSelectedSignal(null)}
-                className="rounded-lg bg-slate-800 px-4 py-2.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                className="rounded-xl bg-slate-800 px-6 py-3.5 text-[13px] font-medium text-slate-300 hover:bg-slate-700 transition-all"
               >
                 إلغاء
               </button>
             </div>
-
-            {!botTokenInfo && (
-              <p className="mt-3 text-center text-[9px] text-amber-400">البوت غير نشط. يرجى تفعيله أولاً.</p>
-            )}
           </div>
         </div>
       )}
 
-      {/* Bottom status bar */}
-      <footer className="fixed bottom-0 left-0 right-0 z-30 flex h-7 items-center justify-between border-t border-slate-800 bg-slate-950 px-3 text-[8px]">
-        <div className="flex items-center gap-2 text-slate-600">
-          <span className="flex items-center gap-1 text-emerald-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            مستقر
+      {/* Bottom status bar - محدث */}
+      <footer className="fixed bottom-0 left-0 right-0 z-30 flex h-9 items-center justify-between border-t border-slate-800/60 bg-slate-950/90 backdrop-blur-xl px-6 text-[10px]">
+        <div className="flex items-center gap-3 text-slate-500">
+          <span className="flex items-center gap-1.5 text-emerald-400">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            🟢 مباشر
           </span>
-          <span>Pulse</span>
-          <span>الماسح</span>
-          <span>المتتبع</span>
-          <span>التنبيهات</span>
+          <span className="text-slate-700">|</span>
+          <span>📡 Pulse</span>
+          <span className="text-slate-700">|</span>
+          <span>🔍 الماسح</span>
+          <span className="text-slate-700">|</span>
+          <span>📊 المتتبع</span>
+          <span className="text-slate-700">|</span>
+          <span>🔔 التنبيهات</span>
         </div>
-        <div className="flex items-center gap-3 text-slate-600">
-          <span>{getNetworkName(selectedNetwork)}</span>
-          <span className="text-slate-400">{filteredSignals.length} عملة</span>
-          <span className="text-emerald-400">النتيجة {avgScore.toFixed(0)}</span>
+        <div className="flex items-center gap-4 text-slate-500">
+          <span className="text-slate-400 font-medium">{getNetworkName(selectedNetwork)}</span>
+          <span className="text-slate-300">{filteredSignals.length} عملة</span>
+          <span className="text-emerald-400 font-medium">⭐ النتيجة {avgScore.toFixed(0)}</span>
         </div>
       </footer>
     </div>

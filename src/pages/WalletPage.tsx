@@ -1,18 +1,20 @@
 ﻿// src/pages/WalletPage.tsx
 // ============================================================
 // 💰 محفظة البوت المركزية - تدير أموال جميع المستخدمين
+// ✅ تظهر محافظ المستخدمين العاديين
+// ✅ معمارية سحب صحيحة
 // ============================================================
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useApp } from "../context/AppContext";
 import { BotWalletManager, BotWalletData } from "../lib/wallet";
-import { AccountManager } from "../lib/accounts";
+import { AccountManager, UserWallet } from "../lib/accounts";
 import { formatUsd } from "../lib/format";
 import { 
   Copy, Check, Key, Eye, EyeOff, Coins, Loader2, RefreshCw, 
   Users, DollarSign, TrendingUp, Shield, Wallet, ChevronDown, 
   ChevronRight, Sparkles, BarChart3, Activity, Zap,
-  Globe, Link2, Unlink, Clock
+  Globe, Link2, Unlink, Clock, ArrowUpRight
 } from "lucide-react";
 import { NETWORKS, getNetworkName, getNetworkColor, getNetworkIcon } from "../config/networks";
 
@@ -89,66 +91,329 @@ const Button: React.FC<{
   );
 };
 
+// ============================================================
+// 🧩 مكون عرض خزانة المدير
+// ============================================================
+const AdminTreasuryCard: React.FC = () => {
+  const { user, addLog } = useApp();
+  const [treasuryStats, setTreasuryStats] = useState<{
+    totalCollected: number;
+    currentBalance: number;
+    totalTrades: number;
+    averageCommission: number;
+  } | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const loadTreasury = async () => {
+    if (!user?.isAdmin) return;
+    setIsLoading(true);
+    try {
+      const stats = await AccountManager.getTreasuryStats();
+      setTreasuryStats(stats);
+    } catch (error) {
+      console.error('❌ فشل جلب خزانة المدير:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user?.isAdmin) {
+      loadTreasury();
+    }
+  }, [user?.isAdmin]);
+
+  if (!user?.isAdmin || !treasuryStats) return null;
+
+  return (
+    <GlassCard className="p-5 border-amber-500/30 bg-amber-500/5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-amber-500/20 rounded-xl">
+            <Shield className="w-5 h-5 text-amber-400" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-amber-400 flex items-center gap-2">
+              👑 خزانة المدير
+            </h3>
+            <p className="text-xs text-gray-400">العمولات المجمعة من جميع الصفقات</p>
+          </div>
+        </div>
+        <Button variant="secondary" size="sm" onClick={loadTreasury} disabled={isLoading} icon={<RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />}>
+          تحديث
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+        <div className="bg-[#0a0a0f]/60 rounded-lg p-3 text-center">
+          <p className="text-xs text-gray-400">إجمالي العمولات</p>
+          <p className="text-lg font-bold text-amber-400">${treasuryStats.totalCollected.toFixed(2)}</p>
+        </div>
+        <div className="bg-[#0a0a0f]/60 rounded-lg p-3 text-center">
+          <p className="text-xs text-gray-400">الرصيد الحالي</p>
+          <p className="text-lg font-bold text-emerald-400">${treasuryStats.currentBalance.toFixed(2)}</p>
+        </div>
+        <div className="bg-[#0a0a0f]/60 rounded-lg p-3 text-center">
+          <p className="text-xs text-gray-400">عدد الصفقات</p>
+          <p className="text-lg font-bold text-blue-400">{treasuryStats.totalTrades}</p>
+        </div>
+        <div className="bg-[#0a0a0f]/60 rounded-lg p-3 text-center">
+          <p className="text-xs text-gray-400">متوسط العمولة</p>
+          <p className="text-lg font-bold text-purple-400">${treasuryStats.averageCommission.toFixed(2)}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        <Button variant="warning" size="sm" icon={<ArrowUpRight className="w-3 h-3" />}>
+          💸 سحب من الخزانة
+        </Button>
+        <Button variant="secondary" size="sm" icon={<BarChart3 className="w-3 h-3" />}>
+          📊 تقرير مفصل
+        </Button>
+      </div>
+    </GlassCard>
+  );
+};
+
+// ============================================================
+// 📄 الصفحة الرئيسية
+// ============================================================
+
 export function WalletPage() {
-  const { addLog, botWallets, loadBotWallets, refreshBotBalance } = useApp();
-  const [wallets, setWallets] = useState<BotWalletData[]>([]);
+  const { 
+    addLog, 
+    botWallets, 
+    loadBotWallets, 
+    refreshBotBalance, 
+    user, 
+    transferFromBot, 
+    loadUserWallets,
+    userWallets,  // ✅ تأكد من وجودها
+    loadUserWalletsForce, // ✅ دالة إعادة التحميل الإجبارية
+  } = useApp();
+  
+  const [wallets, setWallets] = useState<(BotWalletData | UserWallet)[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [systemStats, setSystemStats] = useState<any>(null);
   const [expandedWallet, setExpandedWallet] = useState<string | null>(null);
   const [totalBalance, setTotalBalance] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   
   const hasLoaded = useRef(false);
   const isLoadingData = useRef(false);
 
-  const loadData = async () => {
-    if (isLoadingData.current) {
+  // ============================================================
+  // ✅ دالة تحميل البيانات المحسنة
+  // ============================================================
+  
+  const loadData = useCallback(async (forceRefresh: boolean = false) => {
+    if (isLoadingData.current && !forceRefresh) {
       console.log("⏳ جاري التحميل بالفعل، تخطي...");
       return;
     }
     
     isLoadingData.current = true;
     setIsLoading(true);
+    setError(null);
+    
     try {
+      console.log(`🔄 جاري تحميل محافظ البوت${forceRefresh ? ' (إجباري)' : ''}...`);
+      
+      let allWallets: (BotWalletData | UserWallet)[] = [];
+      
+      // ✅ 1. تحميل محافظ البوت (للأدمن)
       await loadBotWallets();
       const botWallet = BotWalletManager.getInstance();
-      const allWallets = botWallet.getAllWallets();
-      setWallets(allWallets);
+      const botWalletsList = botWallet.getAllWallets();
       
-      const total = allWallets.reduce((sum, w) => sum + w.balance, 0);
+      // ✅ 2. تحميل محافظ المستخدمين
+      let userWalletsList: UserWallet[] = [];
+      
+      if (user) {
+        if (forceRefresh || !userWallets || userWallets.length === 0) {
+          // ✅ إذا كان forceRefresh = true، استخدم الدالة الإجبارية
+          if (loadUserWalletsForce) {
+            userWalletsList = await loadUserWalletsForce();
+          } else {
+            await loadUserWallets();
+            userWalletsList = userWallets || [];
+          }
+        } else {
+          userWalletsList = userWallets;
+        }
+      }
+      
+      console.log(`📊 محافظ البوت: ${botWalletsList.length}`);
+      console.log(`📊 محافظ المستخدم: ${userWalletsList.length}`);
+      
+      // ✅ 3. دمج المحافظ حسب صلاحية المستخدم
+      if (user?.isAdmin) {
+        // ✅ الأدمن يرى كل شيء: محافظ البوت + محافظ المستخدمين
+        allWallets = [...botWalletsList, ...userWalletsList];
+        console.log(`👑 الأدمن يرى ${allWallets.length} محفظة (${botWalletsList.length} بوت + ${userWalletsList.length} مستخدم)`);
+      } else if (user) {
+        // ✅ المستخدم العادي يرى محافظه فقط (محافظ البوت الخاصة به)
+        // ✅ نأخذ محافظ المستخدم من userWallets
+        allWallets = userWalletsList;
+        console.log(`👤 المستخدم يرى ${allWallets.length} محفظة`);
+      } else {
+        // ✅ لا يوجد مستخدم
+        allWallets = botWalletsList;
+        console.log(`👤 لا يوجد مستخدم، عرض محافظ البوت فقط (${allWallets.length})`);
+      }
+      
+      // ✅ 4. إزالة المكررات (حسب الشبكة)
+      const uniqueWallets = allWallets.reduce((acc, current) => {
+        const network = (current as any).network;
+        const exists = acc.find(item => (item as any).network === network);
+        if (!exists) {
+          acc.push(current);
+        } else {
+          // ✅ إذا كان هناك مكرر، احتفظ بالأحدث
+          const existingIndex = acc.indexOf(exists);
+          const currentDate = new Date((current as any).created_at || (current as any).createdAt || 0);
+          const existsDate = new Date((exists as any).created_at || (exists as any).createdAt || 0);
+          if (currentDate > existsDate) {
+            acc[existingIndex] = current;
+          }
+        }
+        return acc;
+      }, [] as (BotWalletData | UserWallet)[]);
+      
+      setWallets(uniqueWallets);
+      
+      // ✅ 5. حساب إجمالي الرصيد
+      const total = uniqueWallets.reduce((sum, w) => sum + ((w as any).balance || 0), 0);
       setTotalBalance(total);
       
+      // ✅ 6. جلب إحصائيات النظام
       const stats = await AccountManager.getSystemStats();
       setSystemStats(stats);
+      
+      console.log(`✅ تم تحميل ${uniqueWallets.length} محفظة`);
+      console.log(`💰 إجمالي الرصيد: $${total.toFixed(2)}`);
+      
+      // ✅ عرض تفاصيل المحافظ للتصحيح
+      uniqueWallets.forEach(w => {
+        const network = (w as any).network;
+        const address = (w as any).address;
+        const balance = (w as any).balance || 0;
+        const type = (w as any).bot_id ? 'بوت' : 'مستخدم';
+        console.log(`  - ${type}: ${network} | ${address?.slice(0, 8)}... ($${balance})`);
+      });
+      
     } catch (error) {
-      console.error("خطأ في تحميل البيانات:", error);
+      console.error("❌ خطأ في تحميل البيانات:", error);
+      setError("❌ فشل تحميل المحافظ");
     } finally {
       setIsLoading(false);
       isLoadingData.current = false;
     }
-  };
+  }, [user, loadBotWallets, loadUserWallets, loadUserWalletsForce, userWallets]);
 
+  // ============================================================
+  // ✅ تحميل عند تغيير المستخدم
+  // ============================================================
+  
   useEffect(() => {
-    if (!hasLoaded.current) {
+    if (!hasLoaded.current || user) {
       hasLoaded.current = true;
-      loadData();
+      loadData(true);
     }
-  }, []);
+  }, [user?.id, loadData]);
 
+  // ============================================================
+  // ✅ تحديث الرصيد
+  // ============================================================
+  
   const refreshBalance = async (network: string) => {
     setIsLoading(true);
     try {
       const newBalance = await refreshBotBalance(network);
       addLog("SUCCESS", `✅ تم تحديث رصيد ${network}: $${newBalance.toFixed(2)}`);
-      await loadData();
+      await loadData(true);
     } catch (error) {
       addLog("ERROR", `❌ فشل تحديث الرصيد: ${String(error)}`);
+      setError("❌ فشل تحديث الرصيد");
     } finally {
       setIsLoading(false);
     }
   };
 
+  // ============================================================
+  // ✅ دالة سحب من البوت إلى المستخدم (معمارية صحيحة)
+  // ============================================================
+  
+  const handleTransferFromBot = async (wallet: BotWalletData | UserWallet) => {
+    if (!user) {
+      setError("❌ الرجاء تسجيل الدخول أولاً");
+      return;
+    }
+
+    const balance = (wallet as any).balance || 0;
+    const network = (wallet as any).network;
+    const address = (wallet as any).address;
+    
+    if (balance <= 0) {
+      setError("❌ الرصيد صفر. لا يمكن السحب");
+      return;
+    }
+
+    const amount = prompt(`💰 أدخل المبلغ المراد سحبه من البوت\nالرصيد المتاح: $${balance.toFixed(2)}\nالشبكة: ${getNetworkName(network)}`);
+    if (!amount) return;
+    
+    const numAmount = parseFloat(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      setError("❌ مبلغ غير صحيح");
+      return;
+    }
+    
+    if (numAmount > balance) {
+      setError(`❌ الرصيد غير كافٍ. المتاح: $${balance.toFixed(2)}`);
+      return;
+    }
+    
+    try {
+      // ✅ الحصول على bot_id من المحفظة
+      let botId = (wallet as any).bot_id || (wallet as any).id;
+      
+      // ✅ إذا كانت محفظة مستخدم، نحتاج إلى إيجاد البوت المرتبط
+      if (!botId) {
+        // ✅ محاولة إيجاد البوت من bot_instances
+        const botResult = await AccountManager.getUserBots(user.id);
+        if (botResult && botResult.length > 0) {
+          botId = botResult[0].id;
+        } else {
+          setError("❌ لا يوجد بوت مرتبط بهذه المحفظة");
+          return;
+        }
+      }
+
+      console.log(`🔄 جاري سحب ${numAmount} من البوت ${botId} على ${network}`);
+      
+      const result = await transferFromBot(botId, numAmount, network);
+      
+      if (result.success) {
+        setSuccess(result.message || `✅ تم سحب $${numAmount.toFixed(2)} من البوت بنجاح`);
+        await loadData(true);
+        await loadUserWallets();
+        addLog("SUCCESS", `✅ سحب $${numAmount.toFixed(2)} من البوت إلى المستخدم على ${getNetworkName(network)}`);
+      } else {
+        setError(result.message || "❌ فشل السحب");
+      }
+    } catch (error) {
+      console.error("❌ فشل السحب:", error);
+      setError(`❌ فشل السحب: ${error}`);
+    }
+  };
+
+  // ============================================================
+  // ✅ دوال مساعدة
+  // ============================================================
+  
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -177,6 +442,10 @@ export function WalletPage() {
   const totalFees = systemStats?.totalFees || 0;
   const totalUsers = systemStats?.totalUsers || 0;
 
+  // ============================================================
+  // 📄 العرض
+  // ============================================================
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -188,7 +457,36 @@ export function WalletPage() {
         <p className="text-sm text-[#64748b] mt-1">
           المحفظة المركزية للبوت - تدير أموال جميع المستخدمين
         </p>
+        {user && !user.isAdmin && (
+          <p className="text-xs text-emerald-400 mt-0.5 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            👤 تعرض محافظك الشخصية فقط
+          </p>
+        )}
+        {user?.isAdmin && (
+          <p className="text-xs text-amber-400 mt-0.5 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            👑 عرض جميع المحافظ (بوت + مستخدمين)
+          </p>
+        )}
       </div>
+
+      {/* رسائل الخطأ والنجاح */}
+      {error && (
+        <div className="bg-red-500/20 border border-red-500 rounded-xl p-4 flex items-start gap-3">
+          <span className="text-red-400 text-sm flex-1">{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300 text-sm">✕</button>
+        </div>
+      )}
+      {success && (
+        <div className="bg-emerald-500/20 border border-emerald-500 rounded-xl p-4 flex items-start gap-3">
+          <span className="text-emerald-400 text-sm flex-1">{success}</span>
+          <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-emerald-300 text-sm">✕</button>
+        </div>
+      )}
+
+      {/* 👑 خزانة المدير */}
+      <AdminTreasuryCard />
 
       {/* نظام الأرباح */}
       <GlassCard glow className="p-5">
@@ -256,7 +554,7 @@ export function WalletPage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={loadData}
+            onClick={() => loadData(true)}
             disabled={isLoading}
             icon={<RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />}
           >
@@ -267,44 +565,82 @@ export function WalletPage() {
 
       {/* جميع المحافظ */}
       <div className="space-y-3">
-        {wallets.length === 0 ? (
+        {isLoading && wallets.length === 0 ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="w-8 h-8 text-[#10b981] animate-spin" />
+            <span className="text-[#64748b] ml-3">جاري تحميل المحافظ...</span>
+          </div>
+        ) : wallets.length === 0 ? (
           <GlassCard className="p-12 text-center">
             <Wallet className="w-12 h-12 text-[#64748b] mx-auto mb-4 opacity-50" />
             <p className="text-[#94a3b8] text-sm">لا توجد محافظ بعد</p>
-            <p className="text-[#64748b] text-xs mt-1">سيتم إنشاء المحافظ تلقائياً عند تفعيل الشبكات</p>
+            <p className="text-[#64748b] text-xs mt-1">سيتم إنشاء المحافظ تلقائياً عند إنشاء المستخدمين</p>
           </GlassCard>
         ) : (
           wallets.map((wallet) => {
-            const isExpanded = expandedWallet === wallet.network;
-            const showKey = showPrivateKey === wallet.network;
-            const network = NETWORKS.find(n => n.id === wallet.network);
-            const icon = network?.icon || getNetworkIcon(wallet.network);
-            const name = network?.name || getNetworkName(wallet.network);
-            const color = network?.color || '#64748b';
-            const balance = wallet.balance || 0;
+            const isExpanded = expandedWallet === (wallet as any).network;
+            const showKey = showPrivateKey === (wallet as any).network;
+            const network = (wallet as any).network;
+            const address = (wallet as any).address;
+            const balance = (wallet as any).balance || 0;
+            const createdAt = (wallet as any).created_at || (wallet as any).createdAt;
+            const botId = (wallet as any).bot_id || (wallet as any).id;
+            const isBotWallet = !!(wallet as any).bot_id;
+            
+            const networkInfo = NETWORKS.find(n => n.id === network);
+            const icon = networkInfo?.icon || getNetworkIcon(network);
+            const name = networkInfo?.name || getNetworkName(network);
+            const color = networkInfo?.color || '#64748b';
 
             return (
-              <GlassCard key={wallet.network} hover className="overflow-hidden">
+              <GlassCard key={`${network}-${address?.slice(0, 10) || Date.now()}`} hover className="overflow-hidden">
                 <div
                   className="p-4 flex items-center justify-between cursor-pointer hover:bg-[#1e1e2f]/50 transition-colors"
-                  onClick={() => setExpandedWallet(isExpanded ? null : wallet.network)}
+                  onClick={() => setExpandedWallet(isExpanded ? null : network)}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" style={{ backgroundColor: `${color}20` }}>
+                    <div 
+                      className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0" 
+                      style={{ backgroundColor: `${color}20` }}
+                    >
                       {icon}
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-white">{name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-white">{name}</p>
+                        {isBotWallet ? (
+                          <span className="text-[8px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded-full">بوت</span>
+                        ) : (
+                          <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full">مستخدم</span>
+                        )}
+                      </div>
                       <p className="text-sm font-mono text-[#10b981]">{formatUsd(balance)}</p>
+                      <p className="text-[10px] font-mono text-slate-500 truncate max-w-[150px]">
+                        {address?.slice(0, 8)}...{address?.slice(-6) || ''}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {/* ✅ زر سحب من البوت (للمستخدمين فقط) */}
+                    {user && balance > 0 && isBotWallet && (
+                      <Button
+                        size="sm"
+                        variant="wallet"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleTransferFromBot(wallet);
+                        }}
+                        icon={<ArrowUpRight className="w-3 h-3" />}
+                      >
+                        سحب
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="secondary"
                       onClick={(e) => {
                         e.stopPropagation();
-                        refreshBalance(wallet.network);
+                        refreshBalance(network);
                       }}
                       disabled={isLoading}
                       icon={<RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />}
@@ -325,9 +661,9 @@ export function WalletPage() {
                       <div>
                         <p className="text-xs text-[#64748b]">عنوان المحفظة</p>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-mono text-white truncate">{wallet.address}</p>
+                          <p className="text-sm font-mono text-white truncate">{address}</p>
                           <button
-                            onClick={() => handleCopy(wallet.address)}
+                            onClick={() => handleCopy(address)}
                             className="p-1 hover:bg-[#1e1e2f] rounded transition-colors"
                           >
                             {copied ? <Check className="w-4 h-4 text-[#10b981]" /> : <Copy className="w-4 h-4 text-[#64748b]" />}
@@ -349,7 +685,7 @@ export function WalletPage() {
                         <p className="text-xs text-[#64748b]">تاريخ الإنشاء</p>
                         <p className="text-sm text-[#94a3b8] mt-1 flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          {formatDate(wallet.createdAt)}
+                          {formatDate(createdAt)}
                         </p>
                       </div>
                     </div>
@@ -362,7 +698,7 @@ export function WalletPage() {
                           <span className="text-sm font-medium text-[#94a3b8]">المفتاح الخاص (مشفر)</span>
                         </div>
                         <button
-                          onClick={() => togglePrivateKey(wallet.network)}
+                          onClick={() => togglePrivateKey(network)}
                           className="text-[#64748b] hover:text-white transition-colors"
                         >
                           {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -371,7 +707,7 @@ export function WalletPage() {
                       {showKey && (
                         <div className="mt-2 p-3 bg-[#0a0a0f] rounded-lg border border-[#1e1e2f]">
                           <p className="text-xs font-mono break-all text-[#94a3b8]">
-                            {wallet.encryptedPrivateKey || "غير متاح"}
+                            {(wallet as any).encryptedPrivateKey || "غير متاح"}
                           </p>
                           <p className="text-xs text-[#ef4444] mt-1 flex items-center gap-1">
                             ⚠️ المفتاح مشفر. لا تشاركه مع أحد.
@@ -413,6 +749,10 @@ export function WalletPage() {
           <li className="flex items-start gap-2">
             <span className="text-[#10b981] font-bold">5️⃣</span>
             <span className="text-[#f59e0b] font-bold">15%</span> تذهب لتطوير المنصة (الخزانة)
+          </li>
+          <li className="flex items-start gap-2 text-emerald-400">
+            <span className="text-[#10b981] font-bold">➕</span>
+            <span className="text-[#10b981]">يمكنك سحب الأموال من البوت إلى محفظتك باستخدام زر "سحب"</span>
           </li>
         </ul>
       </GlassCard>

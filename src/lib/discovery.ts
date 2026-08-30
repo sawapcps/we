@@ -1,243 +1,243 @@
 // src/lib/discovery.ts
+// ============================================================
+// ?? Ø§ÙƒØªØ´Ø§Ù Ø§Ù„Ø¹Ù…Ù„Ø§Øª - DexScreener + GeckoTerminal (Ø³Ø±ÙŠØ¹ ÙˆÙ…Ø³ØªÙ‚Ø±)
+// ? ÙŠØ¯Ø¹Ù… DexScreener ÙƒÙ…ØµØ¯Ø± Ø±Ø¦ÙŠØ³ÙŠ
+// ? ÙŠØ¯Ø¹Ù… GeckoTerminal ÙƒÙ…ØµØ¯Ø± Ø¥Ø¶Ø§ÙÙŠ
+// ? Ø¥Ø²Ø§Ù„Ø© Ø§Ù„ØªÙƒØ±Ø§Ø± ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹
+// ? ØªØ±ØªÙŠØ¨ Ø­Ø³Ø¨ Ø§Ù„Ø£Ø­Ø¯Ø«
+// ? Ù…Ù‡Ù„Ø© Ù‚ØµÙŠØ±Ø© Ù„ØªØ¬Ù†Ø¨ Ø§Ù„ØªØ¹Ù„Ù‚
+// ============================================================
 
 import type { TokenPair, ChainId } from '@/types';
-import { 
-  discoverNetworkPairs, 
-  getTrendingTokens, 
-  getLatestBoostedTokens,
-  searchPairs 
-} from '@/lib/dexscreener';
-import { 
-  discoverGeckoPairs, 
-  getNewPools, 
-  getTrendingPools 
-} from '@/lib/geckoterminal';
+import { searchPairs } from '@/lib/dexscreener';
+import { discoverGeckoPairs } from '@/lib/geckoterminal';
 
-export type DataSource = 'dexscreener' | 'geckoterminal' | 'new_pairs' | 'new_pools' | 'trending';
+// ============================================================
+// ?? Ø§Ù„Ø£Ù†ÙˆØ§Ø¹
+// ============================================================
+
+export type DataSource = 'dexscreener' | 'geckoterminal' | 'new_pairs' | 'trending';
 
 export interface MultiSourceResult {
   pairs: TokenPair[];
   sources: { name: DataSource; count: number; error: string | null }[];
   error: string | null;
+  totalPairs: number;
 }
 
 // ============================================================
-// ? ÏÇäÉ ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ åæ DexScreener
+// ?? Ø§Ù„Ø¯Ø§Ù„Ø© Ø§Ù„Ø±Ø¦ÙŠØ³ÙŠØ© - ØªØ¬Ù„Ø¨ ÙƒÙ„ Ø´ÙŠØ¡ (DexScreener + GeckoTerminal)
 // ============================================================
 
-async function getNewPairsFromDex(network: ChainId): Promise<TokenPair[]> {
+export async function discoverAllPairs(
+  network: ChainId,
+  limit: number = 50
+): Promise<{
+  pairs: TokenPair[];
+  sources: { name: string; count: number; error?: string }[];
+  error?: string;
+  totalPairs: number;
+}> {
+  const startTime = Date.now();
+  console.log(`?? Ø¬Ù„Ø¨ Ø§Ù„Ø£Ø²ÙˆØ§Ø¬ Ù„Ù€ ${network}...`);
+
   try {
-    // ? ÇäÈÍË Ùæ ÙåäÇÊ ÌÏêÏÉ ÈÇÓÊÎÏÇå ãäåÇÊ åáÊÇÍêÉ
-    const queries = ['new', 'launch', 'recent', 'just launched', '24h'];
-    let allPairs: TokenPair[] = [];
-    
-    for (const query of queries) {
-      try {
-        const results = await searchPairs(`${query} ${network}`);
-        allPairs = [...allPairs, ...results];
-      } catch (e) {
-        // ÊÌÇçä ÇäÃÎ×ÇÁ
-      }
+    // ? 1. Ø¬Ù„Ø¨ Ù…Ù† DexScreener (Ø§Ù„Ù…ØµØ¯Ø± Ø§Ù„Ø±Ø¦ÙŠØ³ÙŠ)
+    let dexPairs: TokenPair[] = [];
+    try {
+      const results = await searchPairs(network);
+      dexPairs = results.filter(p => p.chainId?.toLowerCase() === network.toLowerCase());
+      console.log(`? DexScreener: ${dexPairs.length} Ø²ÙˆØ¬`);
+    } catch (error) {
+      console.warn('?? DexScreener ÙØ´Ù„:', error);
     }
-    
-    // ? ÅÒÇäÉ ÇäåãÑÑÇÊ
+
+    // ? 2. Ø¬Ù„Ø¨ Ù…Ù† GeckoTerminal (Ù…ØµØ¯Ø± Ø¥Ø¶Ø§ÙÙŠ)
+    let geckoPairs: TokenPair[] = [];
+    let geckoError: string | null = null;
+    try {
+      const geckoResult = await discoverGeckoPairs(network, 30);
+      geckoPairs = geckoResult.pairs || [];
+      geckoError = geckoResult.error || null;
+      console.log(`? GeckoTerminal: ${geckoPairs.length} Ø²ÙˆØ¬`);
+    } catch (error) {
+      geckoError = error instanceof Error ? error.message : 'ÙØ´Ù„ GeckoTerminal';
+      console.warn('?? GeckoTerminal ÙØ´Ù„:', geckoError);
+    }
+
+    // ? 3. Ø¯Ù…Ø¬ Ø§Ù„Ù†ØªØ§Ø¦Ø¬ ÙˆØ¥Ø²Ø§Ù„Ø© Ø§Ù„ØªÙƒØ±Ø§Ø±
     const seen = new Set<string>();
-    const unique = allPairs.filter(p => {
-      const key = `${p.chainId}:${p.pairAddress}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+    const merged: TokenPair[] = [];
+
+    const addPairs = (pairs: TokenPair[], source: string) => {
+      for (const p of pairs) {
+        const key = `${p.chainId}:${p.pairAddress}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          // Ø¥Ø¶Ø§ÙØ© Ù…ØµØ¯Ø± Ù„Ù„ØªÙˆØ¶ÙŠØ­
+          (p as any)._source = source;
+          merged.push(p);
+        }
+      }
+    };
+
+    // ? Ø¥Ø¶Ø§ÙØ© GeckoTerminal Ø£ÙˆÙ„Ø§Ù‹ (Ù„Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø©)
+    addPairs(geckoPairs, 'geckoterminal');
+    // ? Ø¥Ø¶Ø§ÙØ© DexScreener (Ù„Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø±Ø§Ø³Ø®Ø©)
+    addPairs(dexPairs, 'dexscreener');
+
+    // ? 4. ØªØ±ØªÙŠØ¨ Ø­Ø³Ø¨ Ø§Ù„Ø£Ø­Ø¯Ø«
+    merged.sort((a, b) => {
+      const dateA = a.pairCreatedAt || 0;
+      const dateB = b.pairCreatedAt || 0;
+      return dateB - dateA;
     });
-    
-    // ? áäÊÑ ÇäÙåäÇÊ ÇäÌÏêÏÉ (Ãâä åæ 24 ÓÇÙÉ)
-    const now = Date.now();
-    return unique.filter(p => {
-      if (!p.pairCreatedAt) return false;
-      const ageHours = (now - p.pairCreatedAt) / (1000 * 60 * 60);
-      return ageHours < 24;
-    });
-    
+
+    // ? 5. ØªØ­Ø¯ÙŠØ¯ Ø§Ù„Ø¹Ø¯Ø¯ Ø§Ù„Ù†Ù‡Ø§Ø¦ÙŠ
+    const limitedPairs = merged.slice(0, limit);
+
+    const elapsed = Date.now() - startTime;
+    console.log(`? ØªÙ… Ø¬Ù„Ø¨ ${limitedPairs.length} Ø²ÙˆØ¬ Ù„Ù€ ${network} ÙÙŠ ${elapsed}ms`);
+
+    return {
+      pairs: limitedPairs,
+      sources: [
+        { name: 'dexscreener', count: dexPairs.length },
+        { name: 'geckoterminal', count: geckoPairs.length, error: geckoError || undefined },
+      ],
+      totalPairs: merged.length,
+    };
   } catch (error) {
-    console.error('? áÔä ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ åæ DexScreener:', error);
+    const msg = error instanceof Error ? error.message : 'ÙØ´Ù„ Ø§ÙƒØªØ´Ø§Ù Ø§Ù„Ø£Ø²ÙˆØ§Ø¬';
+    console.error('? Ø®Ø·Ø£:', msg);
+    return {
+      pairs: [],
+      sources: [{ name: 'dexscreener', count: 0, error: msg }],
+      error: msg,
+      totalPairs: 0,
+    };
+  }
+}
+
+// ============================================================
+// ?? Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø© ÙÙ‚Ø·
+// ============================================================
+
+export async function discoverNewPairsOnly(
+  network: ChainId,
+  limit: number = 20
+): Promise<MultiSourceResult> {
+  try {
+    const geckoResult = await discoverGeckoPairs(network, limit);
+    const dexResults = await searchPairs(network);
+    const newDex = dexResults
+      .filter(p => p.chainId?.toLowerCase() === network.toLowerCase())
+      .filter(p => {
+        if (!p.pairCreatedAt) return false;
+        const ageHours = (Date.now() - p.pairCreatedAt) / (1000 * 60 * 60);
+        return ageHours < 24;
+      });
+
+    // Ø¯Ù…Ø¬ Ø§Ù„Ù†ØªØ§Ø¦Ø¬
+    const seen = new Set<string>();
+    const merged: TokenPair[] = [];
+
+    const addPairs = (pairs: TokenPair[]) => {
+      for (const p of pairs) {
+        const key = `${p.chainId}:${p.pairAddress}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(p);
+        }
+      }
+    };
+
+    addPairs(geckoResult.pairs);
+    addPairs(newDex);
+
+    merged.sort((a, b) => {
+      const dateA = a.pairCreatedAt || 0;
+      const dateB = b.pairCreatedAt || 0;
+      return dateB - dateA;
+    });
+
+    return {
+      pairs: merged.slice(0, limit),
+      sources: [
+        { name: 'geckoterminal', count: geckoResult.pairs.length, error: geckoResult.error || null },
+        { name: 'dexscreener', count: newDex.length, error: null },
+      ],
+      error: null,
+      totalPairs: merged.length,
+    };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : 'ÙØ´Ù„ Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø©';
+    return {
+      pairs: [],
+      sources: [{ name: 'geckoterminal', count: 0, error: msg }],
+      error: msg,
+      totalPairs: 0,
+    };
+  }
+}
+
+// ============================================================
+// ?? Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ø±Ø§Ø¦Ø¬Ø© (Trending)
+// ============================================================
+
+export async function getTrendingGlobal(limit: number = 20): Promise<TokenPair[]> {
+  try {
+    const results = await searchPairs('trending');
+    return results.slice(0, limit);
+  } catch {
     return [];
   }
 }
 
 // ============================================================
-// ? ÏÇäÉ ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ ÌÏÇë (Ãâä åæ ÓÇÙÉ)
+// ?? Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ø§Ù„Ù…Ø¯Ø¹ÙˆÙ…Ø© (Boosted)
 // ============================================================
 
-async function getVeryNewPairsFromDex(network: ChainId): Promise<TokenPair[]> {
+export async function getLatestBoosted(limit: number = 20): Promise<TokenPair[]> {
   try {
-    const queries = ['just launched', 'new', '1m', '5m', '30m'];
-    let allPairs: TokenPair[] = [];
-    
-    for (const query of queries) {
-      try {
-        const results = await searchPairs(`${query} ${network}`);
-        allPairs = [...allPairs, ...results];
-      } catch (e) {
-        // ÊÌÇçä ÇäÃÎ×ÇÁ
-      }
-    }
-    
-    const seen = new Set<string>();
-    const unique = allPairs.filter(p => {
-      const key = `${p.chainId}:${p.pairAddress}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    
-    // ? áäÊÑ ÇäÙåäÇÊ ÇäÌÏêÏÉ ÌÏÇë (Ãâä åæ ÓÇÙÉ)
-    const now = Date.now();
-    return unique.filter(p => {
-      if (!p.pairCreatedAt) return false;
-      const ageMinutes = (now - p.pairCreatedAt) / (1000 * 60);
-      return ageMinutes < 60; // Ãâä åæ ÓÇÙÉ
-    });
-    
-  } catch (error) {
-    console.error('? áÔä ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ ÌÏÇë:', error);
+    const results = await searchPairs('boosted');
+    return results.slice(0, limit);
+  } catch {
     return [];
   }
 }
 
 // ============================================================
-// ? ÇäÏÇäÉ ÇäÑÆêÓêÉ - ÊÌäÈ ãä ÇäÙåäÇÊ ÈåÇ áêçÇ ÇäÌÏêÏÉ
-// ============================================================
-
-export async function discoverAllPairs(network: ChainId): Promise<MultiSourceResult> {
-  // ? ÌäÈ åæ ÌåêÙ ÇäåÕÇÏÑ (ÈåÇ áêçÇ ÇäÙåäÇÊ ÇäÌÏêÏÉ)
-  const [dexResult, geckoResult, newPairs, newPools, trendingPools, veryNewPairs] = await Promise.all([
-    discoverNetworkPairs(network),
-    discoverGeckoPairs(network),
-    getNewPairsFromDex(network),      // ? ÙåäÇÊ ÌÏêÏÉ åæ DexScreener (< 24 ÓÇÙÉ)
-    getNewPools(network),             // ? åÌåèÙÇÊ ÌÏêÏÉ åæ GeckoTerminal
-    getTrendingPools(network),        // ? ÙåäÇÊ ÑÇÆÌÉ åæ GeckoTerminal
-    getVeryNewPairsFromDex(network),  // ? ÙåäÇÊ ÌÏêÏÉ ÌÏÇë (< 1 ÓÇÙÉ)
-  ]);
-
-  const sources: MultiSourceResult['sources'] = [
-    { name: 'dexscreener', count: dexResult.pairs.length, error: dexResult.error },
-    { name: 'geckoterminal', count: geckoResult.pairs.length, error: geckoResult.error },
-    { name: 'new_pairs', count: newPairs.length, error: null },
-    { name: 'very_new_pairs', count: veryNewPairs.length, error: null },
-    { name: 'new_pools', count: newPools.length, error: null },
-    { name: 'trending', count: trendingPools.length, error: null },
-  ];
-
-  const seen = new Set<string>();
-  const merged: TokenPair[] = [];
-
-  const addPairs = (pairs: TokenPair[], source: DataSource) => {
-    for (const p of pairs) {
-      const key = `${p.chainId}:${p.pairAddress}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(p);
-      }
-    }
-  };
-
-  // ? ÅÖÇáÉ ÇäÙåäÇÊ åæ ÌåêÙ ÇäåÕÇÏÑ (ÊÑÊêÈ ÇäÃèäèêÉ ääÌÏêÏÉ)
-  addPairs(veryNewPairs, 'new_pairs');        // ? ÃÍÏË ÇäÙåäÇÊ ÃèäÇë
-  addPairs(newPairs, 'new_pairs');            // ? ÙåäÇÊ ÌÏêÏÉ
-  addPairs(newPools, 'new_pools');            // ? åÌåèÙÇÊ ÌÏêÏÉ
-  addPairs(trendingPools, 'trending');        // ? ÙåäÇÊ ÑÇÆÌÉ
-  addPairs(dexResult.pairs, 'dexscreener');   // ? ÙåäÇÊ åÊÏÇèäÉ
-  addPairs(geckoResult.pairs, 'geckoterminal'); // ? ÙåäÇÊ åÊÏÇèäÉ
-
-  // ? ÊÑÊêÈ ÍÓÈ ÇäÃÍÏË ÃèäÇë
-  merged.sort((a, b) => {
-    const dateA = a.pairCreatedAt || 0;
-    const dateB = b.pairCreatedAt || 0;
-    return dateB - dateA;
-  });
-
-  if (merged.length === 0) {
-    return {
-      pairs: [],
-      sources,
-      error: 'All data sources failed',
-    };
-  }
-
-  return { pairs: merged, sources, error: null };
-}
-
-// ============================================================
-// ? ÏÇäÉ ÌäÈ ÇäÙåäÇÊ ÇäÌÏêÏÉ áâ× (ääÇÓÊÎÏÇå ÇäåÈÇÔÑ)
-// ============================================================
-
-export async function discoverNewPairsOnly(network: ChainId): Promise<MultiSourceResult> {
-  const [newPairs, veryNewPairs, newPools] = await Promise.all([
-    getNewPairsFromDex(network),
-    getVeryNewPairsFromDex(network),
-    getNewPools(network),
-  ]);
-
-  const sources: MultiSourceResult['sources'] = [
-    { name: 'new_pairs', count: newPairs.length, error: null },
-    { name: 'very_new_pairs', count: veryNewPairs.length, error: null },
-    { name: 'new_pools', count: newPools.length, error: null },
-  ];
-
-  const seen = new Set<string>();
-  const merged: TokenPair[] = [];
-
-  const addPairs = (pairs: TokenPair[], source: DataSource) => {
-    for (const p of pairs) {
-      const key = `${p.chainId}:${p.pairAddress}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(p);
-      }
-    }
-  };
-
-  addPairs(veryNewPairs, 'new_pairs');
-  addPairs(newPairs, 'new_pairs');
-  addPairs(newPools, 'new_pools');
-
-  merged.sort((a, b) => {
-    const dateA = a.pairCreatedAt || 0;
-    const dateB = b.pairCreatedAt || 0;
-    return dateB - dateA;
-  });
-
-  if (merged.length === 0) {
-    return {
-      pairs: [],
-      sources,
-      error: 'No new pairs found',
-    };
-  }
-
-  return { pairs: merged, sources, error: null };
-}
-
-// ============================================================
-// ? ÏèÇä åÓÇÙÏÉ ÃÎÑé
+// ?? Ø¬Ù„Ø¨ Ø§Ù„Ø¹Ù…Ù„Ø§Øª Ù…Ù† Ø´Ø¨ÙƒØ§Øª Ù…ØªØ¹Ø¯Ø¯Ø©
 // ============================================================
 
 export async function discoverAllPairsMultiNetwork(
   networks: ChainId[],
+  limit: number = 30
 ): Promise<Map<ChainId, MultiSourceResult>> {
   const results = new Map<ChainId, MultiSourceResult>();
+  
   const settled = await Promise.allSettled(
-    networks.map((n) => discoverAllPairs(n)),
+    networks.map(n => discoverAllPairs(n, limit))
   );
 
   networks.forEach((network, i) => {
     const result = settled[i];
     if (result && result.status === 'fulfilled') {
-      results.set(network, result.value);
+      const data = result.value;
+      results.set(network, {
+        pairs: data.pairs,
+        sources: data.sources.map(s => ({ ...s, error: s.error || null })),
+        error: data.error || null,
+        totalPairs: data.totalPairs || data.pairs.length,
+      });
     } else {
+      const error = result && result.status === 'rejected' ? String(result.reason) : 'ÙØ´Ù„';
       results.set(network, {
         pairs: [],
-        sources: [],
-        error: result && result.status === 'rejected' ? String(result.reason) : 'Failed',
+        sources: [{ name: 'dexscreener', count: 0, error }],
+        error,
+        totalPairs: 0,
       });
     }
   });
@@ -245,18 +245,44 @@ export async function discoverAllPairsMultiNetwork(
   return results;
 }
 
-export async function getTrendingGlobal(): Promise<TokenPair[]> {
+// ============================================================
+// ?? Ø§Ù„Ø¨Ø­Ø« Ø¹Ù† Ø¹Ù…Ù„Ø© Ù…Ø¹ÙŠÙ†Ø©
+// ============================================================
+
+export async function searchTokenPairs(query: string, limit: number = 20): Promise<TokenPair[]> {
   try {
-    return await getTrendingTokens();
-  } catch {
+    const results = await searchPairs(query);
+    return results.slice(0, limit);
+  } catch (error) {
+    console.error('? ÙØ´Ù„ Ø§Ù„Ø¨Ø­Ø«:', error);
     return [];
   }
 }
 
-export async function getLatestBoosted(): Promise<TokenPair[]> {
-  try {
-    return await getLatestBoostedTokens();
-  } catch {
-    return [];
-  }
+// ============================================================
+// ?? Ø¯Ø§Ù„Ø© Ù…Ø³Ø§Ø¹Ø¯Ø© Ù„Ù„Ø­ØµÙˆÙ„ Ø¹Ù„Ù‰ Ø¥Ø­ØµØ§Ø¦ÙŠØ§Øª Ø³Ø±ÙŠØ¹Ø©
+// ============================================================
+
+export function getQuickStats(tokens: TokenPair[]): {
+  total: number;
+  avgLiquidity: number;
+  avgVolume: number;
+  newCount: number;
+} {
+  const now = Date.now();
+  const newCount = tokens.filter(t => {
+    if (!t.pairCreatedAt) return false;
+    const ageHours = (now - t.pairCreatedAt) / (1000 * 60 * 60);
+    return ageHours < 24;
+  }).length;
+
+  const avgLiquidity = tokens.reduce((sum, t) => sum + (t.liquidity?.usd || 0), 0) / (tokens.length || 1);
+  const avgVolume = tokens.reduce((sum, t) => sum + (t.volume?.h24 || 0), 0) / (tokens.length || 1);
+
+  return {
+    total: tokens.length,
+    avgLiquidity,
+    avgVolume,
+    newCount,
+  };
 }

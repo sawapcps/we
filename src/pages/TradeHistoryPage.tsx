@@ -1,15 +1,13 @@
 // src/pages/TradeHistoryPage.tsx
-// ============================================================
-// سجل الصفقات الكامل - يعرض جميع الصفقات مع تفاصيلها
-// ============================================================
+// ✅ النسخة النهائية المصححة - بدون ترميش
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   RefreshCw, Loader2, Search, Download, TrendingUp, TrendingDown,
-  ChevronLeft, ChevronRight, XCircle, CheckCircle
+  ChevronLeft, ChevronRight, CheckCircle, AlertCircle
 } from 'lucide-react';
-import { formatPrice, formatUsd, formatDateTime, timeAgo } from '../lib/format';
+import { formatDateTime } from '../lib/format';
 import { getNetworkName } from '../config/networks';
 
 interface TradeHistory {
@@ -41,6 +39,12 @@ type TradeType = 'all' | 'BUY' | 'SELL';
 
 const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 
+const GlassCard: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
+  <div className={`bg-[#14141e]/80 backdrop-blur-xl border border-[#1e1e2f] rounded-2xl overflow-hidden ${className}`}>
+    {children}
+  </div>
+);
+
 export function TradeHistoryPage() {
   const { user, isAdmin, addLog } = useApp();
   const [trades, setTrades] = useState<TradeHistory[]>([]);
@@ -50,99 +54,139 @@ export function TradeHistoryPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTrade, setSelectedTrade] = useState<TradeHistory | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-  const [pagination, setPagination] = useState({ total: 0, limit: 50, offset: 0 });
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [selectedNetwork, setSelectedNetwork] = useState<string>('all');
   const [isClosing, setIsClosing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  // ============ جلب سجل الصفقات ============
-  const loadTradeHistory = async (resetOffset = true) => {
+  const networks = ['all', 'solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
+  const limit = 50;
+  
+  // ✅ refs لمنع الترميش
+  const offsetRef = useRef(0);
+  const isLoadingRef = useRef(false);
+
+  // ✅ دالة الجلب - مستقرة ولا تعتمد على offset
+  const loadTradeHistory = useCallback(async (resetOffset = true) => {
+    if (isLoadingRef.current) return;
+    
+    if (!user?.id && !isAdmin) {
+      setTrades([]);
+      setLoading(false);
+      return;
+    }
+
+    const currentOffset = resetOffset ? 0 : offsetRef.current;
+    isLoadingRef.current = true;
     setLoading(true);
+    setError(null);
+
     try {
-      const offset = resetOffset ? 0 : pagination.offset;
       const url = new URL(`${WORKER_URL}/trade-history`);
-      
-      if (user?.id && !isAdmin) {
-        url.searchParams.append('userId', user.id);
-      }
-      if (isAdmin) {
-        url.searchParams.append('admin', 'true');
-      }
-      if (filterType !== 'all') {
-        url.searchParams.append('type', filterType);
-      }
-      if (filterStatus !== 'all') {
-        url.searchParams.append('status', filterStatus);
-      }
-      if (selectedNetwork !== 'all') {
-        url.searchParams.append('network', selectedNetwork);
-      }
-      if (searchQuery) {
-        url.searchParams.append('token', searchQuery);
-      }
-      url.searchParams.append('limit', String(pagination.limit));
-      url.searchParams.append('offset', String(offset));
+      if (user?.id && !isAdmin) url.searchParams.append('userId', user.id);
+      if (isAdmin) url.searchParams.append('admin', 'true');
+      if (filterType !== 'all') url.searchParams.append('type', filterType);
+      if (filterStatus !== 'all') url.searchParams.append('status', filterStatus);
+      if (selectedNetwork !== 'all') url.searchParams.append('network', selectedNetwork);
+      if (searchQuery) url.searchParams.append('token', searchQuery);
+      url.searchParams.append('limit', String(limit));
+      url.searchParams.append('offset', String(currentOffset));
 
       const response = await fetch(url.toString());
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      
       const result = await response.json();
       
-      if (result.success) {
-        setTrades(result.data || []);
-        setPagination(prev => ({
-          ...prev,
-          total: result.pagination?.total || 0,
-          offset: offset,
-        }));
-      } else {
-        addLog('ERROR', `❌ فشل تحميل السجل: ${result.error}`);
+      let data: TradeHistory[] = [];
+      let totalCount = 0;
+      
+      if (result.success && Array.isArray(result.data)) {
+        data = result.data;
+        totalCount = result.pagination?.total || 0;
+      } else if (Array.isArray(result.trades)) {
+        data = result.trades;
+        totalCount = result.total || data.length;
+      } else if (Array.isArray(result)) {
+        data = result;
+        totalCount = data.length;
       }
-    } catch (error) {
-      console.error('❌ فشل جلب السجل:', error);
-      addLog('ERROR', `❌ فشل جلب السجل: ${error}`);
-    }
-    setLoading(false);
-  };
 
-  // ============ إغلاق صفقة ============
+      setTrades(data);
+      setTotal(totalCount);
+      setOffset(currentOffset);
+      offsetRef.current = currentOffset;
+      
+    } catch (err: any) {
+      console.error('❌ فشل جلب السجل:', err);
+      setError(`❌ فشل تحميل السجل: ${err.message || err}`);
+    } finally {
+      isLoadingRef.current = false;
+      setLoading(false);
+    }
+  }, [user?.id, isAdmin, filterType, filterStatus, selectedNetwork, searchQuery]);
+
+  // ✅ تحميل عند تغيير الفلاتر
+  useEffect(() => {
+    offsetRef.current = 0;
+    loadTradeHistory(true);
+  }, [filterStatus, filterType, searchQuery, selectedNetwork, user?.id, isAdmin, loadTradeHistory]);
+
+  // ✅ تحديث تلقائي كل 30 ثانية
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isLoadingRef.current) {
+        loadTradeHistory(false);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadTradeHistory]);
+
   const handleCloseTrade = async (tradeId: string) => {
     if (!confirm('⚠️ هل أنت متأكد من إغلاق هذه الصفقة؟')) return;
-
+    
     setIsClosing(true);
+    setError(null);
+    setSuccess(null);
+    
     try {
       const response = await fetch(`${WORKER_URL}/close-trade`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          tradeId, 
-          closeReason: 'manual' 
-        }),
+        body: JSON.stringify({ tradeId, closeReason: 'manual' }),
       });
       
       const result = await response.json();
       if (result.success) {
-        addLog('SUCCESS', `✅ تم إغلاق الصفقة - P&L: $${result.data?.pnl?.toFixed(2) || 0}`);
+        setSuccess(`✅ تم إغلاق الصفقة`);
         await loadTradeHistory(false);
         setShowDetails(false);
       } else {
-        addLog('ERROR', `❌ فشل إغلاق الصفقة: ${result.error}`);
+        setError(`❌ فشل إغلاق الصفقة`);
       }
-    } catch (error) {
-      console.error('❌ فشل إغلاق الصفقة:', error);
-      addLog('ERROR', `❌ فشل إغلاق الصفقة: ${error}`);
+    } catch (err: any) {
+      setError(`❌ فشل إغلاق الصفقة`);
+    } finally {
+      setIsClosing(false);
+      setTimeout(() => { setError(null); setSuccess(null); }, 5000);
     }
-    setIsClosing(false);
   };
 
-  // ============ التحميل التلقائي ============
-  useEffect(() => {
-    loadTradeHistory();
-    const interval = setInterval(() => loadTradeHistory(false), 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const nextPage = () => {
+    if (!isLoadingRef.current && offset + limit < total) {
+      offsetRef.current = offset + limit;
+      loadTradeHistory(false);
+    }
+  };
 
-  // ============ الشبكات المتاحة ============
-  const networks = ['all', 'solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
+  const prevPage = () => {
+    if (!isLoadingRef.current && offset - limit >= 0) {
+      offsetRef.current = offset - limit;
+      loadTradeHistory(false);
+    }
+  };
 
-  // ============ إحصائيات ============
   const stats = {
     total: trades.length,
     open: trades.filter(t => t.is_open === 1).length,
@@ -153,7 +197,6 @@ export function TradeHistoryPage() {
     winRate: trades.filter(t => t.pnl && t.pnl > 0).length / (trades.filter(t => t.pnl !== undefined && t.pnl !== null).length || 1) * 100,
   };
 
-  // ============ ألوان الحالة ============
   const getStatusColor = (status: string, isOpen: number) => {
     if (isOpen === 1) return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
     switch (status) {
@@ -187,81 +230,63 @@ export function TradeHistoryPage() {
     return reasons[reason || ''] || reason || '—';
   };
 
-  const getTypeColor = (type: string) => {
-    return type === 'BUY' ? 'text-emerald-400' : 'text-red-400';
-  };
-
-  const getTypeIcon = (type: string) => {
-    return type === 'BUY' ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />;
-  };
-
-  // ============ التنقل بين الصفحات ============
-  const nextPage = () => {
-    if (pagination.offset + pagination.limit < pagination.total) {
-      loadTradeHistory(false);
-    }
-  };
-
-  const prevPage = () => {
-    if (pagination.offset - pagination.limit >= 0) {
-      loadTradeHistory(false);
-    }
-  };
+  const getTypeColor = (type: string) => type === 'BUY' ? 'text-emerald-400' : 'text-red-400';
+  const getTypeIcon = (type: string) => type === 'BUY' ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
             📊 سجل الصفقات
-            {isAdmin && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400">
-                👑 ADMIN
-              </span>
-            )}
+            {isAdmin && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400">👑 ADMIN</span>}
           </h1>
           <p className="text-sm text-slate-400 mt-1">جميع الصفقات المنفذة مع التفاصيل الكاملة</p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => loadTradeHistory(true)}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-          >
+          <button onClick={() => { offsetRef.current = 0; loadTradeHistory(true); }} disabled={loading}
+            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             تحديث
           </button>
-          <button
-            onClick={() => {
-              const headers = ['التاريخ', 'العملة', 'النوع', 'السعر', 'الكمية', 'P&L', 'الحالة'];
-              const rows = trades.map(t => [
-                formatDateTime(new Date(t.created_at).getTime()),
-                t.token_symbol,
-                t.type,
-                t.price,
-                t.amount,
-                t.pnl?.toFixed(2) || '0',
-                getStatusLabel(t.status, t.is_open),
-              ]);
-              const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
-              const blob = new Blob([csv], { type: 'text/csv' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `trade-history-${new Date().toISOString().slice(0, 10)}.csv`;
-              a.click();
-              URL.revokeObjectURL(url);
-            }}
-            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-sm font-medium transition-colors"
-          >
+          <button onClick={() => {
+            const headers = ['التاريخ', 'العملة', 'النوع', 'السعر', 'الكمية', 'P&L', 'الحالة'];
+            const rows = trades.map(t => [
+              formatDateTime(new Date(t.created_at).getTime()),
+              t.token_symbol, t.type, t.price, t.amount,
+              t.pnl?.toFixed(2) || '0', getStatusLabel(t.status, t.is_open),
+            ]);
+            const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `trade-history-${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-sm font-medium transition-colors">
             <Download className="w-4 h-4" />
             تصدير
           </button>
         </div>
       </div>
 
-      {/* إحصائيات */}
+      {error && (
+        <div className="bg-red-500/20 border border-red-500 rounded-xl p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+          <span className="text-red-400 text-sm flex-1">{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300 text-sm">✕</button>
+        </div>
+      )}
+      {success && (
+        <div className="bg-emerald-500/20 border border-emerald-500 rounded-xl p-4 flex items-start gap-3">
+          <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+          <span className="text-emerald-400 text-sm flex-1">{success}</span>
+          <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-emerald-300 text-sm">✕</button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         <StatCard label="الإجمالي" value={stats.total} color="text-white" />
         <StatCard label="🟢 مفتوحة" value={stats.open} color="text-emerald-400" />
@@ -272,54 +297,39 @@ export function TradeHistoryPage() {
         <StatCard label="💵 الحجم" value={`${(stats.totalVolume / 1000).toFixed(1)}K`} color="text-blue-400" />
       </div>
 
-      {/* الفلاتر والبحث */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1 relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
           <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && loadTradeHistory(true)}
             placeholder="ابحث بالعملة..."
             className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
           />
         </div>
         <div className="flex gap-2 flex-wrap">
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as FilterType)}
-            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-emerald-500"
-          >
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as FilterType)}
+            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-emerald-500">
             <option value="all">📊 الكل</option>
             <option value="open">🟢 مفتوحة</option>
             <option value="closed">🔒 مغلقة</option>
             <option value="failed">❌ فاشلة</option>
           </select>
-          <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value as TradeType)}
-            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-emerald-500"
-          >
+          <select value={filterType} onChange={(e) => setFilterType(e.target.value as TradeType)}
+            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-emerald-500">
             <option value="all">📈 الكل</option>
             <option value="BUY">📈 شراء</option>
             <option value="SELL">📉 بيع</option>
           </select>
-          <select
-            value={selectedNetwork}
-            onChange={(e) => setSelectedNetwork(e.target.value)}
-            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-emerald-500"
-          >
+          <select value={selectedNetwork} onChange={(e) => setSelectedNetwork(e.target.value)}
+            className="px-3 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white focus:outline-none focus:border-emerald-500">
             <option value="all">🌐 كل الشبكات</option>
-            {networks.filter(n => n !== 'all').map(n => (
-              <option key={n} value={n}>{getNetworkName(n)}</option>
-            ))}
+            {networks.filter(n => n !== 'all').map(n => <option key={n} value={n}>{getNetworkName(n)}</option>)}
           </select>
         </div>
       </div>
 
-      {/* جدول الصفقات */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+      <GlassCard>
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
@@ -329,62 +339,48 @@ export function TradeHistoryPage() {
           <div className="py-20 text-center">
             <div className="text-6xl mb-4">📭</div>
             <p className="text-sm text-slate-400">لا توجد صفقات</p>
-            <p className="text-xs text-slate-500 mt-1">سجل الصفقات فارغ حالياً</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-slate-800 text-xs text-slate-500 uppercase tracking-wide">
-                  <th className="text-left px-4 py-3 font-medium">#</th>
-                  <th className="text-left px-4 py-3 font-medium">التاريخ</th>
-                  <th className="text-left px-4 py-3 font-medium">العملة</th>
-                  <th className="text-left px-4 py-3 font-medium">الشبكة</th>
-                  <th className="text-center px-4 py-3 font-medium">النوع</th>
-                  <th className="text-right px-4 py-3 font-medium">السعر</th>
-                  <th className="text-right px-4 py-3 font-medium">الكمية</th>
-                  <th className="text-right px-4 py-3 font-medium">القيمة</th>
-                  <th className="text-right px-4 py-3 font-medium">P&L</th>
-                  <th className="text-center px-4 py-3 font-medium">الحالة</th>
-                  {isAdmin && <th className="text-left px-4 py-3 font-medium">المستخدم</th>}
-                  <th className="text-center px-4 py-3 font-medium">الإجراء</th>
+                  <th className="text-left px-4 py-3">#</th>
+                  <th className="text-left px-4 py-3">التاريخ</th>
+                  <th className="text-left px-4 py-3">العملة</th>
+                  <th className="text-left px-4 py-3">الشبكة</th>
+                  <th className="text-center px-4 py-3">النوع</th>
+                  <th className="text-right px-4 py-3">السعر</th>
+                  <th className="text-right px-4 py-3">الكمية</th>
+                  <th className="text-right px-4 py-3">القيمة</th>
+                  <th className="text-right px-4 py-3">P&L</th>
+                  <th className="text-center px-4 py-3">الحالة</th>
+                  {isAdmin && <th className="text-left px-4 py-3">المستخدم</th>}
+                  <th className="text-center px-4 py-3">الإجراء</th>
                 </tr>
               </thead>
               <tbody>
                 {trades.map((trade, index) => {
                   const isOpen = trade.is_open === 1;
                   const pnlValue = trade.pnl || 0;
-                  
                   return (
-                    <tr 
-                      key={trade.id} 
-                      className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors cursor-pointer ${isOpen ? 'bg-emerald-500/5' : ''}`}
-                      onClick={() => { setSelectedTrade(trade); setShowDetails(true); }}
-                    >
-                      <td className="px-4 py-3 text-xs text-slate-500">{pagination.offset + index + 1}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">
-                        {formatDateTime(new Date(trade.created_at).getTime())}
-                      </td>
+                    <tr key={trade.id} onClick={() => { setSelectedTrade(trade); setShowDetails(true); }}
+                      className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors cursor-pointer ${isOpen ? 'bg-emerald-500/5' : ''}`}>
+                      <td className="px-4 py-3 text-xs text-slate-500">{offset + index + 1}</td>
+                      <td className="px-4 py-3 text-xs text-slate-400">{formatDateTime(new Date(trade.created_at).getTime())}</td>
                       <td className="px-4 py-3">
                         <span className="font-medium text-white">{trade.token_symbol}</span>
-                        {trade.bot_name && (
-                          <span className="text-[10px] text-slate-500 block">{trade.bot_name}</span>
-                        )}
+                        {trade.bot_name && <span className="text-[10px] text-slate-500 block">{trade.bot_name}</span>}
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-400">{getNetworkName(trade.network)}</td>
                       <td className="px-4 py-3 text-center">
                         <span className={`inline-flex items-center gap-1 ${getTypeColor(trade.type)}`}>
-                          {getTypeIcon(trade.type)}
-                          {trade.type}
+                          {getTypeIcon(trade.type)}{trade.type}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right text-white font-mono text-sm">
-                        ${trade.price.toFixed(6)}
-                      </td>
+                      <td className="px-4 py-3 text-right text-white font-mono text-sm">${trade.price.toFixed(6)}</td>
                       <td className="px-4 py-3 text-right text-white">{trade.amount}</td>
-                      <td className="px-4 py-3 text-right text-white font-mono">
-                        ${(trade.amount * trade.price).toFixed(2)}
-                      </td>
+                      <td className="px-4 py-3 text-right text-white font-mono">${(trade.amount * trade.price).toFixed(2)}</td>
                       <td className={`px-4 py-3 text-right font-mono ${pnlValue > 0 ? 'text-emerald-400' : pnlValue < 0 ? 'text-red-400' : 'text-slate-400'}`}>
                         {isOpen ? '—' : `${pnlValue >= 0 ? '+' : ''}${pnlValue.toFixed(2)}%`}
                       </td>
@@ -393,29 +389,14 @@ export function TradeHistoryPage() {
                           {getStatusLabel(trade.status, trade.is_open)}
                         </span>
                       </td>
-                      {isAdmin && (
-                        <td className="px-4 py-3 text-xs text-slate-400">
-                          {trade.user_email || '—'}
-                        </td>
-                      )}
+                      {isAdmin && <td className="px-4 py-3 text-xs text-slate-400">{trade.user_email || '—'}</td>}
                       <td className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button 
-                            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded text-xs transition-colors"
-                            onClick={(e) => { e.stopPropagation(); setSelectedTrade(trade); setShowDetails(true); }}
-                          >
-                            👁️
-                          </button>
-                          {isOpen && (
-                            <button 
-                              className="px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs transition-colors"
-                              onClick={(e) => { e.stopPropagation(); handleCloseTrade(trade.id); }}
-                              disabled={isClosing}
-                            >
-                              🔒
-                            </button>
-                          )}
-                        </div>
+                        <button className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded text-xs"
+                          onClick={(e) => { e.stopPropagation(); setSelectedTrade(trade); setShowDetails(true); }}>👁️</button>
+                        {isOpen && (
+                          <button className="px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs ml-1"
+                            onClick={(e) => { e.stopPropagation(); handleCloseTrade(trade.id); }} disabled={isClosing}>🔒</button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -424,87 +405,45 @@ export function TradeHistoryPage() {
             </table>
           </div>
         )}
-      </div>
+      </GlassCard>
 
-      {/* Pagination */}
       {trades.length > 0 && (
         <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>
-            عرض {pagination.offset + 1} - {Math.min(pagination.offset + trades.length, pagination.total)} من {pagination.total}
-          </span>
+          <span>عرض {offset + 1} - {Math.min(offset + trades.length, total)} من {total}</span>
           <div className="flex gap-2">
-            <button
-              onClick={prevPage}
-              disabled={pagination.offset === 0 || loading}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg disabled:opacity-50 transition-colors"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <button
-              onClick={nextPage}
-              disabled={pagination.offset + pagination.limit >= pagination.total || loading}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg disabled:opacity-50 transition-colors"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            <button onClick={prevPage} disabled={offset === 0 || loading}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg disabled:opacity-50"><ChevronLeft className="w-4 h-4" /></button>
+            <button onClick={nextPage} disabled={offset + limit >= total || loading}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg disabled:opacity-50"><ChevronRight className="w-4 h-4" /></button>
           </div>
         </div>
       )}
 
-      {/* ✅ مودال تفاصيل الصفقة */}
       {showDetails && selectedTrade && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-y-auto p-6 shadow-2xl">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-y-auto p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                📋 تفاصيل الصفقة
-                <span className="text-sm font-normal text-slate-400">#{selectedTrade.id.slice(0, 8)}</span>
-              </h3>
-              <button onClick={() => setShowDetails(false)} className="text-slate-400 hover:text-white">
-                ✕
-              </button>
+              <h3 className="text-lg font-bold text-white">📋 تفاصيل الصفقة <span className="text-sm text-slate-400">#{selectedTrade.id.slice(0, 8)}</span></h3>
+              <button onClick={() => setShowDetails(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
-
             <div className="grid grid-cols-2 gap-4">
               <DetailItem label="العملة" value={selectedTrade.token_symbol} />
               <DetailItem label="الشبكة" value={getNetworkName(selectedTrade.network)} />
-              <DetailItem label="النوع" value={selectedTrade.type} color={getTypeColor(selectedTrade.type)} />
+              <DetailItem label="النوع" value={selectedTrade.type} />
               <DetailItem label="سعر الدخول" value={`$${selectedTrade.price.toFixed(6)}`} />
-              {selectedTrade.close_price && (
-                <DetailItem label="سعر الخروج" value={`$${selectedTrade.close_price.toFixed(6)}`} />
-              )}
+              {selectedTrade.close_price && <DetailItem label="سعر الخروج" value={`$${selectedTrade.close_price.toFixed(6)}`} />}
               <DetailItem label="الكمية" value={selectedTrade.amount.toString()} />
               <DetailItem label="القيمة" value={`$${(selectedTrade.amount * selectedTrade.price).toFixed(2)}`} />
-              <DetailItem label="P&L" value={selectedTrade.pnl ? `${selectedTrade.pnl >= 0 ? '+' : ''}${selectedTrade.pnl.toFixed(2)}%` : '—'} color={selectedTrade.pnl && selectedTrade.pnl > 0 ? 'text-emerald-400' : selectedTrade.pnl && selectedTrade.pnl < 0 ? 'text-red-400' : 'text-slate-400'} />
+              <DetailItem label="P&L" value={selectedTrade.pnl ? `${selectedTrade.pnl >= 0 ? '+' : ''}${selectedTrade.pnl.toFixed(2)}%` : '—'} />
               <DetailItem label="الحالة" value={getStatusLabel(selectedTrade.status, selectedTrade.is_open)} />
-              {selectedTrade.close_reason && (
-                <DetailItem label="سبب الإغلاق" value={getCloseReasonLabel(selectedTrade.close_reason)} />
-              )}
+              {selectedTrade.close_reason && <DetailItem label="سبب الإغلاق" value={getCloseReasonLabel(selectedTrade.close_reason)} />}
               <DetailItem label="التاريخ" value={formatDateTime(new Date(selectedTrade.created_at).getTime())} />
-              {selectedTrade.closed_at && (
-                <DetailItem label="تاريخ الإغلاق" value={formatDateTime(new Date(selectedTrade.closed_at).getTime())} />
-              )}
-              {selectedTrade.tx_hash && (
-                <DetailItem label="TX Hash" value={selectedTrade.tx_hash.slice(0, 16) + '...'} />
-              )}
-              {selectedTrade.bot_name && (
-                <DetailItem label="البوت" value={selectedTrade.bot_name} />
-              )}
-              {isAdmin && selectedTrade.user_email && (
-                <DetailItem label="المستخدم" value={selectedTrade.user_email} />
-              )}
             </div>
-
             <div className="mt-4 pt-4 border-t border-slate-800 flex gap-3">
-              <button onClick={() => setShowDetails(false)} className="flex-1 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors">
-                ✕ إغلاق
-              </button>
+              <button onClick={() => setShowDetails(false)} className="flex-1 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg">✕ إغلاق</button>
               {selectedTrade.is_open === 1 && (
-                <button 
-                  className="flex-1 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
-                  onClick={() => handleCloseTrade(selectedTrade.id)}
-                  disabled={isClosing}
-                >
+                <button className="flex-1 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg"
+                  onClick={() => handleCloseTrade(selectedTrade.id)} disabled={isClosing}>
                   {isClosing ? <Loader2 className="w-4 h-4 animate-spin inline" /> : '🔒 إغلاق الصفقة'}
                 </button>
               )}
@@ -515,10 +454,6 @@ export function TradeHistoryPage() {
     </div>
   );
 }
-
-// ============================================================
-// 🧩 مكونات مساعدة
-// ============================================================
 
 function StatCard({ label, value, color }: { label: string; value: string | number; color: string }) {
   return (
@@ -537,3 +472,5 @@ function DetailItem({ label, value, color }: { label: string; value: string; col
     </div>
   );
 }
+
+export default TradeHistoryPage;

@@ -1,8 +1,12 @@
 ﻿// src/lib/accounts.ts
+// ============================================================
+// إدارة حسابات المستخدمين والمحافظ - يدعم 9 شبكات
+// ============================================================
 
 import { generateId, getTimestamp, madarCreate, madarRead, madarUpdate, madarDelete, createBotInstance } from './madarTech';
 import { BotWalletManager, createWallet, getWalletBalance } from './wallet';
 import { encrypt, decrypt } from './encryption';
+import { NETWORKS, getNativeToken } from '../config/networks';
 
 // ============ الأنواع ============
 
@@ -34,6 +38,7 @@ export interface UserAccount {
   lastTradeDate: string;
   tradeMode: 'shared' | 'individual';
   userWallets?: UserWallet[];
+  externalWalletAddress?: Record<string, string>;
 }
 
 export interface UserWallet {
@@ -43,8 +48,8 @@ export interface UserWallet {
   address: string;
   encryptedPrivateKey: string;
   balance: number;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface BotToken {
@@ -64,7 +69,7 @@ export interface BotToken {
 export interface Transaction {
   id: string;
   userId: string;
-  type: 'DEPOSIT' | 'WITHDRAW' | 'TRADE_BUY' | 'TRADE_SELL' | 'PROFIT' | 'FEE' | 'COMMISSION';
+  type: 'DEPOSIT' | 'WITHDRAW' | 'TRADE_BUY' | 'TRADE_SELL' | 'PROFIT' | 'FEE' | 'COMMISSION' | 'TRANSFER_TO_BOT' | 'TRANSFER_FROM_BOT';
   amount: number;
   balanceAfter: number;
   txHash?: string;
@@ -79,6 +84,8 @@ export interface Transaction {
     netProfit?: number;
     commissionAmount?: number;
     network?: string;
+    botId?: string;
+    externalAddress?: string;
   };
 }
 
@@ -94,11 +101,26 @@ export interface TreasuryStats {
 
 // ============ ثوابت النظام ============
 
-export const COMMISSION_RATE = 0.15;
+export const COMMISSION_RATE = 0.05; // 5%
 export const MIN_WITHDRAWAL = 10;
 export const MAX_WITHDRAWAL = 10000;
 export const DEFAULT_MAX_TRADES_PER_DAY = 10;
-export const NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
+
+// ✅ 9 شبكات من ملف networks.ts
+export const NETWORKS_LIST = NETWORKS.map(n => n.id);
+
+// ✅ عناوين محافظ المدير (Admin)
+const ADMIN_WALLET_ADDRESSES: Record<string, string> = {
+  solana: 'AdminSolanaAddressHere...',
+  ethereum: '0xAdminEthereumAddressHere...',
+  bsc: '0xAdminBscAddressHere...',
+  polygon: '0xAdminPolygonAddressHere...',
+  arbitrum: '0xAdminArbitrumAddressHere...',
+  base: '0xAdminBaseAddressHere...',
+  avalanche: '0xAdminAvalancheAddressHere...',
+  optimism: '0xAdminOptimismAddressHere...',
+  robinhood: '0xAdminRobinhoodAddressHere...',
+};
 
 // ============ فئة AccountManager ============
 
@@ -117,7 +139,7 @@ export class AccountManager {
     }
 
     const dbUser = {
-      email,
+      email: email,
       password: password,
       name: email.split('@')[0],
       full_name: email.split('@')[0],
@@ -126,7 +148,7 @@ export class AccountManager {
       isAdmin: 0,
       walletAddress: walletAddress || '',
       walletProvider: '',
-      walletLinkedAt: null,
+      walletLinkedAt: '',
       balance: 0,
       totalDeposited: 0,
       totalWithdrawn: 0,
@@ -150,16 +172,15 @@ export class AccountManager {
       throw new Error('فشل إنشاء الحساب');
     }
 
-    const user = this.mapDbUserToUserAccount(result.data);
+    const userData = result.data || dbUser;
+    const user = this.mapDbUserToUserAccount(userData);
     
-    // ✅ إنشاء 9 محافظ للمستخدم الجديد
-    await this.ensureUserWallets(user.id, NETWORKS);
+    await this.ensureAllUserWallets(user.id);
     
-    // ✅ إنشاء 4 بوتات للمستخدم الجديد
     const botTypes = ['hunter', 'signal', 'manual', 'scalper'];
     const botNames = ['Hunter Alpha', 'Signal Pro', 'Manual Desk', 'Scalper X'];
     for (let i = 0; i < botTypes.length; i++) {
-      await createBotInstance(user.id, botTypes[i] as any, botNames[i]);
+      await createBotInstance(user.id, botTypes[i] as any, botNames[i], 100);
     }
 
     return user;
@@ -172,7 +193,7 @@ export class AccountManager {
   static async findUserByWallet(walletAddress: string): Promise<UserAccount | null> {
     try {
       console.log('🔍 [findUserByWallet] البحث عن:', walletAddress.slice(0, 8) + '...');
-      const result = await madarRead<any>('users', { walletAddress });
+      const result = await madarRead<any>('users', { where: { walletAddress } });
       
       if (result.success && result.data && result.data.length > 0) {
         console.log('✅ [findUserByWallet] المستخدم موجود');
@@ -229,19 +250,21 @@ export class AccountManager {
       };
 
       const result = await madarCreate('users', dbUser);
+      console.log('📊 [createAccountFromWallet] نتيجة الإدراج:', result);
       
       if (!result.success) {
         throw new Error('فشل إنشاء الحساب من المحفظة');
       }
 
-      const user = this.mapDbUserToUserAccount(result.data);
+      const userData = result.data || dbUser;
+      const user = this.mapDbUserToUserAccount(userData);
       
-      await this.ensureUserWallets(user.id, NETWORKS);
+      await this.ensureAllUserWallets(user.id);
       
       const botTypes = ['hunter', 'signal', 'manual', 'scalper'];
       const botNames = ['Hunter Alpha', 'Signal Pro', 'Manual Desk', 'Scalper X'];
       for (let i = 0; i < botTypes.length; i++) {
-        await createBotInstance(user.id, botTypes[i] as any, botNames[i]);
+        await createBotInstance(user.id, botTypes[i] as any, botNames[i], 100);
       }
 
       console.log('✅ [createAccountFromWallet] تم إنشاء الحساب بنجاح');
@@ -303,7 +326,7 @@ export class AccountManager {
 
   static async getAccount(userId: string): Promise<UserAccount | null> {
     try {
-      const result = await madarRead<any>('users', { id: userId });
+      const result = await madarRead<any>('users', { where: { id: userId } });
       
       if (result.success && result.data && result.data.length > 0) {
         return this.mapDbUserToUserAccount(result.data[0]);
@@ -318,7 +341,7 @@ export class AccountManager {
   static async getAccountByEmail(email: string): Promise<UserAccount | null> {
     try {
       console.log('📡 [getAccountByEmail] جلب المستخدم:', email);
-      const result = await madarRead<any>('users', { email });
+      const result = await madarRead<any>('users', { where: { email } });
       
       if (result.success && result.data && result.data.length > 0) {
         console.log('✅ [getAccountByEmail] المستخدم موجود');
@@ -355,6 +378,9 @@ export class AccountManager {
     if (data.tradesToday !== undefined) dbData.tradesToday = data.tradesToday;
     if (data.lastTradeDate !== undefined) dbData.lastTradeDate = data.lastTradeDate;
     if (data.tradeMode !== undefined) dbData.tradeMode = data.tradeMode;
+    if (data.externalWalletAddress !== undefined) {
+      dbData.externalWalletAddress = JSON.stringify(data.externalWalletAddress);
+    }
 
     await madarUpdate('users', userId, dbData);
   }
@@ -378,6 +404,17 @@ export class AccountManager {
   // ============================================================
 
   private static mapDbUserToUserAccount(dbUser: any): UserAccount {
+    let externalWalletAddress: Record<string, string> = {};
+    try {
+      if (dbUser.externalWalletAddress) {
+        externalWalletAddress = typeof dbUser.externalWalletAddress === 'string' 
+          ? JSON.parse(dbUser.externalWalletAddress) 
+          : dbUser.externalWalletAddress;
+      }
+    } catch {
+      externalWalletAddress = {};
+    }
+
     return {
       id: String(dbUser.id),
       email: dbUser.email,
@@ -403,7 +440,8 @@ export class AccountManager {
       maxTradesPerDay: dbUser.maxTradesPerDay || DEFAULT_MAX_TRADES_PER_DAY,
       tradesToday: dbUser.tradesToday || 0,
       lastTradeDate: dbUser.lastTradeDate || new Date().toISOString().split('T')[0],
-      tradeMode: dbUser.tradeMode || 'shared',
+      tradeMode: dbUser.tradeMode || 'individual',
+      externalWalletAddress,
     };
   }
 
@@ -411,7 +449,12 @@ export class AccountManager {
   // 💰 إدارة الرصيد والأرباح
   // ============================================================
 
-  static async deposit(userId: string, amount: number, txHash: string): Promise<void> {
+  static async deposit(
+    userId: string, 
+    amount: number, 
+    txHash: string, 
+    network: string = 'base'
+  ): Promise<void> {
     const account = await this.getAccount(userId);
     if (!account) throw new Error('المستخدم غير موجود');
 
@@ -421,120 +464,77 @@ export class AccountManager {
       totalDeposited: account.totalDeposited + amount,
     });
 
+    const wallet = await this.getUserWallet(userId, network);
+    if (wallet) {
+      await this.updateUserWalletBalance(userId, network, wallet.balance + amount);
+      console.log(`✅ تم تحديث رصيد المحفظة ${network}: ${wallet.balance + amount}`);
+    }
+
     await this.addTransaction({
       userId,
       type: 'DEPOSIT',
       amount,
       balanceAfter: newBalance,
       txHash,
-      description: `💰 إيداع $${amount.toFixed(2)}`,
+      description: `💰 إيداع $${amount.toFixed(2)} على ${network}`,
       status: 'completed',
+      metadata: { network },
     });
   }
 
-  static async addProfit(
+  // ✅ ربط المحفظة الخارجية
+  static async linkExternalWallet(
     userId: string,
-    grossProfit: number,
-    tradeDetails: {
-      token: string;
-      amount: number;
-      price: number;
-      txHash: string;
-      network: string;
-    }
-  ): Promise<{ netProfit: number; commission: number }> {
+    network: string,
+    address: string
+  ): Promise<{ success: boolean; error?: string }> {
     const account = await this.getAccount(userId);
-    if (!account) throw new Error('المستخدم غير موجود');
+    if (!account) return { success: false, error: 'المستخدم غير موجود' };
 
-    const commission = grossProfit * COMMISSION_RATE;
-    const netProfit = grossProfit - commission;
+    const externalWallets = account.externalWalletAddress || {};
+    externalWallets[network] = address;
 
-    const newBalance = account.balance + netProfit;
     await this.updateAccount(userId, {
-      balance: newBalance,
-      totalProfit: account.totalProfit + netProfit,
-      totalGrossProfit: account.totalGrossProfit + grossProfit,
-      totalFees: account.totalFees + commission,
-      totalTrades: account.totalTrades + 1,
+      externalWalletAddress: externalWallets,
+      walletLinkedAt: getTimestamp(),
     });
 
-    await this.addTransaction({
-      userId,
-      type: 'PROFIT',
-      amount: netProfit,
-      balanceAfter: newBalance,
-      txHash: tradeDetails.txHash,
-      description: `📈 ربح ${tradeDetails.token} (85% = $${netProfit.toFixed(2)})`,
-      status: 'completed',
-      metadata: {
-        token: tradeDetails.token,
-        network: tradeDetails.network,
-        grossProfit,
-        netProfit,
-        commissionAmount: commission,
-        feePercentage: COMMISSION_RATE * 100,
-      },
-    });
-
-    await this.addTransaction({
-      userId,
-      type: 'COMMISSION',
-      amount: commission,
-      balanceAfter: newBalance,
-      txHash: tradeDetails.txHash,
-      description: `🏦 عمولة 15% = $${commission.toFixed(2)}`,
-      status: 'completed',
-      metadata: {
-        token: tradeDetails.token,
-        network: tradeDetails.network,
-        grossProfit,
-        netProfit,
-        commissionAmount: commission,
-        feePercentage: COMMISSION_RATE * 100,
-      },
-    });
-
-    await this.updateTreasury(commission);
-
-    return { netProfit, commission };
+    return { success: true };
   }
 
-  static async withdraw(userId: string, amount: number, password: string): Promise<void> {
+  // ✅ السحب إلى المحفظة الخارجية
+  static async withdrawToExternalWallet(
+    userId: string,
+    network: string,
+    amount: number
+  ): Promise<{ success: boolean; txHash?: string; error?: string }> {
     const account = await this.getAccount(userId);
-    if (!account) throw new Error('المستخدم غير موجود');
+    if (!account) return { success: false, error: 'المستخدم غير موجود' };
 
-    if (account.balance < amount) {
-      throw new Error(`الرصيد غير كافٍ. الرصيد المتاح: $${account.balance.toFixed(2)}`);
-    }
+    const wallet = await this.getUserWallet(userId, network);
+    if (!wallet) return { success: false, error: 'لا توجد محفظة' };
+    if (wallet.balance < amount) return { success: false, error: 'الرصيد غير كافٍ' };
 
-    if (amount < MIN_WITHDRAWAL) {
-      throw new Error(`الحد الأدنى للسحب: $${MIN_WITHDRAWAL}`);
-    }
-
-    if (amount > MAX_WITHDRAWAL) {
-      throw new Error(`الحد الأقصى للسحب: $${MAX_WITHDRAWAL}`);
-    }
-
-    const verified = await this.verifyPassword(account.email, password);
-    if (!verified) {
-      throw new Error('كلمة المرور غير صحيحة');
+    const externalAddress = account.externalWalletAddress?.[network];
+    if (!externalAddress) {
+      return { success: false, error: 'الرجاء ربط محفظة خارجية أولاً' };
     }
 
     const botWallet = BotWalletManager.getInstance();
     const result = await botWallet.sendToUser({
-      toAddress: account.walletAddress,
+      toAddress: externalAddress,
       amount,
-      network: 'solana',
+      network,
       password: 'master_password',
     });
 
     if (!result.success) {
-      throw new Error(`فشل السحب: ${result.error}`);
+      return { success: false, error: result.error };
     }
 
-    const newBalance = account.balance - amount;
+    await this.updateUserWalletBalance(userId, network, wallet.balance - amount);
     await this.updateAccount(userId, {
-      balance: newBalance,
+      balance: account.balance - amount,
       totalWithdrawn: account.totalWithdrawn + amount,
     });
 
@@ -542,15 +542,278 @@ export class AccountManager {
       userId,
       type: 'WITHDRAW',
       amount,
-      balanceAfter: newBalance,
+      balanceAfter: account.balance - amount,
       txHash: result.txHash,
-      description: `💸 سحب $${amount.toFixed(2)}`,
+      description: `💸 سحب $${amount.toFixed(2)} إلى المحفظة الخارجية (${network})`,
       status: 'completed',
+      metadata: { network, externalAddress },
     });
+
+    return { success: true, txHash: result.txHash };
   }
 
   // ============================================================
-  // 📊 إحصائيات النظام
+  // 💰 إدارة محافظ المستخدمين (9 شبكات)
+  // ============================================================
+
+  // ✅ إنشاء محفظة للمستخدم على شبكة محددة
+  static async createUserWallet(userId: string, network: string): Promise<UserWallet> {
+    console.log(`💰 createUserWallet - إنشاء محفظة للمستخدم ${userId} على ${network}`);
+    
+    const user = await this.getAccount(userId);
+    if (!user) throw new Error('المستخدم غير موجود');
+
+    // ✅ التحقق من وجود محفظة بنفس الشبكة
+    const existing = await this.getUserWallet(userId, network);
+    if (existing) {
+      throw new Error(`توجد محفظة بالفعل لشبكة ${network}`);
+    }
+
+    // ✅ إنشاء عنوان ومفتاح خاص
+    const { address, privateKey } = createWallet(network);
+    const encryptedKey = encrypt(privateKey, 'user_wallet_salt');
+
+    const wallet: UserWallet = {
+      id: generateId(),
+      userId,
+      network,
+      address,
+      encryptedPrivateKey: encryptedKey,
+      balance: 0,
+      created_at: getTimestamp(),
+      updated_at: getTimestamp(),
+    };
+
+    await madarCreate('user_wallets', wallet);
+    console.log(`✅ تم إنشاء محفظة المستخدم ${network}: ${address.slice(0, 10)}...`);
+
+    // ============================================================
+    // ⭐ ربط المحفظة مع bot_wallet (الإضافة الجديدة)
+    // ============================================================
+    try {
+      // الحصول على أول بوت للمستخدم
+      const botResult = await madarRead<{ id: string }>('bot_instances', {
+        where: { user_id: userId },
+        limit: 1
+      });
+
+      let botId = null;
+      if (botResult.success && botResult.data && Array.isArray(botResult.data) && botResult.data.length > 0) {
+        botId = botResult.data[0].id;
+      } else {
+        // إذا لم يكن للمستخدم بوت، أنشئ بوتاً افتراضياً
+        const newBot = await createBotInstance(userId, 'hunter', 'Default Bot', 100);
+        if (newBot.botId) botId = newBot.botId;
+      }
+
+      if (botId) {
+        const botWallet = {
+          id: generateId(),
+          bot_id: botId,
+          address: address,
+          encryptedPrivateKey: encryptedKey,
+          network: network,
+          balance: 0,
+          created_at: getTimestamp(),
+          updated_at: getTimestamp(),
+        };
+        await madarCreate('bot_wallet', botWallet);
+        console.log(`✅ تم إنشاء محفظة بوت لـ ${network}`);
+      } else {
+        console.warn(`⚠️ لم يتم العثور على بوت للمستخدم ${userId}، لم يتم إنشاء محفظة بوت`);
+      }
+    } catch (error) {
+      console.warn(`⚠️ فشل إنشاء محفظة بوت لـ ${network}:`, error);
+      // لا نوقف العملية إذا فشل إنشاء محفظة البوت
+    }
+
+    return wallet;
+  }
+
+  // ✅ جلب محفظة المستخدم على شبكة محددة
+  static async getUserWallet(userId: string, network: string): Promise<UserWallet | null> {
+    try {
+      const result = await madarRead<UserWallet>('user_wallets', { where: { userId, network } });
+      if (result.success && result.data && result.data.length > 0) {
+        return result.data[0];
+      }
+      return null;
+    } catch (error) {
+      console.error('❌ getUserWallet Error:', error);
+      return null;
+    }
+  }
+
+  // ✅ جلب جميع محافظ المستخدم
+  static async getAllUserWallets(userId: string): Promise<UserWallet[]> {
+    try {
+      const result = await madarRead<UserWallet>('user_wallets', { where: { userId } });
+      if (result.success && result.data) {
+        return Array.isArray(result.data) ? result.data : [result.data];
+      }
+      return [];
+    } catch (error) {
+      console.error('❌ getAllUserWallets Error:', error);
+      return [];
+    }
+  }
+
+  // ✅ إنشاء محافظ لجميع الشبكات (9 شبكات)
+  static async ensureAllUserWallets(userId: string): Promise<void> {
+    console.log(`🔄 ensureAllUserWallets - إنشاء محافظ لـ ${NETWORKS_LIST.length} شبكة للمستخدم ${userId}`);
+    
+    for (const network of NETWORKS_LIST) {
+      try {
+        const existing = await this.getUserWallet(userId, network);
+        if (!existing) {
+          await this.createUserWallet(userId, network);
+          console.log(`✅ تم إنشاء محفظة ${network} للمستخدم ${userId}`);
+        } else {
+          console.log(`✅ محفظة ${network} موجودة بالفعل للمستخدم ${userId}`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ فشل إنشاء محفظة ${network}:`, error);
+      }
+    }
+  }
+
+  // ✅ تحديث رصيد محفظة المستخدم
+  static async updateUserWalletBalance(userId: string, network: string, balance: number): Promise<void> {
+    const wallet = await this.getUserWallet(userId, network);
+    if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على ${network}`);
+    
+    await madarUpdate('user_wallets', wallet.id!, {
+      balance,
+      updated_at: getTimestamp(),
+    });
+  }
+
+  // ✅ جلب رصيد محفظة المستخدم من الشبكة
+  static async getUserWalletBalance(userId: string, network: string): Promise<number> {
+    const wallet = await this.getUserWallet(userId, network);
+    if (!wallet) return 0;
+    
+    try {
+      const balance = await getWalletBalance(network, wallet.address);
+      await this.updateUserWalletBalance(userId, network, balance);
+      return balance;
+    } catch {
+      return wallet.balance || 0;
+    }
+  }
+
+  // ✅ حذف محفظة المستخدم
+  static async deleteUserWallet(userId: string, network: string): Promise<void> {
+    const wallet = await this.getUserWallet(userId, network);
+    if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على ${network}`);
+    
+    await madarDelete('user_wallets', wallet.id!);
+    console.log(`🗑️ تم حذف محفظة ${network} للمستخدم ${userId}`);
+  }
+
+  // ============================================================
+  // 📈 إدارة الصفقات اليومية
+  // ============================================================
+
+  static async incrementUserTrades(userId: string): Promise<void> {
+    const account = await this.getAccount(userId);
+    if (!account) throw new Error('المستخدم غير موجود');
+
+    const today = new Date().toISOString().split('T')[0];
+    
+    if (account.lastTradeDate !== today) {
+      account.tradesToday = 0;
+      account.lastTradeDate = today;
+    }
+
+    account.tradesToday = (account.tradesToday || 0) + 1;
+    await this.updateAccount(userId, {
+      tradesToday: account.tradesToday,
+      lastTradeDate: account.lastTradeDate,
+    });
+  }
+
+  static async canUserTrade(userId: string): Promise<boolean> {
+    const account = await this.getAccount(userId);
+    if (!account) throw new Error('المستخدم غير موجود');
+
+    const today = new Date().toISOString().split('T')[0];
+    
+    if (account.lastTradeDate !== today) {
+      account.tradesToday = 0;
+      account.lastTradeDate = today;
+      await this.updateAccount(userId, {
+        tradesToday: 0,
+        lastTradeDate: today,
+      });
+      return true;
+    }
+
+    const currentTrades = account.tradesToday || 0;
+    const maxTrades = account.maxTradesPerDay || DEFAULT_MAX_TRADES_PER_DAY;
+
+    return currentTrades < maxTrades;
+  }
+
+  // ============================================================
+  // 🏦 الخزانة (Treasury)
+  // ============================================================
+
+  static async getTreasury(): Promise<TreasuryStats> {
+    try {
+      const result = await madarRead<TreasuryStats>('treasury');
+      if (result.success && result.data && result.data.length > 0) {
+        return result.data[0];
+      }
+    } catch (error) {
+      console.warn('⚠️ فشل جلب الخزانة، جاري إنشاء جديدة:', error);
+    }
+
+    const newTreasury: TreasuryStats = {
+      id: generateId(),
+      totalCollected: 0,
+      totalDistributed: 0,
+      currentBalance: 0,
+      pendingWithdrawals: 0,
+      totalTrades: 0,
+      lastUpdated: getTimestamp(),
+    };
+    
+    await madarCreate('treasury', newTreasury);
+    return newTreasury;
+  }
+
+  static async getTreasuryStats(): Promise<{
+    totalCollected: number;
+    currentBalance: number;
+    totalTrades: number;
+    averageCommission: number;
+  }> {
+    const treasury = await this.getTreasury();
+    return {
+      totalCollected: treasury.totalCollected,
+      currentBalance: treasury.currentBalance,
+      totalTrades: treasury.totalTrades,
+      averageCommission: treasury.totalTrades > 0 ? treasury.totalCollected / treasury.totalTrades : 0,
+    };
+  }
+
+  private static async updateTreasury(amount: number): Promise<void> {
+    const treasury = await this.getTreasury();
+    treasury.totalCollected += amount;
+    treasury.currentBalance += amount;
+    treasury.totalTrades += 1;
+    treasury.lastUpdated = getTimestamp();
+    
+    if (treasury.id) {
+      await madarUpdate('treasury', treasury.id, treasury);
+    } else {
+      await madarCreate('treasury', treasury);
+    }
+  }
+
+  // ============================================================
+  // 📊 إحصائيات النظام والمستخدم
   // ============================================================
 
   static async getSystemStats(): Promise<{
@@ -609,60 +872,6 @@ export class AccountManager {
   }
 
   // ============================================================
-  // 🏦 الخزانة
-  // ============================================================
-
-  private static async updateTreasury(amount: number): Promise<void> {
-    const treasury = await this.getTreasury();
-    treasury.totalCollected += amount;
-    treasury.currentBalance += amount;
-    treasury.totalTrades += 1;
-    treasury.lastUpdated = getTimestamp();
-    await this.saveTreasury(treasury);
-  }
-
-  static async getTreasury(): Promise<TreasuryStats> {
-    const result = await madarRead<TreasuryStats>('treasury');
-    if (result.success && result.data && result.data.length > 0) {
-      return result.data[0];
-    }
-    const newTreasury: TreasuryStats = {
-      totalCollected: 0,
-      totalDistributed: 0,
-      currentBalance: 0,
-      pendingWithdrawals: 0,
-      totalTrades: 0,
-      lastUpdated: getTimestamp(),
-    };
-    await madarCreate('treasury', newTreasury);
-    return newTreasury;
-  }
-
-  private static async saveTreasury(treasury: TreasuryStats): Promise<void> {
-    const result = await madarRead<TreasuryStats>('treasury');
-    if (result.success && result.data && result.data.length > 0) {
-      await madarUpdate('treasury', result.data[0].id!, treasury);
-    } else {
-      await madarCreate('treasury', treasury);
-    }
-  }
-
-  static async getTreasuryStats(): Promise<{
-    totalCollected: number;
-    currentBalance: number;
-    totalTrades: number;
-    averageCommission: number;
-  }> {
-    const treasury = await this.getTreasury();
-    return {
-      totalCollected: treasury.totalCollected,
-      currentBalance: treasury.currentBalance,
-      totalTrades: treasury.totalTrades,
-      averageCommission: treasury.totalTrades > 0 ? treasury.totalCollected / treasury.totalTrades : 0,
-    };
-  }
-
-  // ============================================================
   // 📝 المعاملات
   // ============================================================
 
@@ -676,481 +885,13 @@ export class AccountManager {
   }
 
   static async getTransactions(userId: string): Promise<Transaction[]> {
-    const result = await madarRead<Transaction>('transactions', { userId });
+    const result = await madarRead<Transaction>('transactions', { where: { userId } });
     if (result.success && result.data) {
       return result.data.sort((a, b) => 
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
     }
     return [];
-  }
-
-  // ============================================================
-  // 👤 إدارة محافظ المستخدمين
-  // ============================================================
-
-  static async createUserWallet(userId: string, network: string): Promise<UserWallet> {
-    const user = await this.getAccount(userId);
-    if (!user) throw new Error('المستخدم غير موجود');
-
-    const existing = await this.getUserWallet(userId, network);
-    if (existing) {
-      throw new Error(`توجد محفظة بالفعل لشبكة ${network}`);
-    }
-
-    const { address, privateKey } = createWallet(network);
-    const encryptedKey = encrypt(privateKey, 'user_wallet_salt');
-
-    const wallet: UserWallet = {
-      userId,
-      network,
-      address,
-      encryptedPrivateKey: encryptedKey,
-      balance: 0,
-      createdAt: getTimestamp(),
-      updatedAt: getTimestamp(),
-    };
-
-    await madarCreate('user_wallets', wallet);
-    return wallet;
-  }
-
-  static async getUserWallet(userId: string, network: string): Promise<UserWallet | null> {
-    const result = await madarRead<UserWallet>('user_wallets', { userId, network });
-    if (result.success && result.data && result.data.length > 0) {
-      return result.data[0];
-    }
-    return null;
-  }
-
-  static async getAllUserWallets(userId: string): Promise<UserWallet[]> {
-    const result = await madarRead<UserWallet>('user_wallets', { userId });
-    if (result.success && result.data) {
-      return result.data;
-    }
-    return [];
-  }
-
-  static async updateUserWalletBalance(userId: string, network: string, balance: number): Promise<void> {
-    const wallet = await this.getUserWallet(userId, network);
-    if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على ${network}`);
-    
-    await madarUpdate('user_wallets', wallet.id!, {
-      balance,
-      updatedAt: getTimestamp(),
-    });
-  }
-
-  static async getUserWalletBalance(userId: string, network: string): Promise<number> {
-    const wallet = await this.getUserWallet(userId, network);
-    if (!wallet) return 0;
-    
-    try {
-      const balance = await getWalletBalance(network, wallet.address);
-      await this.updateUserWalletBalance(userId, network, balance);
-      return balance;
-    } catch {
-      return wallet.balance || 0;
-    }
-  }
-
-  static async ensureUserWallets(userId: string, networks: string[]): Promise<void> {
-    for (const network of networks) {
-      const existing = await this.getUserWallet(userId, network);
-      if (!existing) {
-        await this.createUserWallet(userId, network);
-        console.log(`✅ تم إنشاء محفظة على ${network} للمستخدم ${userId}`);
-      }
-    }
-  }
-
-  static async deleteUserWallet(userId: string, network: string): Promise<void> {
-    const wallet = await this.getUserWallet(userId, network);
-    if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على ${network}`);
-    
-    await madarDelete('user_wallets', wallet.id!);
-  }
-
-  // ============================================================
-  // 📈 إدارة الصفقات اليومية
-  // ============================================================
-
-  static async incrementUserTrades(userId: string): Promise<void> {
-    const account = await this.getAccount(userId);
-    if (!account) throw new Error('المستخدم غير موجود');
-
-    const today = new Date().toISOString().split('T')[0];
-    
-    if (account.lastTradeDate !== today) {
-      account.tradesToday = 0;
-      account.lastTradeDate = today;
-    }
-
-    account.tradesToday = (account.tradesToday || 0) + 1;
-    await this.updateAccount(userId, {
-      tradesToday: account.tradesToday,
-      lastTradeDate: account.lastTradeDate,
-    });
-  }
-
-  static async canUserTrade(userId: string): Promise<boolean> {
-    const account = await this.getAccount(userId);
-    if (!account) throw new Error('المستخدم غير موجود');
-
-    const today = new Date().toISOString().split('T')[0];
-    
-    if (account.lastTradeDate !== today) {
-      account.tradesToday = 0;
-      account.lastTradeDate = today;
-      await this.updateAccount(userId, {
-        tradesToday: 0,
-        lastTradeDate: today,
-      });
-      return true;
-    }
-
-    const currentTrades = account.tradesToday || 0;
-    const maxTrades = account.maxTradesPerDay || DEFAULT_MAX_TRADES_PER_DAY;
-
-    return currentTrades < maxTrades;
-  }
-
-  static async getRemainingTrades(userId: string): Promise<number> {
-    const account = await this.getAccount(userId);
-    if (!account) return 0;
-
-    const today = new Date().toISOString().split('T')[0];
-    
-    if (account.lastTradeDate !== today) {
-      return account.maxTradesPerDay || DEFAULT_MAX_TRADES_PER_DAY;
-    }
-
-    const currentTrades = account.tradesToday || 0;
-    const maxTrades = account.maxTradesPerDay || DEFAULT_MAX_TRADES_PER_DAY;
-
-    return Math.max(0, maxTrades - currentTrades);
-  }
-
-  static async updateUserMaxTrades(userId: string, maxTradesPerDay: number): Promise<void> {
-    await this.updateAccount(userId, { maxTradesPerDay });
-  }
-
-  static async resetAllDailyTrades(): Promise<void> {
-    const users = await this.getAllUsers();
-    const today = new Date().toISOString().split('T')[0];
-
-    for (const user of users) {
-      if (user.lastTradeDate !== today) {
-        await this.updateAccount(user.id, {
-          tradesToday: 0,
-          lastTradeDate: today,
-        });
-      }
-    }
-  }
-
-  // ============================================================
-  // 🔑 إدارة رموز البوت
-  // ============================================================
-
-  static async createBotToken(
-    userId: string, 
-    walletId: string, 
-    network: string
-  ): Promise<BotToken> {
-    
-    const user = await this.getAccount(userId);
-    if (!user) throw new Error('المستخدم غير موجود');
-
-    const wallet = await this.getUserWallet(userId, network);
-    if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على شبكة ${network}`);
-
-    const existing = await this.getBotToken(userId, network);
-    if (existing && existing.status === 'active') {
-      throw new Error(`يوجد رمز بوت نشط بالفعل لشبكة ${network}`);
-    }
-
-    const token = this.generateBotToken(userId, network);
-    const secretKey = this.generateSecretKey();
-
-    const botToken: BotToken = {
-      id: generateId(),
-      userId,
-      walletId,
-      network,
-      token: `bot_${network}_${token}`,
-      secretKey: `sk_${secretKey}`,
-      status: 'active',
-      permissions: ['trade', 'view'],
-      createdAt: getTimestamp(),
-      updatedAt: getTimestamp(),
-    };
-
-    await madarCreate('bot_tokens', botToken);
-    
-    console.log(`✅ تم إنشاء رمز بوت للشبكة ${network}: ${botToken.token}`);
-    return botToken;
-  }
-
-  static async getBotToken(userId: string, network: string): Promise<BotToken | null> {
-    const result = await madarRead<BotToken>('bot_tokens', { 
-      userId, 
-      network,
-      status: 'active'
-    });
-    
-    if (result.success && result.data && result.data.length > 0) {
-      return result.data[0];
-    }
-    return null;
-  }
-
-  static async getAllBotTokens(userId: string): Promise<BotToken[]> {
-    const result = await madarRead<BotToken>('bot_tokens', { userId });
-    if (result.success && result.data) {
-      return result.data;
-    }
-    return [];
-  }
-
-  static async getActiveBotTokens(userId: string): Promise<BotToken[]> {
-    const result = await madarRead<BotToken>('bot_tokens', { 
-      userId,
-      status: 'active'
-    });
-    if (result.success && result.data) {
-      return result.data;
-    }
-    return [];
-  }
-
-  static async getBotTokenByToken(token: string): Promise<BotToken | null> {
-    const result = await madarRead<BotToken>('bot_tokens', { token });
-    if (result.success && result.data && result.data.length > 0) {
-      return result.data[0];
-    }
-    return null;
-  }
-
-  static async verifyBotToken(token: string, userId: string): Promise<boolean> {
-    const result = await madarRead<BotToken>('bot_tokens', { 
-      token,
-      userId,
-      status: 'active'
-    });
-    
-    if (!result.success || !result.data || result.data.length === 0) {
-      return false;
-    }
-
-    const botToken = result.data[0];
-    
-    if (!botToken.permissions.includes('trade')) {
-      return false;
-    }
-
-    await this.updateBotTokenLastUsed(botToken.id);
-    
-    return true;
-  }
-
-  static async updateBotTokenLastUsed(tokenId: string): Promise<void> {
-    await madarUpdate('bot_tokens', tokenId, {
-      lastUsed: getTimestamp(),
-      updatedAt: getTimestamp()
-    });
-  }
-
-  static async revokeBotToken(tokenId: string): Promise<void> {
-    await madarUpdate('bot_tokens', tokenId, {
-      status: 'revoked',
-      updatedAt: getTimestamp()
-    });
-  }
-
-  static async revokeAllBotTokens(userId: string): Promise<void> {
-    const tokens = await this.getAllBotTokens(userId);
-    for (const token of tokens) {
-      await this.revokeBotToken(token.id);
-    }
-  }
-
-  static async updateBotTokenPermissions(
-    tokenId: string, 
-    permissions: string[]
-  ): Promise<void> {
-    await madarUpdate('bot_tokens', tokenId, {
-      permissions: JSON.stringify(permissions),
-      updatedAt: getTimestamp()
-    });
-  }
-
-  static async hasBotToken(userId: string, network: string): Promise<boolean> {
-    const token = await this.getBotToken(userId, network);
-    return token !== null && token.status === 'active';
-  }
-
-  static async ensureBotToken(
-    userId: string, 
-    walletId: string, 
-    network: string
-  ): Promise<BotToken> {
-    const existing = await this.getBotToken(userId, network);
-    if (existing && existing.status === 'active') {
-      return existing;
-    }
-    return await this.createBotToken(userId, walletId, network);
-  }
-
-  static generateBotToken(userId: string, network: string): string {
-    const timestamp = Date.now().toString(36);
-    const random = Math.random().toString(36).substring(2, 8);
-    const userPrefix = userId.slice(0, 6);
-    return `${network}_${userPrefix}_${timestamp}_${random}`;
-  }
-
-  static generateSecretKey(): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 24; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-  }
-
-  // ============================================================
-  // ✅ دوال الصفقات (جديدة)
-  // ============================================================
-
-  /**
-   * ✅ جلب جميع صفقات المستخدم
-   */
-  static async getUserTrades(userId: string): Promise<any[]> {
-    try {
-      const result = await madarRead<any>('trades', { userId });
-      if (result.success && result.data) {
-        return result.data.sort((a, b) => 
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-        );
-      }
-      return [];
-    } catch (error) {
-      console.error('❌ فشل جلب الصفقات:', error);
-      return [];
-    }
-  }
-
-  /**
-   * ✅ جلب الصفقات المفتوحة (غير المغلقة)
-   */
-  static async getOpenTrades(userId: string): Promise<any[]> {
-    try {
-      const result = await madarRead<any>('trades', { userId, isOpen: true });
-      if (result.success && result.data) {
-        return result.data;
-      }
-      return [];
-    } catch (error) {
-      console.error('❌ فشل جلب الصفقات المفتوحة:', error);
-      return [];
-    }
-  }
-
-  /**
-   * ✅ إغلاق صفقة
-   */
-  static async closeTrade(tradeId: string, userId: string, closePrice: number, pnl: number): Promise<void> {
-    try {
-      // ✅ جلب الصفقة للتأكد من وجودها
-      const tradeResult = await madarRead<any>('trades', { id: tradeId, userId });
-      if (!tradeResult.success || !tradeResult.data || tradeResult.data.length === 0) {
-        throw new Error('الصفقة غير موجودة');
-      }
-
-      const trade = tradeResult.data[0];
-      
-      // ✅ تحديث الصفقة
-      await madarUpdate('trades', tradeId, {
-        isOpen: false,
-        closePrice,
-        pnl,
-        closedAt: getTimestamp(),
-        status: 'CLOSED',
-      });
-      
-      // ✅ إذا كان هناك ربح، طبق العمولة
-      if (pnl > 0) {
-        await this.addProfit(userId, pnl, {
-          token: trade.token || 'CLOSED_TRADE',
-          amount: trade.amount || closePrice,
-          price: closePrice,
-          txHash: `close_${tradeId}`,
-          network: trade.network || 'solana',
-        });
-      }
-      
-      console.log(`✅ تم إغلاق الصفقة ${tradeId} بـ PnL: $${pnl.toFixed(2)}`);
-    } catch (error) {
-      console.error('❌ فشل إغلاق الصفقة:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * ✅ جلب إحصائيات صفقات المستخدم
-   */
-  static async getUserTradeStats(userId: string): Promise<{
-    totalTrades: number;
-    winningTrades: number;
-    losingTrades: number;
-    totalPnl: number;
-    winRate: number;
-  }> {
-    const trades = await this.getUserTrades(userId);
-    const closedTrades = trades.filter(t => t.status === 'CLOSED' && t.pnl !== undefined);
-    
-    const winning = closedTrades.filter(t => t.pnl > 0);
-    const losing = closedTrades.filter(t => t.pnl < 0);
-    const totalPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-    
-    return {
-      totalTrades: trades.length,
-      winningTrades: winning.length,
-      losingTrades: losing.length,
-      totalPnl,
-      winRate: closedTrades.length > 0 ? (winning.length / closedTrades.length) * 100 : 0,
-    };
-  }
-
-  /**
-   * ✅ جلب سعر الصفقة الحالي (للتحديث)
-   */
-  static async getTradePrice(tradeId: string, userId: string): Promise<number | null> {
-    try {
-      const result = await madarRead<any>('trades', { id: tradeId, userId });
-      if (result.success && result.data && result.data.length > 0) {
-        return result.data[0].price || null;
-      }
-      return null;
-    } catch (error) {
-      console.error('❌ فشل جلب سعر الصفقة:', error);
-      return null;
-    }
-  }
-
-  /**
-   * ✅ تحديث سعر الصفقة (لتحديث السعر الحالي)
-   */
-  static async updateTradePrice(tradeId: string, userId: string, currentPrice: number): Promise<void> {
-    try {
-      await madarUpdate('trades', tradeId, {
-        currentPrice,
-        updatedAt: getTimestamp(),
-      });
-    } catch (error) {
-      console.error('❌ فشل تحديث سعر الصفقة:', error);
-      throw error;
-    }
   }
 }
 
@@ -1164,5 +905,5 @@ export const COMMISSION_CONFIG = {
   minWithdrawal: MIN_WITHDRAWAL,
   maxWithdrawal: MAX_WITHDRAWAL,
   defaultMaxTradesPerDay: DEFAULT_MAX_TRADES_PER_DAY,
-  networks: NETWORKS,
+  networks: NETWORKS_LIST,
 };
