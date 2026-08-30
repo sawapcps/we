@@ -1,14 +1,20 @@
 // src/pages/AIAnalysisPage.tsx
 // ============================================================
-// صفحة تحليل الذكاء الاصطناعي - مع شراء/بيع فعلي
+// 🤖 صفحة تحليل الذكاء الاصطناعي - مستقلة تماماً عن البوت
+// ✅ تعمل بدون تشغيل البوت
+// ✅ التداول اليدوي متاح دائماً
+// ✅ تعرض الكمية المتوقعة مع حساب صحيح
+// ✅ تعرض صورة العملة ورمزها
+// ✅ تجلب سعر SOL من Birdeye API
 // ============================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
-import { analyzeToken } from '../lib/gemini';
+import { analyzeToken, quickAnalysis } from '../lib/gemini';
 import { getNetworkName, getNativeToken } from '../config/networks';
 import { BotWalletManager } from '../lib/wallet';
 import { AccountManager } from '../lib/accounts';
+import { detectSmartWalletHovering } from '../lib/hunterEngine';
 import type { DiscoveredToken, AIAnalysis } from '../types';
 import { formatPrice, formatUsd, timeAgo } from '../lib/format';
 import {
@@ -23,10 +29,21 @@ import {
   Coins,
   CheckCircle,
   XCircle,
+  RefreshCw,
+  BarChart3,
+  Shield,
+  Users,
+  Target,
+  Clock,
+  Zap,
+  AlertCircle,
+  Play,
+  Pause,
+  Copy,
 } from 'lucide-react';
 
 // ============================================================
-// 🌐 دالة الترجمة
+// 🏷️ الترجمات
 // ============================================================
 
 type Language = 'ar' | 'en';
@@ -34,16 +51,16 @@ type Language = 'ar' | 'en';
 const translations = {
   ar: {
     title: 'تحليل الذكاء الاصطناعي',
-    subtitle: 'تحليل متعمق بواسطة Gemini AI للمرشحين',
+    subtitle: 'تحليل متقدم باستخدام Gemini AI مع بيانات حقيقية',
     hunterScore: 'نقاط Hunter',
     price: 'السعر',
-    volume: 'الحجم 24 ساعة',
+    volume: 'حجم التداول 24 ساعة',
     liquidity: 'السيولة',
     marketCap: 'القيمة السوقية',
-    fdv: 'القيمة المستقبلية',
+    fdv: 'القيمة المخففة',
     buys: 'مشتريات',
     sells: 'مبيعات',
-    confidence: 'نسبة الثقة',
+    confidence: 'الثقة',
     tradingSignals: 'إشارات التداول',
     priceTarget: 'السعر المستهدف',
     riskLevel: 'مستوى المخاطرة',
@@ -61,7 +78,7 @@ const translations = {
     loading: 'جاري التحليل...',
     error: 'فشل التحليل',
     retry: 'إعادة المحاولة',
-    amountToTrade: 'المبلغ المراد تداوله',
+    amountToTrade: 'المبلغ للتداول',
     balance: 'الرصيد',
     minAmount: 'الحد الأدنى',
     maxAmount: 'الحد الأقصى',
@@ -83,11 +100,42 @@ const translations = {
     sellAction: 'بيع',
     closeAction: 'إغلاق',
     insufficientBalance: '⚠️ الرصيد غير كافٍ',
-    goToMarkets: '📊 اذهب إلى الأسواق للتحليل',
+    goToMarkets: '➡️ اذهب إلى الأسواق للتحليل',
+    hovering: 'المحافظ الذكية',
+    whaleActivity: 'نشاط الحيتان',
+    smartWallets: 'المحافظ الذكية',
+    winRate: 'نسبة الربح',
+    totalProfit: 'إجمالي الربح',
+    activeWallets: 'محافظ نشطة',
+    lastUpdate: 'آخر تحديث',
+    refresh: 'تحديث',
+    analyzing: 'جاري التحليل...',
+    tradeAmount: 'مبلغ التداول',
+    estimatedReturn: 'العائد المتوقع',
+    stopLoss: 'وقف الخسارة',
+    takeProfit: 'جني الربح',
+    riskRewardRatio: 'نسبة المخاطرة/المكافأة',
+    quickAnalysis: 'تحليل سريع',
+    aiAnalysis: 'تحليل الذكاء الاصطناعي',
+    noData: 'لا توجد بيانات',
+    loadingData: 'جاري تحميل البيانات...',
+    buySignal: 'إشارة شراء',
+    sellSignal: 'إشارة بيع',
+    neutralSignal: 'إشارة محايدة',
+    tradingMode: 'وضع التداول',
+    tradingEnabled: '✅ التداول مفعل',
+    tradingDisabled: '❌ التداول معطل',
+    enableTrading: 'تفعيل التداول',
+    disableTrading: 'تعطيل التداول',
+    tradeManually: 'تداول يدوي (مستقل عن البوت)',
+    botStatus: 'حالة البوت',
+    botRunning: '🟢 البوت يعمل',
+    botStopped: '🔴 البوت متوقف',
+    independentMode: 'وضع مستقل - لا يعتمد على البوت',
   },
   en: {
     title: 'AI Analysis',
-    subtitle: 'Gemini-powered deep analysis of candidates',
+    subtitle: 'Gemini-powered deep analysis with real data',
     hunterScore: 'Hunter Score',
     price: 'Price',
     volume: '24h Volume',
@@ -136,12 +184,43 @@ const translations = {
     sellAction: 'Sell',
     closeAction: 'Close',
     insufficientBalance: '⚠️ Insufficient balance',
-    goToMarkets: '📊 Go to Markets for Analysis',
+    goToMarkets: '➡️ Go to Markets for Analysis',
+    hovering: 'Smart Wallet Hovering',
+    whaleActivity: 'Whale Activity',
+    smartWallets: 'Smart Wallets',
+    winRate: 'Win Rate',
+    totalProfit: 'Total Profit',
+    activeWallets: 'Active Wallets',
+    lastUpdate: 'Last Update',
+    refresh: 'Refresh',
+    analyzing: 'Analyzing...',
+    tradeAmount: 'Trade Amount',
+    estimatedReturn: 'Estimated Return',
+    stopLoss: 'Stop Loss',
+    takeProfit: 'Take Profit',
+    riskRewardRatio: 'Risk/Reward Ratio',
+    quickAnalysis: 'Quick Analysis',
+    aiAnalysis: 'AI Analysis',
+    noData: 'No Data',
+    loadingData: 'Loading data...',
+    buySignal: 'Buy Signal',
+    sellSignal: 'Sell Signal',
+    neutralSignal: 'Neutral Signal',
+    tradingMode: 'Trading Mode',
+    tradingEnabled: '✅ Trading Enabled',
+    tradingDisabled: '❌ Trading Disabled',
+    enableTrading: 'Enable Trading',
+    disableTrading: 'Disable Trading',
+    tradeManually: 'Manual Trading (Independent from Bot)',
+    botStatus: 'Bot Status',
+    botRunning: '🟢 Bot Running',
+    botStopped: '🔴 Bot Stopped',
+    independentMode: 'Independent Mode - Does not depend on Bot',
   },
 };
 
 // ============================================================
-// 🎯 الصفحة الرئيسية
+// 🧩 المكونات المساعدة
 // ============================================================
 
 interface AIAnalysisPageProps {
@@ -149,8 +228,23 @@ interface AIAnalysisPageProps {
   onConsumePending: () => void;
 }
 
+// ============================================================
+// 📄 الصفحة الرئيسية
+// ============================================================
+
 export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysisPageProps) {
-  const { analyses, addAnalysis, addLog, user, addTrade, refreshUserBalance } = useApp();
+  const { 
+    analyses, 
+    addAnalysis, 
+    addLog, 
+    user, 
+    addTrade, 
+    refreshUserBalance,
+    discoveredTokens,
+    loadDiscoveredTokens,
+    isRunning,
+  } = useApp();
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentAnalysis, setCurrentAnalysis] = useState<AIAnalysis | null>(null);
@@ -160,11 +254,75 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
   const [executing, setExecuting] = useState(false);
   const [tradeResult, setTradeResult] = useState<{ success: boolean; message: string; txHash?: string } | null>(null);
   const [userBalance, setUserBalance] = useState(0);
+  const [hoveringData, setHoveringData] = useState<any>(null);
+  const [loadingHovering, setLoadingHovering] = useState(false);
+  const [selectedTab, setSelectedTab] = useState<'ai' | 'quick'>('ai');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [tradingEnabled, setTradingEnabled] = useState(true);
+  const [nativePrice, setNativePrice] = useState(0);
+  const [copied, setCopied] = useState(false);
 
   const t = (key: keyof typeof translations.ar) => translations[language][key] || key;
 
   // ============================================================
-  // ✅ جلب رصيد المستخدم
+  // ✅ جلب سعر SOL من Birdeye API
+  // ============================================================
+  
+// src/pages/AIAnalysisPage.tsx
+
+// ✅ استخدام DexScreener فقط (بدون Birdeye)
+const fetchNativePrice = useCallback(async (network: string) => {
+  try {
+    const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=SOL');
+    const data = await response.json();
+    
+    if (data.pairs && data.pairs.length > 0) {
+      const pair = data.pairs.find((p: any) => 
+        p.chainId === network && 
+        (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
+      );
+      
+      if (pair) {
+        const price = parseFloat(pair.priceUsd || 0);
+        console.log(`💱 سعر SOL من DexScreener: $${price}`);
+        return price;
+      }
+      return parseFloat(data.pairs[0].priceUsd || 0);
+    }
+    return 0;
+  } catch (error) {
+    console.error('❌ فشل جلب سعر SOL:', error);
+    return 0;
+  }
+}, []);
+
+// ✅ دالة احتياطية من DexScreener
+const fetchSolPriceFromDexScreener = async () => {
+  try {
+    const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=SOL');
+    const data = await response.json();
+    
+    if (data.pairs && data.pairs.length > 0) {
+      const pair = data.pairs.find((p: any) => 
+        p.chainId === 'solana' && 
+        (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
+      );
+      
+      if (pair) {
+        const price = parseFloat(pair.priceUsd || 0);
+        console.log(`💱 سعر SOL من DexScreener: $${price}`);
+        return price;
+      }
+      return parseFloat(data.pairs[0].priceUsd || 0);
+    }
+    return 0;
+  } catch (error) {
+    console.error('❌ فشل جلب سعر SOL من DexScreener:', error);
+    return 0;
+  }
+};
+  // ============================================================
+  // 📊 جلب الرصيد وتحليل المحافظ الذكية
   // ============================================================
 
   const fetchBalance = async () => {
@@ -175,52 +333,81 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
       if (balance === 0) {
         setAmount(0);
       }
+      
+      // ✅ جلب سعر SOL من Birdeye
+      const price = await fetchNativePrice(currentToken.chainId);
+      setNativePrice(price);
+      console.log(`💱 سعر SOL: $${price}`);
+      
     } catch (e) {
       console.error('❌ فشل جلب الرصيد:', e);
+    }
+  };
+
+  const fetchHoveringData = async () => {
+    if (!currentToken) return;
+    setLoadingHovering(true);
+    try {
+      const data = await detectSmartWalletHovering(currentToken.tokenAddress, currentToken.chainId);
+      setHoveringData(data);
+    } catch (e) {
+      console.warn('⚠️ فشل جلب بيانات المحافظ الذكية:', e);
+    } finally {
+      setLoadingHovering(false);
     }
   };
 
   useEffect(() => {
     if (user && currentToken) {
       fetchBalance();
+      fetchHoveringData();
     }
   }, [user, currentToken]);
 
   // ============================================================
-  // ✅ تحليل العملة
+  // 🔍 تشغيل التحليل
   // ============================================================
 
-  const runAnalysis = async (token: DiscoveredToken) => {
-    console.log('🧠 بدء تحليل:', token.symbol);
+  const runAnalysis = async (token: DiscoveredToken, useQuick: boolean = false) => {
+    console.log('🤖 بدء التحليل:', token.symbol);
+    console.log('🖼️ صورة العملة:', token.imageUrl);
+    
     setLoading(true);
     setError(null);
     setCurrentToken(token);
     setTradeResult(null);
+    setSelectedTab(useQuick ? 'quick' : 'ai');
     
     try {
-      const result = await analyzeToken(token);
-      console.log('✅ اكتمل التحليل:', result);
+      let result: AIAnalysis;
+      
+      if (useQuick) {
+        result = quickAnalysis(token);
+        await addLog('INFO', `⚡ تحليل سريع لـ ${token.symbol}`);
+      } else {
+        result = await analyzeToken(token);
+        await addLog('SUCCESS', `🤖 تم التحليل ${token.symbol} باستخدام Gemini AI`);
+      }
+      
       setCurrentAnalysis(result);
       await addAnalysis(result);
-      await addLog('SUCCESS', `🧠 تم تحليل ${token.symbol} بواسطة Gemini AI`);
       await fetchBalance();
+      await fetchHoveringData();
+      
     } catch (e) {
       console.error('❌ فشل التحليل:', e);
-      setError(e instanceof Error ? e.message : 'Analysis failed');
+      setError(e instanceof Error ? e.message : 'فشل التحليل');
       await addLog('ERROR', `❌ فشل تحليل ${token.symbol}`);
     }
     setLoading(false);
   };
 
   // ============================================================
-  // ✅ استهلاك التحليل المعلق
+  // 📥 معالجة التحليل المعلق
   // ============================================================
 
   useEffect(() => {
-    console.log('🔍 AIAnalysisPage: pendingAnalysis =', pendingAnalysis);
-    
     if (pendingAnalysis && !loading && !currentToken) {
-      console.log('🚀 بدء التحليل من pendingAnalysis');
       localStorage.removeItem('pendingAnalysis');
       onConsumePending();
       runAnalysis(pendingAnalysis.token);
@@ -232,7 +419,6 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          console.log('📦 استعادة من localStorage:', parsed);
           if (parsed.token && !loading) {
             localStorage.removeItem('pendingAnalysis');
             onConsumePending();
@@ -251,7 +437,6 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
     if (stored && !loading && !currentToken) {
       try {
         const parsed = JSON.parse(stored);
-        console.log('📦 [mount] استعادة من localStorage:', parsed);
         if (parsed.token) {
           localStorage.removeItem('pendingAnalysis');
           onConsumePending();
@@ -265,14 +450,14 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
   }, []);
 
   // ============================================================
-  // ✅ دالة النسب المئوية
+  // 📊 حساب النسب المئوية للمبلغ
   // ============================================================
 
   const setPercentageAmount = (percentage: number) => {
     if (userBalance <= 0) {
       setTradeResult({
         success: false,
-        message: `⚠️ ${t('insufficientBalance')} (الرصيد: $${userBalance.toFixed(2)})`,
+        message: `⚠️ ${t('insufficientBalance')} (الرصيد: ${userBalance.toFixed(4)} ${nativeToken?.symbol})`,
       });
       setAmount(0);
       return;
@@ -283,41 +468,39 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
   };
 
   // ============================================================
-  // ✅ تنفيذ الصفقة (شراء/بيع)
+  // 💰 تنفيذ الصفقة
   // ============================================================
 
   const executeTrade = async (action: 'BUY' | 'SELL') => {
-    console.log('🟢 زر الضغط:', action);
-    console.log('📊 currentToken:', currentToken);
-    console.log('👤 user:', user);
-    console.log('💰 amount:', amount);
+    console.log('🔄 تنفيذ الصفقة:', action);
     
-    const masterPassword = import.meta.env.VITE_MASTER_PASSWORD;
-    console.log('🔑 VITE_MASTER_PASSWORD:', masterPassword ? '✅ موجود' : '❌ غير موجود');
-
+    if (!tradingEnabled) {
+      setTradeResult({ 
+        success: false, 
+        message: '⚠️ التداول معطل حالياً. فعّل التداول أولاً.' 
+      });
+      return;
+    }
+    
     if (!currentToken) {
-      console.log('❌ لا يوجد عملة حالية');
       setTradeResult({ success: false, message: '⚠️ لا توجد عملة للتحليل' });
       return;
     }
     
     if (!user) {
-      console.log('❌ لا يوجد مستخدم');
       setTradeResult({ success: false, message: '⚠️ الرجاء تسجيل الدخول أولاً' });
       return;
     }
 
     if (amount <= 0) {
-      console.log('❌ المبلغ غير صحيح');
-      setTradeResult({ success: false, message: `⚠️ ${t('insufficientBalance')} (الرصيد: $${userBalance.toFixed(2)})` });
+      setTradeResult({ success: false, message: `⚠️ ${t('insufficientBalance')} (الرصيد: ${userBalance.toFixed(4)} ${nativeToken?.symbol})` });
       return;
     }
 
     if (action === 'BUY' && amount > userBalance) {
-      console.log(`❌ الرصيد غير كافٍ: $${userBalance} < $${amount}`);
       setTradeResult({ 
         success: false, 
-        message: `⚠️ ${t('insufficientBalance')} (الرصيد: $${userBalance.toFixed(2)}، المطلوب: $${amount.toFixed(2)})` 
+        message: `⚠️ ${t('insufficientBalance')} (الرصيد: ${userBalance.toFixed(4)} ${nativeToken?.symbol}، المطلوب: ${amount.toFixed(4)} ${nativeToken?.symbol})` 
       });
       return;
     }
@@ -326,40 +509,31 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
     setTradeResult(null);
 
     try {
-      console.log('🔍 جلب محفظة المستخدم...');
       let wallet = await AccountManager.getUserWallet(user.id, currentToken.chainId);
       if (!wallet) {
-        console.log(`🔄 لا توجد محفظة على ${currentToken.chainId}، جاري الإنشاء...`);
         wallet = await AccountManager.createUserWallet(user.id, currentToken.chainId);
         await addLog('SUCCESS', `✅ تم إنشاء محفظة على ${getNetworkName(currentToken.chainId)}`);
       }
 
-      console.log('💰 جلب الرصيد...');
       const balance = await AccountManager.getUserWalletBalance(user.id, currentToken.chainId);
       setUserBalance(balance);
-      console.log(`💰 الرصيد: $${balance}`);
 
       if (action === 'BUY' && balance < amount) {
-        console.log(`❌ الرصيد غير كافٍ: $${balance} < $${amount}`);
-        throw new Error(`الرصيد غير كافٍ: $${balance.toFixed(2)} / المطلوب $${amount.toFixed(2)}`);
+        throw new Error(`الرصيد غير كافٍ: ${balance.toFixed(4)} ${nativeToken?.symbol} / المطلوب ${amount.toFixed(4)} ${nativeToken?.symbol}`);
       }
 
-      console.log('📊 التحقق من الحد اليومي...');
       const canTrade = await AccountManager.canUserTrade(user.id);
       if (!canTrade) {
         const remaining = await AccountManager.getRemainingTrades(user.id);
-        throw new Error(`تم تجاوز الحد اليومي. المتبقي: ${remaining} صفقة`);
+        throw new Error(`تم الوصول للحد اليومي. المتبقي: ${remaining} صفقة`);
       }
 
-      console.log('🔑 التحقق من كلمة المرور...');
+      const masterPassword = import.meta.env.VITE_MASTER_PASSWORD;
       if (!masterPassword) {
-        console.error('❌ VITE_MASTER_PASSWORD غير مضبوط');
-        throw new Error('VITE_MASTER_PASSWORD غير مضبوط في ملف .env');
+        throw new Error('VITE_MASTER_PASSWORD غير معرف في .env');
       }
 
-      console.log('🚀 تنفيذ الصفقة...');
       const manager = BotWalletManager.getInstance();
-
       const result = action === 'BUY'
         ? await manager.executeBuyForUser({
             userId: user.id,
@@ -378,8 +552,6 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             network: currentToken.chainId,
           });
 
-      console.log('📊 نتيجة الصفقة:', result);
-
       if (!result.success) {
         throw new Error(result.error || 'فشل تنفيذ الصفقة');
       }
@@ -393,7 +565,6 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
           const commission = pnl * 0.15;
           const netProfit = pnl - commission;
           profitMessage = `💰 الربح: $${pnl.toFixed(2)} | العمولة (15%): $${commission.toFixed(2)} | الصافي: $${netProfit.toFixed(2)}`;
-          
           await AccountManager.addProfit(user.id, pnl, {
             token: currentToken.symbol,
             amount,
@@ -408,10 +579,8 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
         }
       }
 
-      console.log('💾 تسجيل الصفقة...');
-      const tradeId = `ai-${Date.now()}`;
       await addTrade({
-        id: tradeId,
+        id: `ai-${Date.now()}`,
         token: currentToken.symbol,
         tokenAddress: currentToken.tokenAddress,
         network: currentToken.chainId,
@@ -434,15 +603,13 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
       const actionText = action === 'BUY' ? t('buyAction') : t('sellAction');
       setTradeResult({
         success: true,
-        message: `✅ تم ${actionText} ${currentToken.symbol} بـ ${amount} ${nativeToken.symbol} بنجاح!\n${profitMessage}`,
+        message: `✅ تم ${actionText} ${currentToken.symbol} بمبلغ ${amount.toFixed(4)} ${nativeToken.symbol} بنجاح!\n${profitMessage}`,
         txHash: result.txHash,
       });
 
-      addLog('SUCCESS', `✅ تم ${actionText} ${currentToken.symbol} عبر AI Analysis${profitMessage ? ` | ${profitMessage}` : ''}`);
+      addLog('SUCCESS', `✅ تم ${actionText} ${currentToken.symbol} (تحليل مستقل)${profitMessage ? ` | ${profitMessage}` : ''}`);
 
-      setTimeout(() => {
-        setTradeResult(null);
-      }, 6000);
+      setTimeout(() => setTradeResult(null), 8000);
 
     } catch (error: any) {
       console.error('❌ فشل التنفيذ:', error);
@@ -457,7 +624,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
   };
 
   // ============================================================
-  // دوال مساعدة للعرض
+  // 🎨 دوال مساعدة للعرض
   // ============================================================
 
   const getRecommendationColor = (rec: string) => {
@@ -500,8 +667,14 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
     return labels[level] || level;
   };
 
+  const handleReanalyze = async () => {
+    if (currentToken) {
+      await runAnalysis(currentToken, selectedTab === 'quick');
+    }
+  };
+
   // ============================================================
-  // العرض
+  // 📄 العرض الرئيسي
   // ============================================================
 
   const nativeToken = currentToken ? getNativeToken(currentToken.chainId) : null;
@@ -516,34 +689,95 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             {t('title')}
           </h1>
           <p className="text-sm text-slate-400 mt-1">{t('subtitle')}</p>
+          <p className="text-xs text-emerald-400 mt-0.5 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            {t('independentMode')}
+          </p>
         </div>
-        <button
-          onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-        >
-          <Globe className="w-4 h-4" />
-          <span className="text-xs font-medium">{language === 'ar' ? '🇸🇦 عربي' : '🇬🇧 English'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+          >
+            <Globe className="w-4 h-4" />
+            <span className="text-xs font-medium">{language === 'ar' ? '🇸🇦 العربية' : '🇬🇧 English'}</span>
+          </button>
+          <button
+            onClick={() => window.location.href = '/markets'}
+            className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-sm font-medium transition-colors border border-emerald-500/20 flex items-center gap-2"
+          >
+            ➡️ {t('goToMarkets')}
+          </button>
+        </div>
       </div>
 
-      {/* ✅ زر "اذهب إلى الأسواق" - يظهر دائماً */}
-      <div className="mb-2">
-        <button
-          onClick={() => {
-            window.location.href = '/markets';
-          }}
-          className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-sm font-medium transition-colors border border-emerald-500/20 flex items-center gap-2"
-        >
-          📊 {t('goToMarkets')}
-        </button>
+      {/* ✅ وضع التداول المستقل */}
+      <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-lg ${tradingEnabled ? 'bg-emerald-500/20' : 'bg-red-500/20'}`}>
+              {tradingEnabled ? (
+                <Play className="w-5 h-5 text-emerald-400" />
+              ) : (
+                <Pause className="w-5 h-5 text-red-400" />
+              )}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-white">{t('tradingMode')}</p>
+              <p className="text-xs text-slate-400">
+                {tradingEnabled ? t('tradingEnabled') : t('tradingDisabled')}
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/50 rounded-lg">
+              <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+              <span className="text-xs text-slate-400">
+                {isRunning ? t('botRunning') : t('botStopped')}
+              </span>
+            </div>
+            
+            <button
+              onClick={() => setTradingEnabled(!tradingEnabled)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                tradingEnabled 
+                  ? 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30' 
+                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30'
+              }`}
+            >
+              {tradingEnabled ? t('disableTrading') : t('enableTrading')}
+            </button>
+          </div>
+        </div>
+        
+        <div className="mt-2 text-xs text-slate-500 flex items-center gap-1">
+          <Zap className="w-3 h-3 text-emerald-400" />
+          {t('tradeManually')}
+        </div>
       </div>
+
+      {/* Status Bar */}
+      {isRunning && (
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 flex items-center gap-3">
+          <Zap className="w-4 h-4 text-emerald-400 animate-pulse" />
+          <span className="text-sm text-emerald-400">🟢 البوت يعمل - التحليل والتداول اليدوي مستقلان</span>
+        </div>
+      )}
+
+      {!isRunning && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 flex items-center gap-3">
+          <AlertCircle className="w-4 h-4 text-amber-400" />
+          <span className="text-sm text-amber-400">🔴 البوت متوقف - التحليل والتداول اليدوي لا يزالان يعملان</span>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
           <p className="text-sm text-red-300">{error}</p>
-          <button onClick={() => currentToken && runAnalysis(currentToken)} className="ml-auto text-xs text-red-300 hover:text-red-200 underline">
+          <button onClick={handleReanalyze} className="ml-auto text-xs text-red-300 hover:text-red-200 underline">
             {t('retry')}
           </button>
         </div>
@@ -556,26 +790,85 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             <BrainCircuit className="w-12 h-12 text-[#8b5cf6]" />
             <Loader2 className="w-12 h-12 text-[#8b5cf6] animate-spin absolute inset-0" />
           </div>
-          <p className="text-sm text-slate-400">{t('loading')}</p>
+          <p className="text-sm text-slate-400">{t('analyzing')}</p>
         </div>
       )}
 
       {/* Current Analysis */}
       {currentToken && !loading && currentAnalysis && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
-          {/* Token Header */}
+          
+          {/* ============================================================
+              ✅ Token Header - مع صورة العملة ورمزها
+              ============================================================ */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] flex items-center justify-center">
-                <Sparkles className="w-6 h-6 text-white" />
+              
+              {/* ✅ صورة العملة */}
+              <div className="w-14 h-14 rounded-xl overflow-hidden bg-slate-800 flex items-center justify-center flex-shrink-0 border border-[#1e1e2f]">
+                {currentToken?.imageUrl ? (
+                  <img 
+                    src={currentToken.imageUrl} 
+                    alt={currentToken.symbol}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const parent = e.currentTarget.parentElement;
+                      if (parent) {
+                        parent.className = 'w-14 h-14 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] flex items-center justify-center flex-shrink-0';
+                        parent.innerHTML = `<span class="text-lg font-bold text-white">${currentToken.symbol.slice(0, 2)}</span>`;
+                      }
+                    }}
+                  />
+                ) : (
+                  <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] flex items-center justify-center flex-shrink-0">
+                    <span className="text-lg font-bold text-white">
+                      {currentToken.symbol.slice(0, 2)}
+                    </span>
+                  </div>
+                )}
               </div>
+              
+              {/* ✅ اسم العملة ورمزها */}
               <div>
-                <h2 className="text-xl font-bold text-white">{currentToken.symbol}</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-white">{currentToken.symbol}</h2>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">
+                    {currentToken.chainId}
+                  </span>
+                </div>
                 <p className="text-sm text-slate-500">
-                  {currentToken.name} · {getNetworkName(currentToken.chainId)}
+                  {currentToken.name}
                 </p>
+                
+                {/* ✅ ✅ ✅ عرض رمز العملة (العنوان) مع زر نسخ */}
+                {currentToken?.tokenAddress && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <p className="text-[10px] font-mono text-slate-400 truncate max-w-[200px]">
+                      {currentToken.tokenAddress.slice(0, 8)}...{currentToken.tokenAddress.slice(-6)}
+                    </p>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(currentToken.tokenAddress);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                        addLog('SUCCESS', `✅ تم نسخ عنوان ${currentToken.symbol}`);
+                      }}
+                      className="p-0.5 hover:bg-slate-700 rounded transition-colors"
+                      title="نسخ العنوان"
+                    >
+                      {copied ? (
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5 text-slate-400 hover:text-white" />
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
+            
             <div className="flex items-center gap-3 flex-wrap">
               <span className={`px-4 py-1.5 rounded-full text-sm font-semibold border ${getRecommendationColor(currentAnalysis.recommendation)}`}>
                 {getRecommendationLabel(currentAnalysis.recommendation)}
@@ -583,10 +876,45 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
               <span className="text-xs px-2 py-1 rounded-full bg-slate-800 text-slate-400">
                 {t('hunterScore')} {currentToken.score}/100
               </span>
+              <button
+                onClick={handleReanalyze}
+                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 transition-colors"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
             </div>
           </div>
 
-          {/* عرض العملة الأساسية والشبكة */}
+          {/* Hovering Data */}
+          {hoveringData && (
+            <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-700">
+              <div className="flex items-center gap-2 mb-3">
+                <Users className="w-4 h-4 text-cyan-400" />
+                <span className="text-sm font-medium text-white">{t('hovering')}</span>
+                <span className={`ml-auto px-2 py-0.5 rounded text-xs ${
+                  hoveringData.isHovering ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'
+                }`}>
+                  {hoveringData.isHovering ? `✅ ${hoveringData.level}` : '❌ لا يوجد تداخل'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="text-center">
+                  <div className="text-lg font-bold text-white">{hoveringData.details.smartWalletsCount}</div>
+                  <div className="text-xs text-slate-500">{t('smartWallets')}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-bold text-emerald-400">{hoveringData.details.avgWinRate.toFixed(1)}%</div>
+                  <div className="text-xs text-slate-500">{t('winRate')}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-bold text-amber-400">${hoveringData.details.totalProfit.toFixed(0)}</div>
+                  <div className="text-xs text-slate-500">{t('totalProfit')}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Network & Balance Info */}
           <div className="flex flex-wrap items-center gap-3 bg-slate-800/30 rounded-xl p-3">
             <div className="flex items-center gap-2">
               <Coins className="w-4 h-4 text-cyan-400" />
@@ -598,13 +926,28 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             <div className="flex items-center gap-2">
               <Wallet className="w-4 h-4 text-emerald-400" />
               <span className="text-xs text-slate-400">{t('balance')}:</span>
-              <span className="text-sm font-bold text-emerald-400">${userBalance.toFixed(2)}</span>
+              <span className="text-sm font-bold text-emerald-400">{userBalance.toFixed(4)} {nativeToken?.symbol}</span>
             </div>
+            <div className="w-px h-4 bg-slate-700" />
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-slate-400" />
+              <span className="text-xs text-slate-400">{t('lastUpdate')}:</span>
+              <span className="text-xs text-slate-500">{new Date().toLocaleTimeString()}</span>
+            </div>
+            {nativePrice > 0 && (
+              <>
+                <div className="w-px h-4 bg-slate-700" />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">💱 سعر {nativeToken?.symbol}:</span>
+                  <span className="text-sm font-bold text-yellow-400">${nativePrice.toFixed(2)}</span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Metrics Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <DataMetric label={t('price')} value={formatPrice(currentToken.priceUsd)} />
+            <DataMetric label={t('price')} value={`$${currentToken.priceUsd.toFixed(8)}`} />
             <DataMetric label={t('volume')} value={formatUsd(currentToken.volume24h)} />
             <DataMetric label={t('liquidity')} value={formatUsd(currentToken.liquidityUsd)} />
             <DataMetric label={t('marketCap')} value={currentToken.marketCap ? formatUsd(currentToken.marketCap) : '—'} />
@@ -673,26 +1016,34 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             </div>
           )}
 
-          {/* Price Target + Risk */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1 bg-slate-800/30 rounded-xl p-4">
+          {/* Price Target + Risk + Stop Loss */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-slate-800/30 rounded-xl p-4">
               <p className="text-xs text-slate-500">{t('priceTarget')}</p>
               <p className="text-lg font-bold text-white">{formatPrice(currentAnalysis.priceTarget)}</p>
             </div>
-            <div className="flex-1 bg-slate-800/30 rounded-xl p-4">
+            <div className="bg-slate-800/30 rounded-xl p-4">
               <p className="text-xs text-slate-500">{t('riskLevel')}</p>
               <p className={`text-lg font-bold capitalize ${getRiskColor(currentAnalysis.riskLevel)}`}>
                 {getRiskLabel(currentAnalysis.riskLevel)}
               </p>
             </div>
+            <div className="bg-slate-800/30 rounded-xl p-4">
+              <p className="text-xs text-slate-500">{t('stopLoss')}</p>
+              <p className="text-lg font-bold text-red-400">{formatPrice(currentToken.priceUsd * 0.9)}</p>
+            </div>
           </div>
 
-          {/* Trade Amount */}
+          {/* ============================================================
+              ✅ Trade Amount - مع حساب الكمية الصحيح
+              ============================================================ */}
           <div className="bg-slate-800/20 rounded-xl p-4 border border-slate-800">
             <div className="flex items-center justify-between mb-3">
               <p className="text-sm font-medium text-white">{t('amountToTrade')}</p>
               <p className="text-xs text-slate-500">
-                {t('balance')}: <span className={userBalance > 0 ? 'text-emerald-400' : 'text-red-400'}>${userBalance.toFixed(2)}</span>
+                {t('balance')}: <span className={userBalance > 0 ? 'text-emerald-400' : 'text-red-400'}>
+                  {userBalance.toFixed(4)} {nativeToken?.symbol}
+                </span>
               </p>
             </div>
             <div className="flex gap-2 mb-3">
@@ -711,6 +1062,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
                 type="number"
                 min={0}
                 max={userBalance}
+                step={0.001}
                 value={amount}
                 onChange={(e) => {
                   const val = parseFloat(e.target.value) || 0;
@@ -719,17 +1071,65 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
                   } else {
                     setTradeResult({
                       success: false,
-                      message: `⚠️ ${t('insufficientBalance')} (الرصيد: $${userBalance.toFixed(2)})`,
+                      message: `⚠️ ${t('insufficientBalance')} (الرصيد: ${userBalance.toFixed(4)} ${nativeToken?.symbol})`,
                     });
                   }
                 }}
                 className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-[#8b5cf6]"
               />
-              <span className="text-sm text-slate-400">{nativeToken?.symbol}</span>
+              <span className="text-sm font-bold text-cyan-400 min-w-[50px]">{nativeToken?.symbol}</span>
             </div>
-            <p className="text-[10px] text-slate-500 mt-2">
-              💰 {t('minAmount')}: $1 | {t('maxAmount')}: ${userBalance.toFixed(2)}
-            </p>
+
+            {/* ✅ عرض الكمية المتوقعة مع حساب صحيح */}
+            {amount > 0 && currentToken && nativeToken && nativePrice > 0 && (
+              <div className="mt-3 p-3 bg-[#0a0a0f] rounded-lg border border-[#1e1e2f]">
+                {(() => {
+                  const usdValue = amount * nativePrice;
+                  const quantity = usdValue / currentToken.priceUsd;
+                  return (
+                    <>
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-[#64748b]">📈 الكمية المتوقعة:</span>
+                        <span className="text-emerald-400 font-bold text-sm">
+                          {quantity.toFixed(6)} {currentToken.symbol}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-[#64748b] mt-0.5">
+                        <span>💰 سعر {currentToken.symbol}: ${currentToken.priceUsd.toFixed(8)}</span>
+                        <span>💵 القيمة: ${usdValue.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-[#64748b] mt-0.5 pt-0.5 border-t border-[#1e1e2f]">
+                        <span>📊 المبلغ المستخدم:</span>
+                        <span className="text-white">{amount.toFixed(4)} {nativeToken.symbol} (≈ ${usdValue.toFixed(2)})</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-[#64748b] mt-0.5">
+                        <span>💱 سعر {nativeToken.symbol}:</span>
+                        <span className="text-yellow-400">${nativePrice.toFixed(2)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* ✅ إذا لم يتمكن من جلب السعر */}
+            {amount > 0 && currentToken && nativeToken && nativePrice === 0 && (
+              <div className="mt-3 p-3 bg-amber-500/10 rounded-lg border border-amber-500/20">
+                <p className="text-[10px] text-amber-400 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" />
+                  ⏳ جاري جلب سعر {nativeToken.symbol}...
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between mt-2">
+              <p className="text-[10px] text-slate-500">
+                💰 الحد الأدنى: 0.001 {nativeToken?.symbol} | الحد الأقصى: {userBalance.toFixed(4)} {nativeToken?.symbol}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                📈 العائد المتوقع: ${(amount * nativePrice * (currentAnalysis?.priceTarget / currentToken?.priceUsd - 1 || 0)).toFixed(2)}
+              </p>
+            </div>
           </div>
 
           {/* Trade Result */}
@@ -754,31 +1154,29 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
           )}
 
           {/* Action Buttons */}
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <button
-              onClick={() => {
-                console.log('🟢 زر شراء - تم الضغط');
-                executeTrade('BUY');
-              }}
-              disabled={executing || !user}
+              onClick={() => executeTrade('BUY')}
+              disabled={executing || !user || !tradingEnabled}
               className={`flex-1 py-2.5 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 ${
-                executing ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                executing ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 
+                !tradingEnabled ? 'bg-slate-700 text-slate-400 cursor-not-allowed' :
+                'bg-emerald-600 hover:bg-emerald-700 text-white'
               }`}
             >
-              {executing ? <Loader2 className="w-4 h-4 animate-spin" /> : '🟢'}
+              {executing ? <Loader2 className="w-4 h-4 animate-spin" /> : '🚀'}
               {t('buyAction')} {nativeToken?.symbol}
             </button>
             <button
-              onClick={() => {
-                console.log('🔴 زر بيع - تم الضغط');
-                executeTrade('SELL');
-              }}
-              disabled={executing || !user}
+              onClick={() => executeTrade('SELL')}
+              disabled={executing || !user || !tradingEnabled}
               className={`flex-1 py-2.5 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 ${
-                executing ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700 text-white'
+                executing ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 
+                !tradingEnabled ? 'bg-slate-700 text-slate-400 cursor-not-allowed' :
+                'bg-red-600 hover:bg-red-700 text-white'
               }`}
             >
-              {executing ? <Loader2 className="w-4 h-4 animate-spin" /> : '🔴'}
+              {executing ? <Loader2 className="w-4 h-4 animate-spin" /> : '📉'}
               {t('sellAction')} {nativeToken?.symbol}
             </button>
             <button
@@ -786,6 +1184,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
                 setCurrentToken(null);
                 setCurrentAnalysis(null);
                 setTradeResult(null);
+                setHoveringData(null);
               }}
               className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-medium transition-colors"
             >
@@ -796,11 +1195,14 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
           {!user && (
             <p className="text-center text-xs text-amber-400">⚠️ الرجاء تسجيل الدخول لتنفيذ الصفقات</p>
           )}
+          {!tradingEnabled && user && (
+            <p className="text-center text-xs text-amber-400">⚠️ التداول معطل. فعّل التداول أولاً.</p>
+          )}
         </div>
       )}
 
       {/* Analysis History */}
-      {analyses.length > 0 && (
+      {analyses && analyses.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
           <h2 className="text-sm font-semibold text-white mb-4">{t('analysisHistory')}</h2>
           <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -821,19 +1223,17 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
       )}
 
       {/* Empty State */}
-      {!loading && !currentToken && analyses.length === 0 && (
+      {!loading && !currentToken && analyses && analyses.length === 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
           <BrainCircuit className="w-12 h-12 text-slate-600 mx-auto mb-4" />
           <p className="text-sm text-slate-400">{t('noAnalysis')}</p>
           <p className="text-xs text-slate-500 mt-2">{t('goToMarkets')}</p>
           
           <button
-            onClick={() => {
-              window.location.href = '/markets';
-            }}
+            onClick={() => window.location.href = '/markets'}
             className="mt-4 px-6 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors"
           >
-            📊 {t('goToMarkets')}
+            ➡️ {t('goToMarkets')}
           </button>
         </div>
       )}
@@ -864,3 +1264,5 @@ function PriceChangeMetric({ label, value }: { label: string; value: number }) {
     </div>
   );
 }
+
+export default AIAnalysisPage;

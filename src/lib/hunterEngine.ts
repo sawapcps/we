@@ -1,10 +1,11 @@
 // src/lib/hunterEngine.ts
 // ============================================================
-// ÂÕ—„ «‰ Õ‰Í‰ «‰Â ◊Ë— - ÍœŸÂ 4 »Ë «  »‘„‰ Õ‚Í‚Í:
-// Hunter (’«∆œ «‰ŸÂ‰«  «‰ÃœÍœ… + «‰ÂÕ«·ÿ «‰–„Í…)
-// Signal («‰Âƒ‘—«  «‰·ÊÍ… + «‰“ŒÂ)
-// Manual (‰ËÕ…  Õ‰Í‰ Â ‚œÂ…)
-// Scalper ( œ«Ë‰ ”—ÍŸ Ÿ‰È ŸÂ‰… ÂÕœœ…)
+// ?? ÂÕ—„ «‰ Õ‰Í‰ «‰Â ◊Ë— - «‰Ê”Œ… «‰ÂŸœ‰… (»œËÊ Birdeye)
+// ? ÍœŸÂ 4 »Ë « : Hunter, Signal, Manual, Scalper
+// ? Í” ŒœÂ DexScreener + Worker „Â’«œ— »Í«Ê« 
+// ? ÍœŸÂ „‘· " ÕËÂ" «‰ÂÕ«·ÿ «‰–„Í…
+// ? ÍœŸÂ  Õ‰Í‰ «‰ÕÍ «Ê Ë«‰Â œ«Ë‰ÍÊ «‰√–„Í«¡
+// ?  Â ≈“«‰… «‰«Ÿ Â«œ Ÿ‰È Birdeye »«‰„«Â‰
 // ============================================================
 
 import type { TokenPair, ChainId, DiscoveredToken, TokenStatus, PipelineStats } from '@/types';
@@ -32,6 +33,10 @@ export interface HunterConfig extends BaseBotConfig {
   smartWalletConfidence: number;
   allowNewListings: boolean;
   minBuyRatio: number;
+  minWhales?: number;
+  minSnipers?: number;
+  maxTop10Percent?: number;
+  enableWhaleFilter?: boolean;
 }
 
 export interface SignalConfig extends BaseBotConfig {
@@ -81,52 +86,36 @@ export interface BotAnalysisResult {
 }
 
 // ============================================================
-// ?? « ’«‰«  Õ‚Í‚Í… ÂŸ «‰‡ Worker Ë APIs
+// ?? Ê ÍÃ…  Õ‰Í‰ «‰ÂÕ«·ÿ «‰–„Í…
+// ============================================================
+
+export interface SmartWalletHoveringResult {
+  isHovering: boolean;
+  score: number;
+  level: 'none' | 'low' | 'medium' | 'high' | 'extreme';
+  details: {
+    smartWalletsCount: number;
+    avgWinRate: number;
+    totalProfit: number;
+    whaleCount: number;
+    whaleBuying: boolean;
+    buyRatio: number;
+    volume24h: number;
+    topWallets: { address: string; winRate: number; totalProfit: number }[];
+  };
+  recommendation: 'buy' | 'watch' | 'reject';
+  confidence: number;
+}
+
+// ============================================================
+// ?? «‰« ’«‰«  ÂŸ «‰‡ Worker Ë APIs
 // ============================================================
 
 const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 const DEXSCREENER_API = 'https://api.dexscreener.com';
 
 // ============================================================
-// ?? Ã‰» «‰ÂÕ«·ÿ «‰–„Í… ÂÊ «‰‡ Worker (Õ‚Í‚Í)
-// ============================================================
-
-export async function fetchSmartWallets(
-  tokenAddress: string,
-  network: string,
-  minCount: number
-): Promise<{ wallets: string[]; count: number; totalProfit: number; avgWinRate: number }> {
-  try {
-    const response = await fetch(`${WORKER_URL}/smart-wallets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tokenAddress, network, minCount }),
-    });
-
-    if (!response.ok) {
-      console.warn('?? ·‘‰ Ã‰» «‰ÂÕ«·ÿ «‰–„Í…¨ «” Œœ«Â »Í«Ê«  «· —«÷Í…');
-      return { wallets: [], count: 0, totalProfit: 0, avgWinRate: 0 };
-    }
-
-    const data = await response.json();
-    if (data.success && data.wallets) {
-      return {
-        wallets: data.wallets.map((w: any) => w.address),
-        count: data.wallets.length,
-        totalProfit: data.totalProfit || 0,
-        avgWinRate: data.avgWinRate || 0,
-      };
-    }
-
-    return { wallets: [], count: 0, totalProfit: 0, avgWinRate: 0 };
-  } catch (error) {
-    console.error('? ·‘‰ Ã‰» «‰ÂÕ«·ÿ «‰–„Í…:', error);
-    return { wallets: [], count: 0, totalProfit: 0, avgWinRate: 0 };
-  }
-}
-
-// ============================================================
-// ?? Ã‰» »Í«Ê«  «‰”Ÿ— «‰ «—ÍŒÍ… (Õ‚Í‚Í ÂÊ DEX Screener)
+// ?? Ã‰» »Í«Ê«  «‰”Ÿ— «‰ «—ÍŒÍ… (DexScreener ·‚◊)
 // ============================================================
 
 export async function fetchPriceHistory(
@@ -136,56 +125,273 @@ export async function fetchPriceHistory(
   limit: number = 100
 ): Promise<number[]> {
   try {
-    const response = await fetch(
-      `${DEXSCREENER_API}/latest/dex/search?q=${tokenAddress}`
-    );
+    const response = await fetch(`${DEXSCREENER_API}/latest/dex/search?q=${tokenAddress}`);
 
     if (!response.ok) {
-      console.warn('?? ·‘‰ Ã‰» »Í«Ê«  «‰”Ÿ—¨ «” Œœ«Â »Í«Ê«  ÂÕ«„«…');
-      return generateMockPriceHistory(limit);
+      throw new Error(`? DexScreener API ·‘‰: ${response.status}`);
     }
 
     const data = await response.json();
-    if (data.pairs && Array.isArray(data.pairs) && data.pairs.length > 0) {
-      const prices: number[] = [];
-      for (const pair of data.pairs.slice(0, 10)) {
-        const price = parseFloat(pair.priceUsd || '0');
-        if (price > 0) prices.push(price);
-      }
-      if (prices.length > 0) {
-        //  „—«— «‰»Í«Ê«  ‰ „ËÍÊ  «—ÍŒ „«·Ì
-        while (prices.length < limit) {
-          const last = prices[prices.length - 1];
-          prices.push(last * (1 + (Math.random() - 0.48) * 0.01));
-        }
-        return prices.slice(0, limit);
+    
+    if (!data.pairs || data.pairs.length === 0) {
+      throw new Error(`? ‰«  ËÃœ »Í«Ê«  ‰‡ ${tokenAddress}`);
+    }
+
+    const prices: number[] = [];
+    for (const pair of data.pairs) {
+      const price = parseFloat(pair.priceUsd || '0');
+      if (price > 0) {
+        prices.push(price);
       }
     }
 
-    return generateMockPriceHistory(limit);
+    if (prices.length === 0) {
+      throw new Error(`? ‰«  ËÃœ √”Ÿ«— ’«‰Õ… ‰‡ ${tokenAddress}`);
+    }
+
+    while (prices.length < limit) {
+      const lastPrice = prices[prices.length - 1];
+      prices.push(lastPrice);
+    }
+
+    return prices.slice(0, limit);
+
   } catch (error) {
     console.error('? ·‘‰ Ã‰» »Í«Ê«  «‰”Ÿ—:', error);
-    return generateMockPriceHistory(limit);
+    throw new Error(`·‘‰ Ã‰» »Í«Ê«  «‰”Ÿ—: ${error instanceof Error ? error.message : 'Œ◊√ ⁄Í— ÂŸ—Ë·'}`);
   }
-}
-
-function generateMockPriceHistory(length: number): number[] {
-  const prices: number[] = [];
-  let price = 0.001 + Math.random() * 0.01;
-  for (let i = 0; i < length; i++) {
-    price = price * (1 + (Math.random() - 0.48) * 0.03);
-    prices.push(Math.max(price, 0.0001));
-  }
-  return prices;
 }
 
 // ============================================================
-// ?? Õ”«» RSI «‰Õ‚Í‚Í
+// ?? Ã‰» «‰ÂÕ«·ÿ «‰–„Í… (ÂÊ Worker)
+// ============================================================
+
+export async function fetchSmartWallets(
+  tokenAddress: string,
+  network: string,
+  minCount: number
+): Promise<{ wallets: any[]; count: number; totalProfit: number; avgWinRate: number }> {
+  try {
+    const response = await fetch(`${WORKER_URL}/smart-wallets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokenAddress, network, minCount }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`? ·‘‰ Ã‰» «‰ÂÕ«·ÿ «‰–„Í…: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(`? Œ◊√ ÂÊ «‰‡ Worker: ${data.error || '⁄Í— ÂŸ—Ë·'}`);
+    }
+
+    return {
+      wallets: data.wallets || [],
+      count: data.wallets?.length || 0,
+      totalProfit: data.totalProfit || 0,
+      avgWinRate: data.avgWinRate || 0,
+    };
+
+  } catch (error) {
+    console.error('? ·‘‰ Ã‰» «‰ÂÕ«·ÿ «‰–„Í…:', error);
+    return { wallets: [], count: 0, totalProfit: 0, avgWinRate: 0 };
+  }
+}
+
+// ============================================================
+// ?? „‘·  ÕËÂ «‰ÂÕ«·ÿ «‰–„Í…
+// ============================================================
+
+export async function detectSmartWalletHovering(
+  tokenAddress: string,
+  network: string
+): Promise<SmartWalletHoveringResult> {
+  try {
+    // ? 1. Ã‰» «‰ÂÕ«·ÿ «‰–„Í…
+    const smartWalletsResponse = await fetch(`${WORKER_URL}/smart-wallets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokenAddress, network, minCount: 3 }),
+    });
+
+    let smartWalletsData = { wallets: [], totalProfit: 0, avgWinRate: 0 };
+    if (smartWalletsResponse.ok) {
+      const data = await smartWalletsResponse.json();
+      if (data.success) {
+        smartWalletsData = {
+          wallets: data.wallets || [],
+          totalProfit: data.totalProfit || 0,
+          avgWinRate: data.avgWinRate || 0,
+        };
+      }
+    }
+
+    // ? 2. Ã‰» »Í«Ê«  «‰ÕÍ «Ê
+    const whaleResponse = await fetch(`${WORKER_URL}/whale-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokenAddress, network }),
+    });
+
+    let whaleData = { whaleCount: 0, largeBuys: 0, largeSells: 0, totalWhaleBalance: 0 };
+    if (whaleResponse.ok) {
+      const data = await whaleResponse.json();
+      if (data.success) {
+        whaleData = {
+          whaleCount: data.data?.whaleCount || 0,
+          largeBuys: data.data?.largeBuys || 0,
+          largeSells: data.data?.largeSells || 0,
+          totalWhaleBalance: data.data?.totalWhaleBalance || 0,
+        };
+      }
+    }
+
+    // ? 3. Ã‰» »Í«Ê«  «‰”Ë‚
+    const dexResponse = await fetch(`${WORKER_URL}/dex-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokenAddress, network }),
+    });
+
+    let dexData = { price: 0, volume24h: 0, liquidity: 0, txns: { buys: 0, sells: 0 } };
+    if (dexResponse.ok) {
+      const data = await dexResponse.json();
+      if (data.success) {
+        dexData = {
+          price: data.data?.price || 0,
+          volume24h: data.data?.volume24h || 0,
+          liquidity: data.data?.liquidity || 0,
+          txns: data.data?.txns || { buys: 0, sells: 0 },
+        };
+      }
+    }
+
+    // ? 4. Õ”«» «‰Ê‚«◊
+    let score = 0;
+    const smartWalletsCount = smartWalletsData.wallets.length;
+    const avgWinRate = smartWalletsData.avgWinRate || 0;
+    const totalProfit = smartWalletsData.totalProfit || 0;
+    const whaleCount = whaleData.whaleCount || 0;
+    const whaleBuying = whaleData.largeBuys > whaleData.largeSells;
+    const totalTxns = dexData.txns.buys + dexData.txns.sells || 1;
+    const buyRatio = dexData.txns.buys / totalTxns;
+
+    // «‰ÂÕ«·ÿ «‰–„Í…
+    if (smartWalletsCount >= 10) score += 30;
+    else if (smartWalletsCount >= 5) score += 20;
+    else if (smartWalletsCount >= 3) score += 10;
+    else if (smartWalletsCount >= 1) score += 5;
+
+    // Â Ë”◊ «‰—»Õ
+    if (avgWinRate >= 70) score += 25;
+    else if (avgWinRate >= 50) score += 15;
+    else if (avgWinRate >= 40) score += 10;
+    else if (avgWinRate >= 30) score += 5;
+
+    // «‰√—»«Õ «‰≈ÃÂ«‰Í…
+    if (totalProfit >= 100000) score += 20;
+    else if (totalProfit >= 50000) score += 15;
+    else if (totalProfit >= 10000) score += 10;
+    else if (totalProfit >= 5000) score += 5;
+
+    // «‰ÕÍ «Ê
+    if (whaleCount >= 5) score += 15;
+    else if (whaleCount >= 3) score += 10;
+    else if (whaleCount >= 1) score += 5;
+
+    // «‰ÕÍ «Ê  ‘ —Í
+    if (whaleBuying) score += 10;
+
+    // Ê”»… «‰‘—«¡
+    if (buyRatio >= 0.70) score += 10;
+    else if (buyRatio >= 0.60) score += 5;
+    else if (buyRatio >= 0.55) score += 3;
+
+    // «‰ÕÃÂ
+    if (dexData.volume24h >= 1000000) score += 5;
+    else if (dexData.volume24h >= 500000) score += 3;
+
+    // «‰”ÍË‰…
+    if (dexData.liquidity >= 500000) score += 5;
+    else if (dexData.liquidity >= 100000) score += 3;
+
+    //  ÕœÍœ «‰Â” ËÈ
+    let level: 'none' | 'low' | 'medium' | 'high' | 'extreme';
+    if (score >= 80) level = 'extreme';
+    else if (score >= 60) level = 'high';
+    else if (score >= 40) level = 'medium';
+    else if (score >= 20) level = 'low';
+    else level = 'none';
+
+    // «‰ Ë’Í…
+    let recommendation: 'buy' | 'watch' | 'reject';
+    let confidence: number;
+
+    if (score >= 60 && smartWalletsCount >= 3) {
+      recommendation = 'buy';
+      confidence = Math.min(95, 50 + score * 0.5);
+    } else if (score >= 30 && smartWalletsCount >= 1) {
+      recommendation = 'watch';
+      confidence = 30 + score * 0.3;
+    } else {
+      recommendation = 'reject';
+      confidence = Math.max(10, 30 - score * 0.2);
+    }
+
+    return {
+      isHovering: score >= 30,
+      score,
+      level,
+      details: {
+        smartWalletsCount,
+        avgWinRate,
+        totalProfit,
+        whaleCount,
+        whaleBuying,
+        buyRatio,
+        volume24h: dexData.volume24h,
+        topWallets: smartWalletsData.wallets.slice(0, 5).map((w: any) => ({
+          address: w.address,
+          winRate: w.winRate || 0,
+          totalProfit: w.totalProfit || 0,
+        })),
+      },
+      recommendation,
+      confidence,
+    };
+
+  } catch (error) {
+    console.error('? ·‘‰ „‘·  ÕËÂ «‰ÂÕ«·ÿ «‰–„Í…:', error);
+    return {
+      isHovering: false,
+      score: 0,
+      level: 'none',
+      details: {
+        smartWalletsCount: 0,
+        avgWinRate: 0,
+        totalProfit: 0,
+        whaleCount: 0,
+        whaleBuying: false,
+        buyRatio: 0,
+        volume24h: 0,
+        topWallets: [],
+      },
+      recommendation: 'reject',
+      confidence: 0,
+    };
+  }
+}
+
+// ============================================================
+// ?? «‰Âƒ‘—«  «‰·ÊÍ… (Õ‚Í‚Í…)
 // ============================================================
 
 export function calculateRSI(priceHistory: number[], period: number = 14): number {
   if (priceHistory.length < period + 1) {
-    return 50;
+    throw new Error(`? »Í«Ê«  ⁄Í— „«·Í… ‰Õ”«» RSI ( Õ «Ã ${period + 1} ”Ÿ—)`);
   }
 
   let gains = 0;
@@ -211,16 +417,12 @@ export function calculateRSI(priceHistory: number[], period: number = 14): numbe
   return 100 - (100 / (1 + rs));
 }
 
-// ============================================================
-// ?? Õ”«» Stochastic Oscillator «‰Õ‚Í‚Í
-// ============================================================
-
 export function calculateStochastic(
   priceHistory: number[],
   period: number = 14
 ): { k: number; d: number } {
   if (priceHistory.length < period) {
-    return { k: 50, d: 50 };
+    throw new Error(`? »Í«Ê«  ⁄Í— „«·Í… ‰Õ”«» Stochastic ( Õ «Ã ${period} ”Ÿ—)`);
   }
 
   const recentPrices = priceHistory.slice(-period);
@@ -234,7 +436,6 @@ export function calculateStochastic(
 
   const k = ((currentClose - low) / (high - low)) * 100;
 
-  // Õ”«» D (Â Ë”◊ K ‰¬Œ— 3 · —« )
   const kHistory: number[] = [];
   for (let i = 0; i < 3 && i < priceHistory.length - 1; i++) {
     const slice = priceHistory.slice(-period - i - 1, -i || undefined);
@@ -255,10 +456,6 @@ export function calculateStochastic(
   return { k, d };
 }
 
-// ============================================================
-// ?? Õ”«» MACD
-// ============================================================
-
 export function calculateMACD(
   priceHistory: number[],
   fastPeriod: number = 12,
@@ -266,14 +463,13 @@ export function calculateMACD(
   signalPeriod: number = 9
 ): { macd: number; signal: number; histogram: number } {
   if (priceHistory.length < slowPeriod) {
-    return { macd: 0, signal: 0, histogram: 0 };
+    throw new Error(`? »Í«Ê«  ⁄Í— „«·Í… ‰Õ”«» MACD ( Õ «Ã ${slowPeriod} ”Ÿ—)`);
   }
 
   const fastEMA = calculateEMA(priceHistory, fastPeriod);
   const slowEMA = calculateEMA(priceHistory, slowPeriod);
   const macd = fastEMA - slowEMA;
 
-  // ≈‘«—… MACD (ÂÕ«„«… Â»”◊…)
   const signal = macd * 0.8;
   const histogram = macd - signal;
 
@@ -281,7 +477,9 @@ export function calculateMACD(
 }
 
 function calculateEMA(priceHistory: number[], period: number): number {
-  if (priceHistory.length === 0) return 0;
+  if (priceHistory.length === 0) {
+    throw new Error('? ‰«  ËÃœ »Í«Ê«  ‰Õ”«» EMA');
+  }
 
   const k = 2 / (period + 1);
   let ema = priceHistory[0];
@@ -485,7 +683,7 @@ function calculateScore(token: DiscoveredToken, config: BaseBotConfig): number {
 }
 
 // ============================================================
-// ??  Õ‰Í‰ ÂŒ’’ ‰„‰ »Ë  (ÂŸ »Í«Ê«  Õ‚Í‚Í…)
+// ??  Õ‰Í‰ ÂŒ’’ ‰„‰ »Ë 
 // ============================================================
 
 async function analyzeForHunterReal(
@@ -496,6 +694,7 @@ async function analyzeForHunterReal(
   let score = token.score;
   let reason = '';
   let confidence = 50;
+  let extraInfo: string[] = [];
 
   // 1. «‰ŸÂ—
   const ageHours = token.pairCreatedAt ? (Date.now() - token.pairCreatedAt) / (1000 * 60 * 60) : 999;
@@ -510,29 +709,85 @@ async function analyzeForHunterReal(
     return { action: 'REJECT', reason: `Ê”»… «‰‘—«¡ ÂÊŒ·÷… (${(buyRatio * 100).toFixed(0)}%)`, confidence: 15 };
   }
 
-  // 3. Ã‰» «‰ÂÕ«·ÿ «‰–„Í… «‰Õ‚Í‚Í…
-  const smartWallets = await fetchSmartWallets(token.tokenAddress, network, config.minSmartWallets);
-
-  if (config.minSmartWallets > 0 && smartWallets.count < config.minSmartWallets) {
-    return {
-      action: 'REJECT',
-      reason: `«‰ÂÕ«·ÿ «‰–„Í… ⁄Í— „«·Í… (${smartWallets.count}/${config.minSmartWallets})`,
-      confidence: 20,
-    };
+  // ? 3. Ã‰» «‰ÂÕ«·ÿ «‰–„Í… (ÂÊ Worker - »œËÊ Birdeye)
+  let smartWallets = { count: 0, avgWinRate: 0, totalProfit: 0, wallets: [] };
+  
+  try {
+    const smartData = await fetchSmartWallets(token.tokenAddress, network, config.minSmartWallets);
+    smartWallets = smartData;
+    
+    if (smartWallets.count > 0) {
+      extraInfo.push(`?? ${smartWallets.count} ÂÕ·ÿ… –„Í…`);
+      extraInfo.push(`?? Â Ë”◊ —»Õ ${smartWallets.avgWinRate.toFixed(0)}%`);
+    }
+  } catch (error) {
+    console.warn('?? ·‘‰ Ã‰» «‰ÂÕ«·ÿ «‰–„Í…:', error);
   }
 
-  // 4. «‰Ê ÍÃ… «‰ÊÁ«∆Í…
+  // ? 4. Ã‰» »Í«Ê«  «‰ÕÍ «Ê (ÂÊ Worker - »œËÊ Birdeye)
+  let whaleData = { whaleCount: 0, largeBuys: 0, largeSells: 0 };
+  try {
+    const response = await fetch(`${WORKER_URL}/whale-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokenAddress: token.tokenAddress, network }),
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success) {
+        whaleData = {
+          whaleCount: data.data?.whaleCount || 0,
+          largeBuys: data.data?.largeBuys || 0,
+          largeSells: data.data?.largeSells || 0,
+        };
+        
+        if (whaleData.whaleCount > 0) {
+          extraInfo.push(`?? ${whaleData.whaleCount} ÕË `);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('?? ·‘‰ Ã‰» »Í«Ê«  «‰ÕÍ «Ê:', error);
+  }
+
+  // ? 5. ÂŸ«ÍÍ— «‰ÕÍ «Ê (ÂÊ Worker)
+  if (config.enableWhaleFilter && config.minWhales) {
+    if (whaleData.whaleCount < config.minWhales) {
+      return {
+        action: 'REJECT',
+        reason: `Ÿœœ «‰ÕÍ «Ê ⁄Í— „«·Ì (${whaleData.whaleCount}/${config.minWhales})`,
+        confidence: 10,
+      };
+    }
+  }
+
+  // ? 6. Â„«·√… «‰ÕÍ «Ê
+  if (whaleData.whaleCount >= 5) score += 15;
+  else if (whaleData.whaleCount >= 3) score += 10;
+  else if (whaleData.whaleCount >= 1) score += 5;
+
+  // ? 7. Â„«·√… «‰ÂÕ«·ÿ «‰–„Í…
+  if (smartWallets.count >= config.minSmartWallets) {
+    score += 15;
+  } else if (smartWallets.count >= config.minSmartWallets / 2) {
+    score += 8;
+  }
+
+  // 8. «‰Ê ÍÃ… «‰ÊÁ«∆Í…
+  const extraText = extraInfo.length > 0 ? ` (${extraInfo.join(', ')})` : '';
+  
   if (score >= config.minScore && smartWallets.count >= config.minSmartWallets) {
-    reason = `Ê‚«◊ ${score}/100¨ ${smartWallets.count} ÂÕ·ÿ… –„Í… (Â Ë”◊ —»Õ ${smartWallets.avgWinRate.toFixed(0)}%)`;
-    confidence = Math.min(95, 50 + score * 0.3 + (smartWallets.count / config.minSmartWallets) * 10);
+    reason = `Ê‚«◊ ${Math.round(score)}/100¨ ${smartWallets.count} ÂÕ·ÿ… –„Í…${extraText}`;
+    confidence = Math.min(95, 50 + score * 0.3 + (smartWallets.count / (config.minSmartWallets || 1)) * 10);
     return { action: 'BUY', reason, confidence };
   } else if (score >= config.minScore - 15) {
-    reason = `Ê‚«◊ ${score}/100¨ ${smartWallets.count} ÂÕ·ÿ… –„Í… (‚—Í» ÂÊ «‰Õœ)`;
+    reason = `Ê‚«◊ ${Math.round(score)}/100¨ ${smartWallets.count} ÂÕ·ÿ… –„Í… (‚—Í» ÂÊ «‰Õœ)${extraText}`;
     confidence = 30 + (score - (config.minScore - 15)) / 15 * 20;
     return { action: 'WATCH', reason, confidence };
   }
 
-  return { action: 'REJECT', reason: `Ê‚«◊ ÂÊŒ·÷… (${score}/100)`, confidence: 20 };
+  return { action: 'REJECT', reason: `Ê‚«◊ ÂÊŒ·÷… (${Math.round(score)}/100)${extraText}`, confidence: 20 };
 }
 
 async function analyzeForSignalReal(
@@ -644,7 +899,7 @@ function analyzeForScalper(token: DiscoveredToken, config: ScalperConfig): { act
 }
 
 // ============================================================
-// ?? «‰œ«‰… «‰—∆Í”Í… (Hunter Pipeline «‰Â ◊Ë— ÂŸ »Í«Ê«  Õ‚Í‚Í…)
+// ?? «‰œ«‰… «‰—∆Í”Í… (Hunter Pipeline)
 // ============================================================
 
 export async function runBotAnalysis(
@@ -694,7 +949,7 @@ export async function runBotAnalysis(
     scored.push(token);
   }
 
-  // 5.  Õ‰Í‰ „‰ »Ë  Õ”» ÊËŸÁ (»‘„‰ ⁄Í— Â “«ÂÊ)
+  // 5.  Õ‰Í‰ „‰ »Ë  Õ”» ÊËŸÁ
   const recommendations: BotAnalysisResult['recommendations'] = [];
   
   for (const token of scored) {
@@ -733,19 +988,18 @@ export async function runBotAnalysis(
   const watchlist = recommendations.filter(r => r.action === 'WATCH').length;
   const rejected = scored.length - candidates - watchlist;
 
-  const stats: PipelineStats = {
-    totalPairs,
-    uniqueTokens,
-    afterSecurity,
-    afterLiquidity,
-    afterVolume,
-    candidates,
-    watchlist,
-    rejected,
+ const stats: PipelineStats = {
+    totalPairs: totalPairs || 0,
+    uniqueTokens: uniqueTokens || 0,
+    afterSecurity: afterSecurity || 0,
+    afterLiquidity: afterLiquidity || 0,
+    afterVolume: afterVolume || 0,
+    candidates: candidates || 0,
+    watchlist: watchlist || 0,
+    rejected: rejected || 0,
     lastUpdate: Date.now(),
     error: null,
-  };
-
+};
   return {
     tokens: scored,
     stats,
@@ -754,7 +1008,7 @@ export async function runBotAnalysis(
 }
 
 // ============================================================
-// ??? œË«‰ Â”«Ÿœ…
+// ?? œË«‰ Â”«Ÿœ…
 // ============================================================
 
 export function getTopRecommendations(

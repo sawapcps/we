@@ -1,3 +1,5 @@
+// src/lib/format.ts
+
 export function formatUsd(value: number): string {
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
@@ -9,9 +11,19 @@ export function formatPrice(value: number | string | null): string {
   if (value === null || value === undefined) return '—';
   const n = typeof value === 'string' ? parseFloat(value) : value;
   if (isNaN(n)) return '—';
+  
+  // ✅ للأرقام الكبيرة (أكثر من 1 دولار)
   if (n >= 1) return `$${n.toFixed(4)}`;
+  
+  // ✅ للأرقام المتوسطة (بين 0.01 و 1 دولار)
   if (n >= 0.01) return `$${n.toFixed(6)}`;
-  return `$${n.toExponential(4)}`;
+  
+  // ✅ للأرقام الصغيرة (بين 0.0001 و 0.01 دولار)
+  if (n >= 0.0001) return `$${n.toFixed(6)}`;
+  
+  // ✅ للأرقام الصغيرة جداً (أقل من 0.0001)
+  // نعرض 8 أرقام بعد الفاصلة بدلاً من التنسيق العلمي
+  return `$${n.toFixed(8)}`;
 }
 
 export function formatPct(value: number | null | undefined): string {
