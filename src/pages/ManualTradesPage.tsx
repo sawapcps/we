@@ -520,6 +520,7 @@ export function ManualTradesPage() {
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
   const [executing, setExecuting] = useState(false);
   const [amount, setAmount] = useState(50);
+  const [amountInput, setAmountInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showAI, setShowAI] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
@@ -1318,7 +1319,7 @@ export function ManualTradesPage() {
       </main>
 
       {/* ============================================================
-          ✅ Trade Modal - نسخة محدثة
+          ✅ Trade Modal - نسخة محدثة مع دعم الأصفار
           ============================================================ */}
       {selectedSignal && (
         <div
@@ -1384,14 +1385,51 @@ export function ManualTradesPage() {
               <label className="mb-1.5 block text-[11px] text-slate-400 font-medium">
                 المبلغ ({NATIVE_TOKENS[selectedSignal.network]?.symbol || 'USD'})
               </label>
-              <input
-                type="number"
-                min={1}
-                max={100000}
-                value={amount}
-                onChange={e => setAmount(Number(e.target.value))}
-                className="w-full rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3 text-base outline-none focus:border-cyan-400 transition-all"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={amountInput || amount}
+                  onChange={(e) => {
+                    let rawValue = e.target.value;
+
+                    if (rawValue === '') {
+                      setAmountInput('');
+                      setAmount(0);
+                      return;
+                    }
+
+                    rawValue = rawValue.replace(/,/g, '.');
+
+                    if (!/^\d*\.?\d*$/.test(rawValue)) {
+                      return;
+                    }
+
+                    setAmountInput(rawValue);
+
+                    if (rawValue === '.' || rawValue === '0.') {
+                      setAmount(0);
+                      return;
+                    }
+
+                    const val = Number(rawValue);
+                    if (!isNaN(val) && val >= 0) {
+                      setAmount(val);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (amountInput === '' || amountInput === '.') {
+                      setAmountInput('');
+                      setAmount(0);
+                    }
+                  }}
+                  placeholder="0.001"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3 text-base outline-none focus:border-cyan-400 transition-all"
+                />
+                <span className="text-sm font-bold text-cyan-400 min-w-[50px]">
+                  {NATIVE_TOKENS[selectedSignal.network]?.symbol || 'TOKEN'}
+                </span>
+              </div>
             </div>
 
             {tradeResult && (

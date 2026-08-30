@@ -5,7 +5,8 @@
 // ✅ التداول اليدوي متاح دائماً
 // ✅ تعرض الكمية المتوقعة مع حساب صحيح
 // ✅ تعرض صورة العملة ورمزها
-// ✅ تجلب سعر SOL من Birdeye API
+// ✅ تجلب سعر SOL من DexScreener
+// ✅ حقل المبلغ يدعم الأصفار والأرقام العشرية
 // ============================================================
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -261,66 +262,39 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
   const [tradingEnabled, setTradingEnabled] = useState(true);
   const [nativePrice, setNativePrice] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [amountInput, setAmountInput] = useState('');
 
   const t = (key: keyof typeof translations.ar) => translations[language][key] || key;
 
   // ============================================================
-  // ✅ جلب سعر SOL من Birdeye API
+  // ✅ جلب سعر SOL من DexScreener
   // ============================================================
   
-// src/pages/AIAnalysisPage.tsx
-
-// ✅ استخدام DexScreener فقط (بدون Birdeye)
-const fetchNativePrice = useCallback(async (network: string) => {
-  try {
-    const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=SOL');
-    const data = await response.json();
-    
-    if (data.pairs && data.pairs.length > 0) {
-      const pair = data.pairs.find((p: any) => 
-        p.chainId === network && 
-        (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
-      );
+  const fetchNativePrice = useCallback(async (network: string) => {
+    try {
+      const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=SOL');
+      const data = await response.json();
       
-      if (pair) {
-        const price = parseFloat(pair.priceUsd || 0);
-        console.log(`💱 سعر SOL من DexScreener: $${price}`);
-        return price;
+      if (data.pairs && data.pairs.length > 0) {
+        const pair = data.pairs.find((p: any) => 
+          p.chainId === network && 
+          (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
+        );
+        
+        if (pair) {
+          const price = parseFloat(pair.priceUsd || 0);
+          console.log(`💱 سعر SOL من DexScreener: $${price}`);
+          return price;
+        }
+        return parseFloat(data.pairs[0].priceUsd || 0);
       }
-      return parseFloat(data.pairs[0].priceUsd || 0);
+      return 0;
+    } catch (error) {
+      console.error('❌ فشل جلب سعر SOL:', error);
+      return 0;
     }
-    return 0;
-  } catch (error) {
-    console.error('❌ فشل جلب سعر SOL:', error);
-    return 0;
-  }
-}, []);
+  }, []);
 
-// ✅ دالة احتياطية من DexScreener
-const fetchSolPriceFromDexScreener = async () => {
-  try {
-    const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=SOL');
-    const data = await response.json();
-    
-    if (data.pairs && data.pairs.length > 0) {
-      const pair = data.pairs.find((p: any) => 
-        p.chainId === 'solana' && 
-        (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
-      );
-      
-      if (pair) {
-        const price = parseFloat(pair.priceUsd || 0);
-        console.log(`💱 سعر SOL من DexScreener: $${price}`);
-        return price;
-      }
-      return parseFloat(data.pairs[0].priceUsd || 0);
-    }
-    return 0;
-  } catch (error) {
-    console.error('❌ فشل جلب سعر SOL من DexScreener:', error);
-    return 0;
-  }
-};
   // ============================================================
   // 📊 جلب الرصيد وتحليل المحافظ الذكية
   // ============================================================
@@ -332,9 +306,9 @@ const fetchSolPriceFromDexScreener = async () => {
       setUserBalance(balance);
       if (balance === 0) {
         setAmount(0);
+        setAmountInput('');
       }
       
-      // ✅ جلب سعر SOL من Birdeye
       const price = await fetchNativePrice(currentToken.chainId);
       setNativePrice(price);
       console.log(`💱 سعر SOL: $${price}`);
@@ -460,10 +434,12 @@ const fetchSolPriceFromDexScreener = async () => {
         message: `⚠️ ${t('insufficientBalance')} (الرصيد: ${userBalance.toFixed(4)} ${nativeToken?.symbol})`,
       });
       setAmount(0);
+      setAmountInput('');
       return;
     }
-    const calculatedAmount = Math.round((userBalance * percentage / 100) * 100) / 100;
+    const calculatedAmount = (userBalance * percentage) / 100;
     setAmount(calculatedAmount);
+    setAmountInput(String(calculatedAmount));
     setTradeResult(null);
   };
 
@@ -842,7 +818,7 @@ const fetchSolPriceFromDexScreener = async () => {
                   {currentToken.name}
                 </p>
                 
-                {/* ✅ ✅ ✅ عرض رمز العملة (العنوان) مع زر نسخ */}
+                {/* ✅ عرض رمز العملة (العنوان) مع زر نسخ */}
                 {currentToken?.tokenAddress && (
                   <div className="flex items-center gap-1 mt-1">
                     <p className="text-[10px] font-mono text-slate-400 truncate max-w-[200px]">
@@ -1035,7 +1011,7 @@ const fetchSolPriceFromDexScreener = async () => {
           </div>
 
           {/* ============================================================
-              ✅ Trade Amount - مع حساب الكمية الصحيح
+              ✅ Trade Amount - مع حساب الكمية الصحيح + دعم الأصفار
               ============================================================ */}
           <div className="bg-slate-800/20 rounded-xl p-4 border border-slate-800">
             <div className="flex items-center justify-between mb-3">
@@ -1046,28 +1022,70 @@ const fetchSolPriceFromDexScreener = async () => {
                 </span>
               </p>
             </div>
+
             <div className="flex gap-2 mb-3">
               {['25%', '50%', '75%', '100%'].map((pct) => (
                 <button
                   key={pct}
-                  onClick={() => setPercentageAmount(parseFloat(pct))}
+                  onClick={() => {
+                    const percentage = parseInt(pct, 10);
+                    const calculatedAmount = (userBalance * percentage) / 100;
+                    setAmount(calculatedAmount);
+                    setAmountInput(String(calculatedAmount));
+                    setTradeResult(null);
+                  }}
                   className="flex-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors"
                 >
                   {pct}
                 </button>
               ))}
             </div>
+            
+            {/* ✅ حقل الإدخال المعدل - يدعم الأصفار والأرقام العشرية */}
             <div className="flex items-center gap-2">
               <input
-                type="number"
-                min={0}
-                max={userBalance}
-                step={0.001}
-                value={amount}
+                type="text"
+                inputMode="decimal"
+                value={amountInput}
                 onChange={(e) => {
-                  const val = parseFloat(e.target.value) || 0;
-                  if (val <= userBalance || userBalance === 0) {
+                  let rawValue = e.target.value;
+
+                  // السماح بالحقل الفارغ
+                  if (rawValue === '') {
+                    setAmountInput('');
+                    setAmount(0);
+                    setTradeResult(null);
+                    return;
+                  }
+
+                  // تحويل الفاصلة إلى نقطة
+                  rawValue = rawValue.replace(/,/g, '.');
+
+                  // السماح فقط بالأرقام والنقطة
+                  if (!/^\d*\.?\d*$/.test(rawValue)) {
+                    return;
+                  }
+
+                  // حفظ النص كما كتبه المستخدم
+                  setAmountInput(rawValue);
+
+                  // السماح بكتابة: . أو 0.
+                  if (rawValue === '.' || rawValue === '0.') {
+                    setAmount(0);
+                    setTradeResult(null);
+                    return;
+                  }
+
+                  const val = Number(rawValue);
+
+                  if (Number.isNaN(val) || val < 0) {
+                    return;
+                  }
+
+                  // منع تجاوز الرصيد
+                  if (userBalance === 0 || val <= userBalance) {
                     setAmount(val);
+                    setTradeResult(null);
                   } else {
                     setTradeResult({
                       success: false,
@@ -1075,6 +1093,13 @@ const fetchSolPriceFromDexScreener = async () => {
                     });
                   }
                 }}
+                onBlur={() => {
+                  if (amountInput === '' || amountInput === '.') {
+                    setAmountInput('');
+                    setAmount(0);
+                  }
+                }}
+                placeholder="0.001"
                 className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-[#8b5cf6]"
               />
               <span className="text-sm font-bold text-cyan-400 min-w-[50px]">{nativeToken?.symbol}</span>
