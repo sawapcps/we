@@ -5,14 +5,15 @@
 // ✅ التداول اليدوي متاح دائماً
 // ✅ تعرض الكمية المتوقعة مع حساب صحيح
 // ✅ تعرض صورة العملة ورمزها
-// ✅ تجلب سعر SOL من DexScreener
+// ✅ تجلب سعر العملة الأساسية من DexScreener (مع تصفية الشبكة)
 // ✅ حقل المبلغ يدعم الأصفار والأرقام العشرية
+// ✅ إمكانية اختيار المحفظة (عند وجود عدة محافظ على نفس الشبكة)
 // ============================================================
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { analyzeToken, quickAnalysis } from '../lib/gemini';
-import { getNetworkName, getNativeToken } from '../config/networks';
+import { getNetworkName, getNativeToken, NETWORKS } from '../config/networks';
 import { BotWalletManager } from '../lib/wallet';
 import { AccountManager } from '../lib/accounts';
 import { detectSmartWalletHovering } from '../lib/hunterEngine';
@@ -41,6 +42,7 @@ import {
   Play,
   Pause,
   Copy,
+  ChevronDown,
 } from 'lucide-react';
 
 // ============================================================
@@ -133,6 +135,7 @@ const translations = {
     botRunning: '🟢 البوت يعمل',
     botStopped: '🔴 البوت متوقف',
     independentMode: 'وضع مستقل - لا يعتمد على البوت',
+    selectWallet: 'اختر المحفظة',
   },
   en: {
     title: 'AI Analysis',
@@ -217,6 +220,7 @@ const translations = {
     botRunning: '🟢 Bot Running',
     botStopped: '🔴 Bot Stopped',
     independentMode: 'Independent Mode - Does not depend on Bot',
+    selectWallet: 'Select Wallet',
   },
 };
 
@@ -263,58 +267,102 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
   const [nativePrice, setNativePrice] = useState(0);
   const [copied, setCopied] = useState(false);
   const [amountInput, setAmountInput] = useState('');
+  // ✅ حالات جديدة لاختيار المحفظة
+  const [userWalletsList, setUserWalletsList] = useState<any[]>([]);
+  const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
 
   const t = (key: keyof typeof translations.ar) => translations[language][key] || key;
 
   // ============================================================
-  // ✅ جلب سعر SOL من DexScreener
+  // ✅ جلب سعر العملة الأساسية (محسّن مع تصفية الشبكة)
   // ============================================================
   
-  const fetchNativePrice = useCallback(async (network: string) => {
-    try {
-      const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=SOL');
+const fetchNativePrice = useCallback(async (network: string) => {
+  try {
+    const WORKER_URL = import.meta.env.VITE_WORKER_URL;
+    // 1️⃣ حاول عبر Worker
+    if (WORKER_URL) {
+      const nativeToken = getNativeToken(network);
+      const response = await fetch(`${WORKER_URL}/dex-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tokenAddress: nativeToken.address,
+          network,
+        }),
+      });
       const data = await response.json();
-      
-      if (data.pairs && data.pairs.length > 0) {
-        const pair = data.pairs.find((p: any) => 
-          p.chainId === network && 
-          (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
-        );
-        
-        if (pair) {
-          const price = parseFloat(pair.priceUsd || 0);
-          console.log(`💱 سعر SOL من DexScreener: $${price}`);
-          return price;
-        }
-        return parseFloat(data.pairs[0].priceUsd || 0);
+      if (data.success && data.data?.price) {
+        console.log(`💱 سعر ${nativeToken.symbol} من Worker: $${data.data.price}`);
+        return data.data.price;
       }
-      return 0;
-    } catch (error) {
-      console.error('❌ فشل جلب سعر SOL:', error);
-      return 0;
     }
-  }, []);
 
+    // 2️⃣ إذا فشل Worker، استخدم DexScreener مع تصفية دقيقة
+    const nativeSymbol = getNativeToken(network).symbol;
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${nativeSymbol}`);
+    const data = await response.json();
+
+    if (data.pairs && data.pairs.length > 0) {
+      // ✅ البحث عن زوج على نفس الشبكة مع USDC أو USDT
+      const pair = data.pairs.find((p: any) =>
+        p.chainId === network &&
+        (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
+      );
+      if (pair) {
+        const price = parseFloat(pair.priceUsd || 0);
+        console.log(`💱 سعر ${nativeSymbol} من DexScreener (${network}): $${price}`);
+        return price;
+      }
+      
+      // ❌ إذا لم نجد الزوج المطلوب، لا ترجع أي سعر (تجنب السعر الخاطئ)
+      console.warn(`⚠️ لم يتم العثور على سعر لـ ${nativeSymbol} على شبكة ${network}`);
+      return 0; // بدلاً من return data.pairs[0].priceUsd
+    }
+    return 0;
+  } catch (error) {
+    console.error('❌ فشل جلب السعر:', error);
+    return 0;
+  }
+}, []);
   // ============================================================
-  // 📊 جلب الرصيد وتحليل المحافظ الذكية
+  // 📊 جلب الرصيد وقائمة المحافظ
   // ============================================================
 
-  const fetchBalance = async () => {
+  const fetchBalanceAndWallets = async () => {
     if (!user || !currentToken) return;
     try {
-      const balance = await AccountManager.getUserWalletBalance(user.id, currentToken.chainId);
-      setUserBalance(balance);
-      if (balance === 0) {
-        setAmount(0);
-        setAmountInput('');
+      // ✅ جلب جميع محافظ المستخدم على هذه الشبكة
+      const allWallets = await AccountManager.getAllUserWallets(user.id);
+      const filtered = allWallets.filter(w => w.network === currentToken.chainId);
+      setUserWalletsList(filtered);
+      
+      // ✅ اختيار المحفظة الأولى افتراضياً (أو المحفظة المخزنة سابقاً)
+      if (filtered.length > 0) {
+        // إذا كان هناك محفظة محددة مسبقاً ولا تزال موجودة، استخدمها
+        if (selectedWalletId && filtered.some(w => w.id === selectedWalletId)) {
+          const wallet = filtered.find(w => w.id === selectedWalletId);
+          setUserBalance(wallet ? wallet.balance : 0);
+        } else {
+          // وإلا استخدم الأولى
+          setSelectedWalletId(filtered[0].id);
+          setUserBalance(filtered[0].balance);
+        }
+      } else {
+        // لا توجد محافظ، أنشئ واحدة
+        const newWallet = await AccountManager.createUserWallet(user.id, currentToken.chainId);
+        setUserWalletsList([newWallet]);
+        setSelectedWalletId(newWallet.id);
+        setUserBalance(newWallet.balance);
       }
       
+      // ✅ جلب سعر العملة الأساسية
       const price = await fetchNativePrice(currentToken.chainId);
       setNativePrice(price);
-      console.log(`💱 سعر SOL: $${price}`);
+      console.log(`💱 سعر ${getNativeToken(currentToken.chainId).symbol}: $${price}`);
       
     } catch (e) {
-      console.error('❌ فشل جلب الرصيد:', e);
+      console.error('❌ فشل جلب الرصيد والمحافظ:', e);
     }
   };
 
@@ -333,10 +381,10 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
 
   useEffect(() => {
     if (user && currentToken) {
-      fetchBalance();
+      fetchBalanceAndWallets();
       fetchHoveringData();
     }
-  }, [user, currentToken]);
+  }, [user, currentToken, selectedWalletId]); // إعادة التحميل عند تغيير المحفظة المختارة
 
   // ============================================================
   // 🔍 تشغيل التحليل
@@ -365,7 +413,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
       
       setCurrentAnalysis(result);
       await addAnalysis(result);
-      await fetchBalance();
+      await fetchBalanceAndWallets(); // تحديث الرصيد والمحافظ
       await fetchHoveringData();
       
     } catch (e) {
@@ -444,7 +492,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
   };
 
   // ============================================================
-  // 💰 تنفيذ الصفقة
+  // 💰 تنفيذ الصفقة (باستخدام المحفظة المختارة)
   // ============================================================
 
   const executeTrade = async (action: 'BUY' | 'SELL') => {
@@ -473,10 +521,25 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
       return;
     }
 
-    if (action === 'BUY' && amount > userBalance) {
+    // ✅ التحقق من اختيار المحفظة
+    if (!selectedWalletId) {
+      setTradeResult({ success: false, message: '⚠️ الرجاء اختيار محفظة' });
+      return;
+    }
+
+    // ✅ جلب المحفظة المختارة
+    const selectedWallet = userWalletsList.find(w => w.id === selectedWalletId);
+    if (!selectedWallet) {
+      setTradeResult({ success: false, message: '⚠️ المحفظة المختارة غير موجودة' });
+      return;
+    }
+
+    const balance = selectedWallet.balance;
+
+    if (action === 'BUY' && amount > balance) {
       setTradeResult({ 
         success: false, 
-        message: `⚠️ ${t('insufficientBalance')} (الرصيد: ${userBalance.toFixed(4)} ${nativeToken?.symbol}، المطلوب: ${amount.toFixed(4)} ${nativeToken?.symbol})` 
+        message: `⚠️ ${t('insufficientBalance')} (الرصيد: ${balance.toFixed(4)} ${nativeToken?.symbol}، المطلوب: ${amount.toFixed(4)} ${nativeToken?.symbol})` 
       });
       return;
     }
@@ -485,17 +548,10 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
     setTradeResult(null);
 
     try {
-      let wallet = await AccountManager.getUserWallet(user.id, currentToken.chainId);
-      if (!wallet) {
-        wallet = await AccountManager.createUserWallet(user.id, currentToken.chainId);
-        await addLog('SUCCESS', `✅ تم إنشاء محفظة على ${getNetworkName(currentToken.chainId)}`);
-      }
-
-      const balance = await AccountManager.getUserWalletBalance(user.id, currentToken.chainId);
-      setUserBalance(balance);
-
-      if (action === 'BUY' && balance < amount) {
-        throw new Error(`الرصيد غير كافٍ: ${balance.toFixed(4)} ${nativeToken?.symbol} / المطلوب ${amount.toFixed(4)} ${nativeToken?.symbol}`);
+      // ✅ تحديث الرصيد قبل التنفيذ للتأكد
+      const freshBalance = await AccountManager.getUserWalletBalance(user.id, currentToken.chainId, selectedWallet.address);
+      if (action === 'BUY' && freshBalance < amount) {
+        throw new Error(`الرصيد غير كافٍ: ${freshBalance.toFixed(4)} ${nativeToken?.symbol} / المطلوب ${amount.toFixed(4)} ${nativeToken?.symbol}`);
       }
 
       const canTrade = await AccountManager.canUserTrade(user.id);
@@ -510,6 +566,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
       }
 
       const manager = BotWalletManager.getInstance();
+      // ✅ استخدام المحفظة المختارة
       const result = action === 'BUY'
         ? await manager.executeBuyForUser({
             userId: user.id,
@@ -518,6 +575,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             slippage: 0.5,
             password: masterPassword,
             network: currentToken.chainId,
+            walletAddress: selectedWallet.address, // تمرير العنوان المختار
           })
         : await manager.executeSellForUser({
             userId: user.id,
@@ -526,6 +584,7 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             slippage: 0.5,
             password: masterPassword,
             network: currentToken.chainId,
+            walletAddress: selectedWallet.address,
           });
 
       if (!result.success) {
@@ -573,13 +632,13 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
 
       await AccountManager.incrementUserTrades(user.id);
       await refreshUserBalance(currentToken.chainId);
-      await fetchBalance();
+      await fetchBalanceAndWallets(); // تحديث البيانات
 
       const nativeToken = getNativeToken(currentToken.chainId);
       const actionText = action === 'BUY' ? t('buyAction') : t('sellAction');
       setTradeResult({
         success: true,
-        message: `✅ تم ${actionText} ${currentToken.symbol} بمبلغ ${amount.toFixed(4)} ${nativeToken.symbol} بنجاح!\n${profitMessage}`,
+        message: `✅ تم ${actionText} ${currentToken.symbol} بمبلغ ${amount.toFixed(4)} ${nativeToken.symbol} من المحفظة ${selectedWallet.address.slice(0, 8)}...${selectedWallet.address.slice(-6)} بنجاح!\n${profitMessage}`,
         txHash: result.txHash,
       });
 
@@ -1023,6 +1082,40 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
               </p>
             </div>
 
+           {/* ✅ اختيار المحفظة (يظهر دائماً عند وجود محفظة واحدة على الأقل) */}
+{userWalletsList.length > 0 && (
+  <div className="flex items-center gap-2 mb-3">
+    <Wallet className="w-4 h-4 text-slate-400" />
+    <span className="text-xs text-slate-400">{t('selectWallet')}:</span>
+    <div className="relative flex-1">
+      <select
+        value={selectedWalletId || ''}
+        onChange={(e) => {
+          const walletId = e.target.value;
+          setSelectedWalletId(walletId);
+          const wallet = userWalletsList.find(w => w.id === walletId);
+          if (wallet) {
+            setUserBalance(wallet.balance);
+            // إعادة تعيين المبلغ إذا كان أكبر من الرصيد الجديد
+            if (amount > wallet.balance) {
+              setAmount(0);
+              setAmountInput('');
+            }
+          }
+        }}
+        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#8b5cf6] appearance-none"
+      >
+        {userWalletsList.map(w => (
+          <option key={w.id} value={w.id}>
+            {w.address.slice(0, 8)}...{w.address.slice(-6)} (رصيد: {w.balance.toFixed(4)} {nativeToken?.symbol})
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+    </div>
+  </div>
+)}
+            {/* ✅ أزرار النسب المئوية */}
             <div className="flex gap-2 mb-3">
               {['25%', '50%', '75%', '100%'].map((pct) => (
                 <button
@@ -1182,10 +1275,10 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
           <div className="flex flex-wrap gap-3">
             <button
               onClick={() => executeTrade('BUY')}
-              disabled={executing || !user || !tradingEnabled}
+              disabled={executing || !user || !tradingEnabled || !selectedWalletId}
               className={`flex-1 py-2.5 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 ${
                 executing ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 
-                !tradingEnabled ? 'bg-slate-700 text-slate-400 cursor-not-allowed' :
+                !tradingEnabled || !selectedWalletId ? 'bg-slate-700 text-slate-400 cursor-not-allowed' :
                 'bg-emerald-600 hover:bg-emerald-700 text-white'
               }`}
             >
@@ -1194,10 +1287,10 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
             </button>
             <button
               onClick={() => executeTrade('SELL')}
-              disabled={executing || !user || !tradingEnabled}
+              disabled={executing || !user || !tradingEnabled || !selectedWalletId}
               className={`flex-1 py-2.5 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 ${
                 executing ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 
-                !tradingEnabled ? 'bg-slate-700 text-slate-400 cursor-not-allowed' :
+                !tradingEnabled || !selectedWalletId ? 'bg-slate-700 text-slate-400 cursor-not-allowed' :
                 'bg-red-600 hover:bg-red-700 text-white'
               }`}
             >
@@ -1222,6 +1315,9 @@ export function AIAnalysisPage({ pendingAnalysis, onConsumePending }: AIAnalysis
           )}
           {!tradingEnabled && user && (
             <p className="text-center text-xs text-amber-400">⚠️ التداول معطل. فعّل التداول أولاً.</p>
+          )}
+          {!selectedWalletId && user && tradingEnabled && (
+            <p className="text-center text-xs text-amber-400">⚠️ الرجاء اختيار محفظة للشراء</p>
           )}
         </div>
       )}
