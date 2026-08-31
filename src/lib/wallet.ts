@@ -509,7 +509,7 @@ export class BotWalletManager {
 // src/lib/wallet.ts - دالة _initInternal
 
 private async _initInternal(network: string = 'solana'): Promise<BotWalletData> {
-  // ✅✅✅ الشبكات الصحيحة فقط
+  // ✅ الشبكات الصحيحة فقط
   const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
   
   if (!VALID_NETWORKS.includes(network)) {

@@ -557,36 +557,41 @@ export class AccountManager {
   // ============================================================
 
   // ✅ إنشاء محفظة للمستخدم على شبكة محددة
-  static async createUserWallet(userId: string, network: string): Promise<UserWallet> {
-    console.log(`💰 createUserWallet - إنشاء محفظة للمستخدم ${userId} على ${network}`);
-    
-    const user = await this.getAccount(userId);
-    if (!user) throw new Error('المستخدم غير موجود');
+static async createUserWallet(userId: string, network: string): Promise<UserWallet> {
+  console.log(`💰 createUserWallet - إنشاء محفظة للمستخدم ${userId} على ${network}`);
+  
+  const user = await this.getAccount(userId);
+  if (!user) throw new Error('المستخدم غير موجود');
 
-    // ✅ التحقق من وجود محفظة بنفس الشبكة
-    const existing = await this.getUserWallet(userId, network);
-    if (existing) {
-      throw new Error(`توجد محفظة بالفعل لشبكة ${network}`);
-    }
+  // ✅ التحقق من وجود محفظة بنفس الشبكة
+  const existing = await this.getUserWallet(userId, network);
+  if (existing) {
+    throw new Error(`توجد محفظة بالفعل لشبكة ${network}`);
+  }
 
-    // ✅ إنشاء عنوان ومفتاح خاص
-    const { address, privateKey } = createWallet(network);
-    const encryptedKey = encrypt(privateKey, 'user_wallet_salt');
+  // ✅ إنشاء عنوان ومفتاح خاص
+  const { address, privateKey } = createWallet(network);
+  const encryptedKey = encrypt(privateKey, 'user_wallet_salt');
 
-    const wallet: UserWallet = {
-      id: generateId(),
-      userId,
-      network,
-      address,
-      encryptedPrivateKey: encryptedKey,
-      balance: 0,
-      created_at: getTimestamp(),
-      updated_at: getTimestamp(),
-    };
+  const wallet: UserWallet = {
+    id: generateId(),
+    userId,
+    network,
+    address,
+    encryptedPrivateKey: encryptedKey,
+    balance: 0,
+    created_at: getTimestamp(),
+    updated_at: getTimestamp(),
+  };
 
-    await madarCreate('user_wallets', wallet);
-    console.log(`✅ تم إنشاء محفظة المستخدم ${network}: ${address.slice(0, 10)}...`);
+  // ✅ فقط إنشاء محفظة المستخدم (وليس محفظة البوت)
+  await madarCreate('user_wallets', wallet);
+  console.log(`✅ تم إنشاء محفظة المستخدم ${network}: ${address.slice(0, 10)}...`);
 
+  // ❌ تم إزالة إنشاء محفظة البوت التلقائي
+
+  return wallet;
+}
     // ============================================================
     // ⭐ ربط المحفظة مع bot_wallet (الإضافة الجديدة)
     // ============================================================
