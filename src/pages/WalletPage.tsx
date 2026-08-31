@@ -1,8 +1,10 @@
-﻿// src/pages/WalletPage.tsx
+// src/pages/WalletPage.tsx
 // ============================================================
 // 💰 محفظة البوت المركزية - تدير أموال جميع المستخدمين
-// ✅ تظهر محافظ المستخدمين العاديين
+// ✅ تعرض محافظ البوت + محافظ المستخدمين (غير المكررة)
 // ✅ معمارية سحب صحيحة
+// ✅ حل مشكلة عرض الرصيد: تحديث رصيد محفظة البوت من محفظة المستخدم عند التطابق
+// ✅ جلب الرصيد الحي من البلوكشين عند الضغط على تحديث (يدعم RPC مباشر)
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -188,8 +190,8 @@ export function WalletPage() {
     user, 
     transferFromBot, 
     loadUserWallets,
-    userWallets,  // ✅ تأكد من وجودها
-    loadUserWalletsForce, // ✅ دالة إعادة التحميل الإجبارية
+    userWallets,
+    refreshUserBalance,
   } = useApp();
   
   const [wallets, setWallets] = useState<(BotWalletData | UserWallet)[]>([]);
@@ -206,7 +208,7 @@ export function WalletPage() {
   const isLoadingData = useRef(false);
 
   // ============================================================
-  // ✅ دالة تحميل البيانات المحسنة
+  // ✅ دالة تحميل البيانات المحسنة - مع حل مشكلة عرض الرصيد
   // ============================================================
   
   const loadData = useCallback(async (forceRefresh: boolean = false) => {
@@ -222,66 +224,65 @@ export function WalletPage() {
     try {
       console.log(`🔄 جاري تحميل محافظ البوت${forceRefresh ? ' (إجباري)' : ''}...`);
       
-      let allWallets: (BotWalletData | UserWallet)[] = [];
-      
-      // ✅ 1. تحميل محافظ البوت (للأدمن)
+      // ✅ 1. تحميل محافظ البوت
       await loadBotWallets();
       const botWallet = BotWalletManager.getInstance();
       const botWalletsList = botWallet.getAllWallets();
       
       // ✅ 2. تحميل محافظ المستخدمين
       let userWalletsList: UserWallet[] = [];
-      
       if (user) {
-        if (forceRefresh || !userWallets || userWallets.length === 0) {
-          // ✅ إذا كان forceRefresh = true، استخدم الدالة الإجبارية
-          if (loadUserWalletsForce) {
-            userWalletsList = await loadUserWalletsForce();
-          } else {
-            await loadUserWallets();
-            userWalletsList = userWallets || [];
-          }
-        } else {
+        if (userWallets && userWallets.length > 0) {
           userWalletsList = userWallets;
+        } else {
+          await loadUserWallets();
+          userWalletsList = userWallets || [];
         }
       }
       
       console.log(`📊 محافظ البوت: ${botWalletsList.length}`);
       console.log(`📊 محافظ المستخدم: ${userWalletsList.length}`);
       
-      // ✅ 3. دمج المحافظ حسب صلاحية المستخدم
+      // ✅ 3. دمج المحافظ حسب الصلاحية
+      let combined: (BotWalletData | UserWallet)[] = [];
       if (user?.isAdmin) {
-        // ✅ الأدمن يرى كل شيء: محافظ البوت + محافظ المستخدمين
-        allWallets = [...botWalletsList, ...userWalletsList];
-        console.log(`👑 الأدمن يرى ${allWallets.length} محفظة (${botWalletsList.length} بوت + ${userWalletsList.length} مستخدم)`);
+        combined = [...botWalletsList, ...userWalletsList];
       } else if (user) {
-        // ✅ المستخدم العادي يرى محافظه فقط (محافظ البوت الخاصة به)
-        // ✅ نأخذ محافظ المستخدم من userWallets
-        allWallets = userWalletsList;
-        console.log(`👤 المستخدم يرى ${allWallets.length} محفظة`);
+        combined = userWalletsList;
       } else {
-        // ✅ لا يوجد مستخدم
-        allWallets = botWalletsList;
-        console.log(`👤 لا يوجد مستخدم، عرض محافظ البوت فقط (${allWallets.length})`);
+        combined = botWalletsList;
       }
       
-      // ✅ 4. إزالة المكررات (حسب الشبكة)
-      const uniqueWallets = allWallets.reduce((acc, current) => {
-        const network = (current as any).network;
-        const exists = acc.find(item => (item as any).network === network);
-        if (!exists) {
-          acc.push(current);
-        } else {
-          // ✅ إذا كان هناك مكرر، احتفظ بالأحدث
-          const existingIndex = acc.indexOf(exists);
-          const currentDate = new Date((current as any).created_at || (current as any).createdAt || 0);
-          const existsDate = new Date((exists as any).created_at || (exists as any).createdAt || 0);
-          if (currentDate > existsDate) {
-            acc[existingIndex] = current;
+      // ✅ 4. إزالة المكررات وتحديث رصيد محفظة البوت من محفظة المستخدم
+      const uniqueWallets: (BotWalletData | UserWallet)[] = [];
+      const seen = new Set<string>();
+      
+      // ✅ أولاً: نضيف محافظ البوت (ونحدث رصيدها إذا وجدت محفظة مستخدم مطابقة)
+      for (const w of botWalletsList) {
+        const key = `${(w as any).network}-${(w as any).address}`;
+        if (!seen.has(key)) {
+          // ✅ البحث عن محفظة مستخدم بنفس الشبكة والعنوان
+          const matchingUser = userWalletsList.find(
+            uw => uw.network === (w as any).network && uw.address === (w as any).address
+          );
+          // ✅ إذا وجدت محفظة مستخدم، نأخذ رصيدها ونحدّث محفظة البوت (في الذاكرة)
+          if (matchingUser && matchingUser.balance !== undefined) {
+            (w as any).balance = matchingUser.balance;
+            console.log(`🔄 تحديث رصيد محفظة البوت ${(w as any).network} إلى ${matchingUser.balance} (من محفظة المستخدم)`);
           }
+          uniqueWallets.push(w);
+          seen.add(key);
         }
-        return acc;
-      }, [] as (BotWalletData | UserWallet)[]);
+      }
+      
+      // ✅ ثانياً: نضيف محافظ المستخدم التي ليس لها مثيل في محافظ البوت
+      for (const w of userWalletsList) {
+        const key = `${(w as any).network}-${(w as any).address}`;
+        if (!seen.has(key)) {
+          uniqueWallets.push(w);
+          seen.add(key);
+        }
+      }
       
       setWallets(uniqueWallets);
       
@@ -312,7 +313,7 @@ export function WalletPage() {
       setIsLoading(false);
       isLoadingData.current = false;
     }
-  }, [user, loadBotWallets, loadUserWallets, loadUserWalletsForce, userWallets]);
+  }, [user, loadBotWallets, loadUserWallets, userWallets]);
 
   // ============================================================
   // ✅ تحميل عند تغيير المستخدم
@@ -326,15 +327,85 @@ export function WalletPage() {
   }, [user?.id, loadData]);
 
   // ============================================================
-  // ✅ تحديث الرصيد
+  // ✅ دالة مساعدة لجلب الرصيد من RPC مباشر (Solana)
+  // ============================================================
+  const fetchBalanceFromRPC = async (address: string): Promise<number> => {
+    try {
+      const response = await fetch('https://api.mainnet-beta.solana.com', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getBalance',
+          params: [address],
+        }),
+      });
+      const data = await response.json();
+      if (data.result && data.result.value !== undefined) {
+        return data.result.value / 1e9;
+      }
+      return 0;
+    } catch (error) {
+      console.error('❌ RPC مباشر فشل:', error);
+      return 0;
+    }
+  };
+
+  // ============================================================
+  // ✅ تحديث الرصيد (يجلب الرصيد الحي من البلوكشين ويعرضه فوراً)
   // ============================================================
   
   const refreshBalance = async (network: string) => {
     setIsLoading(true);
     try {
-      const newBalance = await refreshBotBalance(network);
-      addLog("SUCCESS", `✅ تم تحديث رصيد ${network}: $${newBalance.toFixed(2)}`);
+      let liveBalance = 0;
+      const address = botWallets.find(w => w.network === network)?.address;
+
+      // ✅ 1. محاولة جلب الرصيد عبر Worker
+      try {
+        liveBalance = await refreshBotBalance(network);
+        console.log(`💰 الرصيد عبر Worker (${network}): ${liveBalance}`);
+      } catch (workerError) {
+        console.warn(`⚠️ Worker فشل، محاولة RPC مباشر...`);
+      }
+
+      // ✅ 2. إذا كان الرصيد 0 أو Worker فشل، جرب RPC مباشر (للـ Solana)
+      if (liveBalance === 0 && network === 'solana' && address) {
+        liveBalance = await fetchBalanceFromRPC(address);
+        console.log(`💰 الرصيد من RPC مباشر (${network}): ${liveBalance}`);
+      }
+
+      // ✅ 3. إذا كان الرصيد لا يزال 0، حاول أخذه من محفظة المستخدم (إذا وجدت بنفس العنوان)
+      if (liveBalance === 0 && address) {
+        const matchingUser = userWallets.find(
+          uw => uw.network === network && uw.address === address
+        );
+        if (matchingUser && matchingUser.balance > 0) {
+          liveBalance = matchingUser.balance;
+          console.log(`💰 الرصيد مأخوذ من محفظة المستخدم: ${liveBalance}`);
+        }
+      }
+
+      // ✅ 4. تحديث الرصيد في القائمة الحالية (عرض فوري)
+      setWallets(prevWallets => 
+        prevWallets.map(w => {
+          if ((w as any).network === network && (w as any).address) {
+            (w as any).balance = liveBalance;
+          }
+          return w;
+        })
+      );
+
+      // ✅ 5. تحديث الرصيد في قاعدة البيانات (للاستخدام المستقبلي)
+      if (user && liveBalance > 0) {
+        await refreshUserBalance(network);
+      }
+      
+      // ✅ 6. إعادة تحميل البيانات من قاعدة البيانات (لضمان التزامن)
       await loadData(true);
+      
+      addLog("SUCCESS", `✅ تم تحديث رصيد ${getNetworkName(network)}: $${liveBalance.toFixed(4)}`);
     } catch (error) {
       addLog("ERROR", `❌ فشل تحديث الرصيد: ${String(error)}`);
       setError("❌ فشل تحديث الرصيد");
@@ -344,7 +415,7 @@ export function WalletPage() {
   };
 
   // ============================================================
-  // ✅ دالة سحب من البوت إلى المستخدم (معمارية صحيحة)
+  // ✅ دالة سحب من البوت إلى المستخدم
   // ============================================================
   
   const handleTransferFromBot = async (wallet: BotWalletData | UserWallet) => {
@@ -377,12 +448,9 @@ export function WalletPage() {
     }
     
     try {
-      // ✅ الحصول على bot_id من المحفظة
       let botId = (wallet as any).bot_id || (wallet as any).id;
       
-      // ✅ إذا كانت محفظة مستخدم، نحتاج إلى إيجاد البوت المرتبط
       if (!botId) {
-        // ✅ محاولة إيجاد البوت من bot_instances
         const botResult = await AccountManager.getUserBots(user.id);
         if (botResult && botResult.length > 0) {
           botId = botResult[0].id;
