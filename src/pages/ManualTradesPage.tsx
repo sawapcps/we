@@ -1,13 +1,16 @@
 // src/pages/ManualTradesPage.tsx
-// Full-width trading terminal with DexScreener links - No Bot Required
+// ✅ نسخة معدلة - دعم متعدد الشبكات (Multi-Network) مع ربط المحافظ
+// ✅ اختيار عدة شبكات في وقت واحد + عرض محافظ كل شبكة
+// ✅ لا توجد قيم افتراضية
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatUsd } from '../lib/format';
 import { BotWalletManager } from '../lib/wallet';
 import { AccountManager } from '../lib/accounts';
 import { discoverAllPairs } from '../lib/discovery';
 import { NETWORKS, getNetworkName } from '../config/networks';
+import { analyzeToken, quickAnalysis } from '../lib/gemini';
 import {
   AlertCircle,
   BarChart3,
@@ -18,13 +21,9 @@ import {
   Droplets,
   Eye,
   ExternalLink,
-  Filter,
-  Globe,
-  KeyRound,
   Loader2,
   RefreshCw,
   Search,
-  Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -34,12 +33,10 @@ import {
   Wallet,
   X,
   Zap,
-  ArrowRight,
-  Coins,
-  Star,
   Clock,
   Flame,
   Rocket,
+  Globe,
 } from 'lucide-react';
 
 const ITEMS_PER_PAGE = 60;
@@ -106,6 +103,10 @@ interface Signal {
   dexName?: string;
   pairAddress?: string;
   dexUrl?: string;
+  aiPriceTarget?: number | null;
+  aiConfidence?: number | null;
+  aiSummary?: string | null;
+  aiRecommendation?: string | null;
 }
 
 interface TokenMetricProps {
@@ -206,7 +207,7 @@ function TokenAvatar({ signal }: { signal: Signal }) {
 }
 
 // ============================================================
-// ✅ TokenCard - نسخة محدثة
+// ✅ TokenCard
 // ============================================================
 
 function TokenCard({
@@ -216,6 +217,7 @@ function TokenCard({
   onCopy,
   copied,
   showAI,
+  isAnalyzing,
 }: {
   signal: Signal;
   onBuy: () => void;
@@ -223,6 +225,7 @@ function TokenCard({
   onCopy: () => void;
   copied: boolean;
   showAI: boolean;
+  isAnalyzing?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const nativeToken = NATIVE_TOKENS[signal.network] || NATIVE_TOKENS.solana;
@@ -252,7 +255,6 @@ function TokenCard({
 
   const dexUrl = signal.dexUrl || `https://dexscreener.com/${signal.network}/${signal.pairAddress || signal.tokenAddress}`;
 
-  // ✅ تحديد أيقونة بناءً على العمر
   const getAgeIcon = () => {
     if (signal.ageInSeconds < 300) return <Flame size={14} className="text-orange-400" />;
     if (signal.ageInSeconds < 1800) return <Rocket size={14} className="text-cyan-400" />;
@@ -292,6 +294,11 @@ function TokenCard({
             <span className={`text-[11px] font-mono font-bold ${priceTone}`}>
               {signal.priceChange24h >= 0 ? '+' : ''}{signal.priceChange24h.toFixed(1)}%
             </span>
+            {signal.aiConfidence && showAI && (
+              <span className="text-[9px] px-2 py-0.5 bg-violet-500/20 text-violet-400 rounded-full font-medium">
+                🤖 AI {signal.aiConfidence}%
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-1">
@@ -336,7 +343,11 @@ function TokenCard({
           <div className="flex items-center gap-4 text-[10px] text-slate-500 mt-1.5">
             <span className="font-mono">TX {compactNumber(signal.txCount)}</span>
             <span className="font-mono">F {priceText(signal.price)}</span>
-            {showAI && <span className="text-violet-400/80 font-medium">🤖 AI {signal.confidence}%</span>}
+            {showAI && signal.aiSummary && (
+              <span className="text-violet-400/80 font-medium truncate max-w-[150px]">
+                🤖 {signal.aiSummary}
+              </span>
+            )}
           </div>
         </div>
 
@@ -351,9 +362,11 @@ function TokenCard({
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); onBuy(); }}
-            className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 px-4 py-1.5 text-[11px] font-bold text-emerald-400 transition-all duration-200 hover:scale-105"
+            disabled={isAnalyzing}
+            className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 px-4 py-1.5 text-[11px] font-bold text-emerald-400 transition-all duration-200 hover:scale-105 disabled:opacity-50"
           >
-            <Zap size={14} className="text-emerald-400" /> Buy {nativeToken.symbol}
+            {isAnalyzing ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} className="text-emerald-400" />}
+            {isAnalyzing ? 'AI...' : `Buy ${nativeToken.symbol}`}
           </button>
         </div>
       </div>
@@ -378,9 +391,10 @@ function TokenCard({
         <div className="flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
           <button
             onClick={(e) => { e.stopPropagation(); onSell(); }}
-            className="px-2 py-0.5 text-red-400 hover:bg-red-500/10 rounded transition-all font-medium text-[10px]"
+            disabled={isAnalyzing}
+            className="px-2 py-0.5 text-red-400 hover:bg-red-500/10 rounded transition-all font-medium text-[10px] disabled:opacity-50"
           >
-            Sell {nativeToken.symbol}
+            {isAnalyzing ? '...' : `Sell ${nativeToken.symbol}`}
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onCopy(); }}
@@ -418,6 +432,21 @@ function TokenCard({
             <div className="text-slate-500 text-[9px] font-medium">Creator Holdings</div>
             <div className="text-slate-300 text-[11px]">{Math.round(signal.creatorPercent || 0)}%</div>
           </div>
+          {signal.aiPriceTarget && (
+            <div className="col-span-2 md:col-span-3 bg-violet-500/10 rounded-lg p-2.5 border border-violet-500/20">
+              <div className="flex items-center justify-between">
+                <div className="text-violet-400 text-[9px] font-medium">🤖 تحليل الذكاء الاصطناعي</div>
+                <div className="text-[10px] text-violet-300">ثقة: {signal.aiConfidence || 0}%</div>
+              </div>
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-[10px] text-slate-400">السعر المستهدف</span>
+                <span className="text-[11px] font-bold text-violet-400">${signal.aiPriceTarget.toFixed(8)}</span>
+              </div>
+              {signal.aiSummary && (
+                <div className="text-[9px] text-slate-400 mt-1">{signal.aiSummary}</div>
+              )}
+            </div>
+          )}
           <div className="col-span-2 md:col-span-3 bg-slate-800/50 rounded-lg p-2.5">
             <div className="text-slate-500 text-[9px] font-medium">DexScreener</div>
             <a
@@ -437,7 +466,7 @@ function TokenCard({
 }
 
 // ============================================================
-// ✅ Column - نسخة محدثة
+// ✅ Column
 // ============================================================
 
 function Column({
@@ -452,6 +481,7 @@ function Column({
   onCopy,
   copiedAddress,
   showAI,
+  isAnalyzing,
 }: {
   id: ColumnId;
   title: string;
@@ -464,6 +494,7 @@ function Column({
   onCopy: (address: string) => void;
   copiedAddress: string | null;
   showAI: boolean;
+  isAnalyzing?: boolean;
 }) {
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800/60 bg-slate-900/30 backdrop-blur-sm">
@@ -495,6 +526,7 @@ function Column({
               onCopy={() => onCopy(signal.tokenAddress)}
               copied={copiedAddress === signal.tokenAddress}
               showAI={showAI}
+              isAnalyzing={isAnalyzing}
             />
           ))
         )}
@@ -504,7 +536,7 @@ function Column({
 }
 
 // ============================================================
-// ✅ الصفحة الرئيسية - نسخة محدثة بالكامل
+// ✅ الصفحة الرئيسية
 // ============================================================
 
 export function ManualTradesPage() {
@@ -525,7 +557,10 @@ export function ManualTradesPage() {
   const [showAI, setShowAI] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedNetwork, setSelectedNetwork] = useState<string>('solana');
+  
+  // ✅ تغيير من شبكة واحدة إلى مجموعة شبكات (Multi-Network)
+  const [selectedNetworks, setSelectedNetworks] = useState<string[]>(['solana']);
+  
   const [activeColumn, setActiveColumn] = useState<ColumnId | 'all'>('all');
   const [minLiquidity, setMinLiquidity] = useState(0);
   const [minVolume, setMinVolume] = useState(0);
@@ -536,15 +571,25 @@ export function ManualTradesPage() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [userWallet, setUserWallet] = useState<any>(null);
-  const [isLoadingWallet, setIsLoadingWallet] = useState(false);
   const [tradeResult, setTradeResult] = useState<{ success: boolean; message: string } | null>(null);
   const mountedRef = useRef(true);
+  
+  // ✅ حالات المحافظ والأسعار (لكل شبكة)
+  const [userWalletsMap, setUserWalletsMap] = useState<Record<string, any>>({});
+  const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
+  const [selectedWalletBalance, setSelectedWalletBalance] = useState(0);
+  const [nativePrices, setNativePrices] = useState<Record<string, number>>({});
+  const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
+  const [isLoadingWallets, setIsLoadingWallets] = useState(false);
 
   const activeNetworks = botConfig?.networks || ['solana'];
-  const availableNetworks = NETWORKS.filter(n => activeNetworks.includes(n.id));
+const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات الـ 9
 
+  // ✅ الحصول على العملة الأساسية للشبكة المحددة
   const nativeToken = selectedSignal ? NATIVE_TOKENS[selectedSignal.network] || NATIVE_TOKENS.solana : null;
+  
+  // ✅ الحصول على الشبكات المختارة كأسماء معروضة
+  const selectedNetworkNames = selectedNetworks.map(id => getNetworkName(id)).join(' + ');
 
   // ✅ دوال العملات المستقرة (USDC/USDT)
   const getStablecoinAddress = (network: string): string => {
@@ -577,6 +622,96 @@ export function ManualTradesPage() {
     }
   };
 
+  // ✅ جلب سعر العملة الأساسية (SOL, ETH, BNB...) لكل شبكة
+  const fetchNativePrice = useCallback(async (network: string) => {
+    try {
+      const WORKER_URL = import.meta.env.VITE_WORKER_URL;
+      const nativeToken = NATIVE_TOKENS[network];
+      if (!nativeToken) return 0;
+
+      if (WORKER_URL) {
+        const response = await fetch(`${WORKER_URL}/dex-data`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tokenAddress: nativeToken.address,
+            network,
+          }),
+        });
+        const data = await response.json();
+        if (data.success && data.data?.price) {
+          return data.data.price;
+        }
+      }
+
+      const symbol = nativeToken.symbol;
+      const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${symbol}`);
+      const data = await response.json();
+
+      if (data.pairs && data.pairs.length > 0) {
+        const pair = data.pairs.find((p: any) =>
+          p.chainId === network &&
+          (p.quoteToken?.symbol === 'USDC' || p.quoteToken?.symbol === 'USDT')
+        );
+        if (pair) {
+          return parseFloat(pair.priceUsd || 0);
+        }
+      }
+      return 0;
+    } catch (error) {
+      console.error('❌ فشل جلب السعر:', error);
+      return 0;
+    }
+  }, []);
+
+  // ✅ جلب جميع أسعار العملات الأساسية للشبكات المختارة
+  const fetchAllNativePrices = useCallback(async (networks: string[]) => {
+    const prices: Record<string, number> = {};
+    for (const network of networks) {
+      const price = await fetchNativePrice(network);
+      if (price > 0) {
+        prices[network] = price;
+      }
+    }
+    setNativePrices(prices);
+    return prices;
+  }, [fetchNativePrice]);
+
+  // ✅ جلب محافظ المستخدم لكل شبكة
+  const fetchAllUserWallets = useCallback(async (networks: string[]) => {
+    if (!user) return;
+
+    setIsLoadingWallets(true);
+    try {
+      const allWallets = await AccountManager.getAllUserWallets(user.id);
+      const walletsMap: Record<string, any> = {};
+      
+      for (const network of networks) {
+        const filtered = allWallets.filter(w => w.network === network);
+        if (filtered.length > 0) {
+          walletsMap[network] = filtered[0]; // استخدم الأولى
+        } else {
+          // إنشاء محفظة جديدة إذا لم توجد
+          const newWallet = await AccountManager.createUserWallet(user.id, network);
+          walletsMap[network] = newWallet;
+        }
+      }
+      
+      setUserWalletsMap(walletsMap);
+      
+      // اختيار المحفظة الأولى كافتراضي
+      const firstWallet = Object.values(walletsMap)[0];
+      if (firstWallet) {
+        setSelectedWalletId(firstWallet.id);
+        setSelectedWalletBalance(firstWallet.balance);
+      }
+    } catch (error) {
+      console.error('❌ فشل جلب المحافظ:', error);
+    } finally {
+      setIsLoadingWallets(false);
+    }
+  }, [user]);
+
   // ============================================================
   // دوال مساعدة
   // ============================================================
@@ -593,23 +728,56 @@ export function ManualTradesPage() {
     }
   };
 
-  const loadUserWallet = async () => {
-    if (!user) return;
-
-    setIsLoadingWallet(true);
+  // ✅ جلب تحليل الذكاء الاصطناعي للعملة
+  const fetchAIAnalysis = async (signal: Signal, action: 'BUY' | 'SELL'): Promise<Signal> => {
     try {
-      let wallet = await AccountManager.getUserWallet(user.id, selectedNetwork);
+      const tokenData = {
+        tokenAddress: signal.tokenAddress || '',
+        symbol: signal.tokenSymbol || 'UNKNOWN',
+        name: signal.tokenName || signal.tokenSymbol || 'Unknown',
+        chainId: signal.network || 'solana',
+        priceUsd: signal.price || 0,
+        liquidityUsd: signal.liquidity || 0,
+        volume24h: signal.volume || 0,
+        priceChange24h: signal.priceChange24h || 0,
+        imageUrl: signal.imageUrl || null,
+        score: signal.score || 0,
+        priceChange: {
+          h24: signal.priceChange24h || 0,
+          h6: 0,
+          h1: 0,
+          m5: 0,
+        },
+      };
 
-      if (!wallet) {
-        wallet = await AccountManager.createUserWallet(user.id, selectedNetwork);
-        addLog('SUCCESS', `تم إنشاء محفظة ${getNetworkName(selectedNetwork)}`);
+      const analysis = await analyzeToken(tokenData);
+      
+      if (analysis) {
+        return {
+          ...signal,
+          aiPriceTarget: analysis.priceTarget || null,
+          aiConfidence: analysis.confidence || null,
+          aiSummary: analysis.summary || null,
+          aiRecommendation: analysis.recommendation || null,
+        };
       }
-
-      setUserWallet(wallet);
-    } catch (error: any) {
-      addLog('ERROR', `فشل تحميل المحفظة: ${error?.message || String(error)}`);
-    } finally {
-      setIsLoadingWallet(false);
+      
+      return {
+        ...signal,
+        aiPriceTarget: null,
+        aiConfidence: null,
+        aiSummary: null,
+        aiRecommendation: null,
+      };
+    } catch (error) {
+      console.error('❌ فشل تحليل AI:', error);
+      return {
+        ...signal,
+        aiPriceTarget: null,
+        aiConfidence: null,
+        aiSummary: null,
+        aiRecommendation: null,
+      };
     }
   };
 
@@ -677,14 +845,14 @@ export function ManualTradesPage() {
 
     const imageUrl = info?.imageUrl || null;
 
-    const dexUrl = `https://dexscreener.com/${pair?.chainId || selectedNetwork}/${pair?.pairAddress || pair?.baseToken?.address || ''}`;
+    const dexUrl = `https://dexscreener.com/${pair?.chainId || 'solana'}/${pair?.pairAddress || pair?.baseToken?.address || ''}`;
 
     return {
       id: pair?.pairAddress || pair?.baseToken?.address || `${pair?.chainId}-${pair?.baseToken?.symbol}-${Math.random()}`,
       tokenAddress: pair?.baseToken?.address || '',
       tokenSymbol: pair?.baseToken?.symbol || 'UNKNOWN',
       tokenName: pair?.baseToken?.name || pair?.baseToken?.symbol || 'Unknown',
-      network: pair?.chainId || selectedNetwork,
+      network: pair?.chainId || 'solana',
       price: Number(pair?.priceUsd || 0),
       score,
       recommendation,
@@ -728,47 +896,61 @@ export function ManualTradesPage() {
       dexName: pair?.dexId || pair?.dex?.name || '',
       pairAddress: pair?.pairAddress || '',
       dexUrl: dexUrl,
+      aiPriceTarget: null,
+      aiConfidence: null,
+      aiSummary: null,
+      aiRecommendation: null,
     };
   };
 
   // ============================================================
-  // جلب البيانات
+  // جلب البيانات من عدة شبكات (Multi-Network)
   // ============================================================
 
-  const fetchAllPairs = async (network: string, reset = true) => {
-    if (reset) {
-      setAllPairs([]);
+  const fetchAllPairs = async (networks: string[], reset = true) => {
+    if (networks.length === 0) {
       setSignals([]);
-      setPage(1);
-      setHasMore(true);
+      setAllPairs([]);
+      setHasMore(false);
+      return;
     }
 
     setIsSearching(true);
 
     try {
-      const result = await discoverAllPairs(network as any);
-      const pairs = result?.pairs || [];
+      // ✅ جلب البيانات من جميع الشبكات المختارة بالتوازي
+      const allPairsPromises = networks.map(network => 
+        discoverAllPairs(network as any).then(result => ({
+          network,
+          pairs: result?.pairs || [],
+        }))
+      );
 
-      if (!pairs.length) {
-        addLog('WARNING', `لا توجد بيانات على ${getNetworkName(network)}`);
-        setAllPairs([]);
-        setSignals([]);
-        setHasMore(false);
-        return;
-      }
+      const results = await Promise.all(allPairsPromises);
+      
+      // ✅ دمج جميع الأزواج من جميع الشبكات
+      const allPairs = results.flatMap(r => r.pairs);
+      setAllPairs(allPairs);
 
-      setAllPairs(pairs);
-
-      const firstPage = pairs.slice(0, ITEMS_PER_PAGE).map(dexPairToSignal);
+      // ✅ تحويل البيانات إلى إشارات
+      const firstPage = allPairs.slice(0, ITEMS_PER_PAGE).map(dexPairToSignal);
       setSignals(firstPage);
-      setHasMore(pairs.length > ITEMS_PER_PAGE);
+      setHasMore(allPairs.length > ITEMS_PER_PAGE);
 
+      // ✅ جلب أسعار العملات الأساسية لكل شبكة
+      await fetchAllNativePrices(networks);
+
+      // ✅ جلب محافظ المستخدم لكل شبكة
+      await fetchAllUserWallets(networks);
+
+      const totalPairs = allPairs.length;
+      const totalNetworks = networks.length;
       addLog(
         'SUCCESS',
-        `تم تحميل ${firstPage.length} من ${pairs.length} زوجًا على ${getNetworkName(network)}`
+        `✅ تم تحميل ${firstPage.length} من ${totalPairs} زوجًا من ${totalNetworks} شبكة (${networks.join(', ')})`
       );
     } catch (error: any) {
-      addLog('ERROR', `فشل جلب البيانات: ${error?.message || String(error)}`);
+      addLog('ERROR', `❌ فشل جلب البيانات: ${error?.message || String(error)}`);
       setSignals([]);
       setAllPairs([]);
       setHasMore(false);
@@ -803,30 +985,33 @@ export function ManualTradesPage() {
     const query = searchQuery.trim();
 
     if (!query) {
-      await fetchAllPairs(selectedNetwork, true);
+      await fetchAllPairs(selectedNetworks, true);
       return;
     }
 
     setIsSearching(true);
 
     try {
-      const response = await fetch(
-        `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`
-      );
-      const data = await response.json();
+      // ✅ البحث في جميع الشبكات المختارة
+      const searchPromises = selectedNetworks.map(async (network) => {
+        const response = await fetch(
+          `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`
+        );
+        const data = await response.json();
+        return (data?.pairs || []).filter((p: any) => p.chainId === network);
+      });
 
-      const pairs = (data?.pairs || []).filter(
-        (p: any) => p.chainId === selectedNetwork
-      );
+      const results = await Promise.all(searchPromises);
+      const allPairs = results.flat();
 
-      const result = pairs.map(dexPairToSignal);
-      setSignals(result);
-      setAllPairs(pairs);
+      const signals = allPairs.map(dexPairToSignal);
+      setSignals(signals);
+      setAllPairs(allPairs);
       setHasMore(false);
 
-      addLog('SUCCESS', `نتائج البحث: ${result.length}`);
+      addLog('SUCCESS', `✅ نتائج البحث: ${signals.length} من ${selectedNetworks.length} شبكة`);
     } catch (error: any) {
-      addLog('ERROR', `فشل البحث: ${error?.message || String(error)}`);
+      addLog('ERROR', `❌ فشل البحث: ${error?.message || String(error)}`);
       setSignals([]);
     } finally {
       setIsSearching(false);
@@ -834,7 +1019,7 @@ export function ManualTradesPage() {
   };
 
   // ============================================================
-  // ✅ تنفيذ الصفقة - بدون بوت وبدون حدود
+  // ✅ تنفيذ الصفقة مع تحليل AI
   // ============================================================
 
   const executeTrade = async (signal: Signal, action: TradeAction) => {
@@ -850,27 +1035,22 @@ export function ManualTradesPage() {
       return;
     }
 
+    // ✅ التحقق من اختيار المحفظة
+    const selectedWallet = Object.values(userWalletsMap).find(w => w.id === selectedWalletId);
+    if (!selectedWallet) {
+      setTradeResult({ success: false, message: '⚠️ الرجاء اختيار محفظة أولاً' });
+      return;
+    }
+
     setExecuting(true);
     setIsLoading(true);
 
     try {
-      const wallet = await AccountManager.getUserWallet(
-        user.id,
-        signal.network
-      );
-
-      if (!wallet) {
-        throw new Error('لا توجد محفظة على هذه الشبكة');
-      }
-
-      const balance = await AccountManager.getUserWalletBalance(
-        user.id,
-        signal.network
-      );
+      const balance = await AccountManager.getUserWalletBalance(user.id, signal.network, selectedWallet.address);
 
       if (action === 'BUY' && balance < amount) {
         throw new Error(
-          `الرصيد غير كافٍ: $${balance.toFixed(2)} / المطلوب $${amount}`
+          `الرصيد غير كافٍ: ${balance.toFixed(4)} / المطلوب ${amount}`
         );
       }
 
@@ -895,6 +1075,7 @@ export function ManualTradesPage() {
               slippage: 0.5,
               password: masterPassword,
               network: signal.network,
+              walletAddress: selectedWallet.address,
             })
           : await manager.executeSellForUser({
               userId: user.id,
@@ -903,6 +1084,7 @@ export function ManualTradesPage() {
               slippage: 0.5,
               password: masterPassword,
               network: signal.network,
+              walletAddress: selectedWallet.address,
             });
 
       if (!result.success) {
@@ -938,13 +1120,14 @@ export function ManualTradesPage() {
         txHash: result.txHash || `0x${Date.now()}`,
         userId: user.id,
         botToken: 'manual-trade',
+        walletAddress: selectedWallet.address,
       });
 
       const nativeSymbol = NATIVE_TOKENS[signal.network]?.symbol || 'TOKEN';
       const actionText = action === 'BUY' ? 'شراء' : 'بيع';
       setTradeResult({
         success: true,
-        message: `✅ تم ${actionText} ${signal.tokenSymbol} بـ ${amount} ${nativeSymbol} بنجاح!${profitMessage ? `\n${profitMessage}` : ''}`,
+        message: `✅ تم ${actionText} ${signal.tokenSymbol} بـ ${amount} ${nativeSymbol} من المحفظة ${selectedWallet.address.slice(0, 8)}...${selectedWallet.address.slice(-6)} بنجاح!${profitMessage ? `\n${profitMessage}` : ''}`,
       });
 
       setTimeout(() => {
@@ -954,7 +1137,7 @@ export function ManualTradesPage() {
 
       setTimeout(() => {
         if (mountedRef.current && !searchQuery.trim()) {
-          fetchAllPairs(selectedNetwork, true);
+          fetchAllPairs(selectedNetworks, true);
         }
       }, 2000);
 
@@ -972,6 +1155,38 @@ export function ManualTradesPage() {
   };
 
   // ============================================================
+  // دالة فتح نموذج الشراء مع تحليل AI
+  // ============================================================
+
+  const handleOpenTradeModal = async (signal: Signal, action: 'BUY' | 'SELL') => {
+    setIsAnalyzingAI(true);
+    setSelectedSignal(null);
+    setTradeResult(null);
+
+    try {
+      const analyzedSignal = await fetchAIAnalysis(signal, action);
+      
+      setSelectedSignal({
+        ...analyzedSignal,
+        recommendation: action,
+      });
+      
+      addLog('SUCCESS', `🤖 تم تحليل ${signal.tokenSymbol} بواسطة Gemini AI`);
+    } catch (error) {
+      console.error('❌ فشل تحليل AI:', error);
+      setSelectedSignal({
+        ...signal,
+        recommendation: action,
+        aiPriceTarget: null,
+        aiConfidence: null,
+        aiSummary: null,
+      });
+    } finally {
+      setIsAnalyzingAI(false);
+    }
+  };
+
+  // ============================================================
   // Effects
   // ============================================================
 
@@ -982,21 +1197,20 @@ export function ManualTradesPage() {
     };
   }, []);
 
+  // ✅ جلب البيانات عند تغيير الشبكات المختارة
   useEffect(() => {
-    if (user) loadUserWallet();
-  }, [user, selectedNetwork]);
+    if (selectedNetworks.length > 0) {
+      fetchAllPairs(selectedNetworks, true);
+    }
+  }, [selectedNetworks]);
 
+  // ✅ تحديث الرصيد عند تغيير المحفظة المختارة
   useEffect(() => {
-    fetchAllPairs(selectedNetwork, true);
-
-    const interval = window.setInterval(() => {
-      if (!searchQuery.trim()) {
-        fetchAllPairs(selectedNetwork, true);
-      }
-    }, 60_000);
-
-    return () => window.clearInterval(interval);
-  }, [selectedNetwork]);
+    const wallet = Object.values(userWalletsMap).find(w => w.id === selectedWalletId);
+    if (wallet) {
+      setSelectedWalletBalance(wallet.balance);
+    }
+  }, [selectedWalletId, userWalletsMap]);
 
   // ============================================================
   // تصفية الإشارات
@@ -1074,12 +1288,12 @@ export function ManualTradesPage() {
   };
 
   // ============================================================
-  // ✅ واجهة المستخدم - نسخة محدثة
+  // ✅ واجهة المستخدم
   // ============================================================
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
-      {/* Header - محدث */}
+      {/* Header */}
       <header className="sticky top-0 z-40 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-xl">
         <div className="flex h-16 items-center justify-between gap-4 px-6">
           <div className="flex items-center gap-3">
@@ -1087,7 +1301,9 @@ export function ManualTradesPage() {
               <span className="text-lg font-bold">🖐️ تداول يدوي</span>
             </div>
             <span className="text-xs text-slate-600">|</span>
-            <span className="text-sm text-slate-400 font-medium">{getNetworkName(selectedNetwork)}</span>
+            <span className="text-sm text-slate-400 font-medium">
+              🌐 {selectedNetworks.length} شبكة
+            </span>
           </div>
           <div className="flex items-center gap-3">
             <div className="hidden lg:flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/50 px-3.5 py-2">
@@ -1113,7 +1329,7 @@ export function ManualTradesPage() {
               <SlidersHorizontal size={16} />
             </button>
             <button
-              onClick={() => fetchAllPairs(selectedNetwork, true)}
+              onClick={() => fetchAllPairs(selectedNetworks, true)}
               disabled={isSearching}
               className="rounded-xl bg-gradient-to-r from-cyan-500/20 to-emerald-500/20 hover:from-cyan-500/30 hover:to-emerald-500/30 border border-cyan-500/30 px-4 py-2 text-[11px] font-bold text-cyan-400 transition-all duration-200 disabled:opacity-50 hover:scale-105"
             >
@@ -1124,22 +1340,47 @@ export function ManualTradesPage() {
       </header>
 
       <main className="px-6 pb-16 pt-3">
-        {/* Pulse toolbar - محدث */}
+        {/* Pulse toolbar - ✅ Multi-Network Selection */}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/60 pb-3">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm font-bold text-slate-200">📊 Pulse</span>
-            <select
-              value={selectedNetwork}
-              onChange={e => setSelectedNetwork(e.target.value)}
-              className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-1.5 text-[11px] text-slate-300 outline-none focus:border-cyan-500/50"
-            >
+            
+            {/* ✅ اختيار الشبكات المتعددة (Checkboxes) */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] text-slate-500 font-medium">🌐 الشبكات:</span>
               {availableNetworks.map(network => (
-                <option key={network.id} value={network.id}>
-                  {network.name}
-                </option>
+                <label key={network.id} className="flex items-center gap-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedNetworks.includes(network.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedNetworks([...selectedNetworks, network.id]);
+                      } else {
+                        setSelectedNetworks(selectedNetworks.filter(id => id !== network.id));
+                      }
+                    }}
+                    className="w-3 h-3 accent-cyan-500 rounded"
+                  />
+                  <span className="text-[10px] text-slate-300">{network.name}</span>
+                </label>
               ))}
-            </select>
+              
+              <button
+                onClick={() => setSelectedNetworks(availableNetworks.map(n => n.id))}
+                className="text-[9px] text-cyan-400 hover:text-cyan-300 transition-colors"
+              >
+                ✅ الكل
+              </button>
+              <button
+                onClick={() => setSelectedNetworks([])}
+                className="text-[9px] text-red-400 hover:text-red-300 transition-colors"
+              >
+                ❌ إلغاء
+              </button>
+            </div>
           </div>
+          
           <div className="flex items-center gap-2">
             {[
               ['all', '📊 الكل'],
@@ -1163,7 +1404,7 @@ export function ManualTradesPage() {
           </div>
         </div>
 
-        {/* Filters - محدث */}
+        {/* Filters */}
         {showFilters && (
           <div className="mb-3 rounded-xl border border-slate-800 bg-slate-900/30 p-3.5 backdrop-blur-sm">
             <div className="flex flex-wrap items-end gap-3">
@@ -1223,21 +1464,29 @@ export function ManualTradesPage() {
                 <span>العملات <b className="text-white text-[13px]">{filteredSignals.length}</b></span>
                 <span>شراء <b className="text-emerald-400 text-[13px]">{buyCount}</b></span>
                 <span>متوسط <b className="text-cyan-400 text-[13px]">{avgScore.toFixed(0)}</b></span>
+                <span>🌐 <b className="text-cyan-400 text-[13px]">{selectedNetworks.length}</b></span>
               </div>
             </div>
           </div>
         )}
 
-        {/* Wallet strip - محدث (بدون بوت) */}
+        {/* ✅ Wallet strip - عرض المحافظ لكل شبكة */}
         {user && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-500/20 bg-gradient-to-r from-emerald-500/5 to-cyan-500/5 px-4 py-2.5">
             <div className="flex items-center gap-3 text-[11px]">
               <Wallet size={16} className="text-emerald-400" />
-              <span className="text-slate-400">المحفظة</span>
-              {userWallet && (
-                <span className="font-mono text-slate-300 bg-slate-800/50 px-3 py-1 rounded-lg">
-                  {userWallet.address?.slice(0, 8)}...
-                </span>
+              <span className="text-slate-400">المحافظ</span>
+              {Object.entries(userWalletsMap).length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {Object.entries(userWalletsMap).map(([network, wallet]) => (
+                    <span key={network} className="text-[10px] bg-slate-800/50 px-2 py-1 rounded-lg text-slate-300">
+                      {getNetworkName(network)}: {wallet.address?.slice(0, 6)}...{wallet.address?.slice(-4)}
+                      <span className="text-emerald-400 ml-1">${wallet.balance?.toFixed(2) || '0'}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-slate-500">جاري تحميل المحافظ...</span>
               )}
             </div>
             <div className="flex items-center gap-3 text-[10px]">
@@ -1256,7 +1505,10 @@ export function ManualTradesPage() {
           <div className="flex min-h-[600px] items-center justify-center rounded-xl border border-slate-800 bg-slate-900/30">
             <div className="text-center">
               <Loader2 className="mx-auto mb-4 animate-spin text-cyan-400" size={40} />
-              <p className="text-sm text-slate-400">جاري تحميل البيانات من {getNetworkName(selectedNetwork)}...</p>
+              <p className="text-sm text-slate-400">
+                جاري تحميل البيانات من {selectedNetworks.length} شبكة...
+              </p>
+              <p className="text-xs text-slate-500 mt-1">{selectedNetworks.join(', ')}</p>
             </div>
           </div>
         ) : (
@@ -1268,11 +1520,12 @@ export function ManualTradesPage() {
               count={newPairs.length}
               accent="bg-emerald-400"
               signals={visibleNew}
-              onBuy={signal => setSelectedSignal({ ...signal, recommendation: 'BUY' })}
-              onSell={signal => setSelectedSignal({ ...signal, recommendation: 'SELL' })}
+              onBuy={(signal) => handleOpenTradeModal(signal, 'BUY')}
+              onSell={(signal) => handleOpenTradeModal(signal, 'SELL')}
               onCopy={copyToClipboard}
               copiedAddress={copiedAddress}
               showAI={showAI}
+              isAnalyzing={isAnalyzingAI}
             />
             <Column
               id="final"
@@ -1281,11 +1534,12 @@ export function ManualTradesPage() {
               count={finalStretch.length}
               accent="bg-amber-400"
               signals={visibleFinal}
-              onBuy={signal => setSelectedSignal({ ...signal, recommendation: 'BUY' })}
-              onSell={signal => setSelectedSignal({ ...signal, recommendation: 'SELL' })}
+              onBuy={(signal) => handleOpenTradeModal(signal, 'BUY')}
+              onSell={(signal) => handleOpenTradeModal(signal, 'SELL')}
               onCopy={copyToClipboard}
               copiedAddress={copiedAddress}
               showAI={showAI}
+              isAnalyzing={isAnalyzingAI}
             />
             <Column
               id="migrated"
@@ -1294,11 +1548,12 @@ export function ManualTradesPage() {
               count={migrated.length}
               accent="bg-blue-400"
               signals={visibleMigrated}
-              onBuy={signal => setSelectedSignal({ ...signal, recommendation: 'BUY' })}
-              onSell={signal => setSelectedSignal({ ...signal, recommendation: 'SELL' })}
+              onBuy={(signal) => handleOpenTradeModal(signal, 'BUY')}
+              onSell={(signal) => handleOpenTradeModal(signal, 'SELL')}
               onCopy={copyToClipboard}
               copiedAddress={copiedAddress}
               showAI={showAI}
+              isAnalyzing={isAnalyzingAI}
             />
           </div>
         )}
@@ -1319,7 +1574,7 @@ export function ManualTradesPage() {
       </main>
 
       {/* ============================================================
-          ✅ Trade Modal - نسخة محدثة مع دعم الأصفار
+          ✅ Trade Modal - مع تحليل AI حقيقي ودعم الشبكات المتعددة
           ============================================================ */}
       {selectedSignal && (
         <div
@@ -1327,7 +1582,7 @@ export function ManualTradesPage() {
           onClick={() => !executing && !tradeResult && setSelectedSignal(null)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 to-slate-950 p-6 shadow-2xl shadow-cyan-500/10"
+            className="w-full max-w-lg rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 to-slate-950 p-6 shadow-2xl shadow-cyan-500/10 max-h-[90vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}
           >
             <div className="mb-5 flex items-center justify-between">
@@ -1339,6 +1594,16 @@ export function ManualTradesPage() {
                 <div className="text-[10px] text-cyan-400 font-mono">
                   الشبكة: {selectedSignal.network} | العملة: {NATIVE_TOKENS[selectedSignal.network]?.symbol || 'TOKEN'}
                 </div>
+                {selectedSignal.aiConfidence && (
+                  <div className="text-[9px] text-violet-400 mt-1 flex items-center gap-2">
+                    <span>🤖 AI: {selectedSignal.aiConfidence}% ثقة</span>
+                    {selectedSignal.aiRecommendation && (
+                      <span className="px-2 py-0.5 rounded-full bg-violet-500/20">
+                        {selectedSignal.aiRecommendation}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <button
                 type="button"
@@ -1369,7 +1634,41 @@ export function ManualTradesPage() {
               </div>
             </div>
 
-            <div className="mt-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 p-3">
+            {/* ✅ اختيار المحفظة (من بين جميع المحافظ) */}
+            {Object.values(userWalletsMap).length > 0 && (
+              <div className="flex items-center gap-2 mt-4 mb-2">
+                <Wallet className="w-4 h-4 text-slate-400" />
+                <span className="text-xs text-slate-400">اختر المحفظة:</span>
+                <div className="relative flex-1">
+                  <select
+                    value={selectedWalletId || ''}
+                    onChange={(e) => {
+                      const walletId = e.target.value;
+                      setSelectedWalletId(walletId);
+                      const wallet = Object.values(userWalletsMap).find(w => w.id === walletId);
+                      if (wallet) {
+                        setSelectedWalletBalance(wallet.balance);
+                        if (amount > wallet.balance) {
+                          setAmount(0);
+                          setAmountInput('');
+                        }
+                      }
+                    }}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-[#8b5cf6] appearance-none"
+                  >
+                    {Object.entries(userWalletsMap).map(([network, wallet]) => (
+                      <option key={wallet.id} value={wallet.id}>
+                        {getNetworkName(network)}: {wallet.address.slice(0, 8)}...{wallet.address.slice(-6)} 
+                        (رصيد: {wallet.balance.toFixed(4)} {NATIVE_TOKENS[network]?.symbol})
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                </div>
+              </div>
+            )}
+
+            <div className="mt-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20 p-3">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400">💰 العملة المستخدمة للشراء</span>
                 <span className="text-cyan-400 font-bold text-base">
@@ -1385,11 +1684,30 @@ export function ManualTradesPage() {
               <label className="mb-1.5 block text-[11px] text-slate-400 font-medium">
                 المبلغ ({NATIVE_TOKENS[selectedSignal.network]?.symbol || 'USD'})
               </label>
+
+              <div className="flex gap-2 mb-2">
+                {['25%', '50%', '75%', '100%'].map((pct) => (
+                  <button
+                    key={pct}
+                    onClick={() => {
+                      const percentage = parseInt(pct, 10);
+                      const calculatedAmount = (selectedWalletBalance * percentage) / 100;
+                      setAmount(calculatedAmount);
+                      setAmountInput(String(calculatedAmount));
+                      setTradeResult(null);
+                    }}
+                    className="flex-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors"
+                  >
+                    {pct}
+                  </button>
+                ))}
+              </div>
+
               <div className="flex items-center gap-2">
                 <input
                   type="text"
                   inputMode="decimal"
-                  value={amountInput || amount}
+                  value={amountInput || (amount > 0 ? amount : '')}
                   onChange={(e) => {
                     let rawValue = e.target.value;
 
@@ -1424,13 +1742,106 @@ export function ManualTradesPage() {
                     }
                   }}
                   placeholder="0.001"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3 text-base outline-none focus:border-cyan-400 transition-all"
+                  className="flex-1 bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-3 text-base text-white outline-none focus:border-cyan-400 transition-all"
                 />
                 <span className="text-sm font-bold text-cyan-400 min-w-[50px]">
                   {NATIVE_TOKENS[selectedSignal.network]?.symbol || 'TOKEN'}
                 </span>
               </div>
+
+              <div className="flex items-center justify-between mt-2 text-[10px] text-slate-500">
+                <span>💰 الحد الأدنى: 0.001 {NATIVE_TOKENS[selectedSignal.network]?.symbol}</span>
+                <span>الحد الأقصى: {selectedWalletBalance.toFixed(4)} {NATIVE_TOKENS[selectedSignal.network]?.symbol}</span>
+              </div>
             </div>
+
+            {/* ✅ عرض الكمية المتوقعة والقيمة - مع تحليل AI */}
+            {amount > 0 && selectedSignal && nativePrices[selectedSignal.network] > 0 && (
+              <div className="mt-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700">
+                {(() => {
+                  const nativePrice = nativePrices[selectedSignal.network] || 0;
+                  const usdValue = amount * nativePrice;
+                  const quantity = usdValue / selectedSignal.price;
+                  
+                  const hasAIAnalysis = selectedSignal.aiPriceTarget !== null && selectedSignal.aiPriceTarget !== undefined;
+                  const priceTarget = selectedSignal.aiPriceTarget || null;
+                  const expectedReturn = priceTarget ? usdValue * ((priceTarget / selectedSignal.price) - 1) : null;
+                  
+                  return (
+                    <>
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-slate-400">📈 الكمية المتوقعة:</span>
+                        <span className="text-emerald-400 font-bold text-sm">
+                          {quantity.toFixed(6)} {selectedSignal.tokenSymbol}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-500 mt-0.5">
+                        <span>💰 سعر {selectedSignal.tokenSymbol}: ${selectedSignal.price.toFixed(8)}</span>
+                        <span>💵 القيمة: ${usdValue.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-500 mt-0.5 pt-0.5 border-t border-slate-700">
+                        <span>📊 المبلغ المستخدم:</span>
+                        <span className="text-white">{amount.toFixed(4)} {NATIVE_TOKENS[selectedSignal.network]?.symbol} (≈ ${usdValue.toFixed(2)})</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-500 mt-0.5">
+                        <span>💱 سعر {NATIVE_TOKENS[selectedSignal.network]?.symbol}:</span>
+                        <span className="text-yellow-400">${nativePrice.toFixed(2)}</span>
+                      </div>
+                      
+                      {hasAIAnalysis && priceTarget && expectedReturn !== null && (
+                        <>
+                          <div className="flex justify-between text-[10px] text-slate-500 mt-0.5 pt-0.5 border-t border-slate-700">
+                            <span className="text-violet-400">🎯 السعر المستهدف (AI):</span>
+                            <span className="text-violet-400 font-bold">${priceTarget.toFixed(8)}</span>
+                          </div>
+                          <div className="flex justify-between text-[10px] text-slate-500 mt-0.5">
+                            <span>📈 العائد المتوقع (AI):</span>
+                            <span className={expectedReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                              {expectedReturn >= 0 ? '+' : ''}{expectedReturn.toFixed(2)} USD
+                            </span>
+                          </div>
+                          {selectedSignal.aiConfidence && (
+                            <div className="flex justify-between text-[10px] text-slate-500 mt-0.5">
+                              <span>🎯 ثقة AI:</span>
+                              <span className="text-cyan-400">{selectedSignal.aiConfidence}%</span>
+                            </div>
+                          )}
+                          {selectedSignal.aiSummary && (
+                            <div className="flex justify-between text-[10px] text-slate-500 mt-0.5 pt-0.5 border-t border-slate-700">
+                              <span className="text-slate-400">📝 ملخص AI:</span>
+                              <span className="text-slate-300 text-right max-w-[200px]">{selectedSignal.aiSummary}</span>
+                            </div>
+                          )}
+                        </>
+                      )}
+                      
+                      {isAnalyzingAI && (
+                        <div className="flex justify-center items-center gap-2 mt-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
+                          <span className="text-[10px] text-violet-400">جاري تحليل الذكاء الاصطناعي...</span>
+                        </div>
+                      )}
+                      
+                      {!hasAIAnalysis && !isAnalyzingAI && (
+                        <div className="flex justify-between text-[10px] text-slate-500 mt-0.5 pt-0.5 border-t border-slate-700">
+                          <span className="text-amber-400">⚠️ تحليل AI غير متاح</span>
+                          <span className="text-slate-500">استخدم البيانات الأساسية</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            {amount > 0 && selectedSignal && nativePrices[selectedSignal.network] === 0 && (
+              <div className="mt-3 p-3 bg-amber-500/10 rounded-lg border border-amber-500/20">
+                <p className="text-[10px] text-amber-400 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" />
+                  ⏳ جاري جلب سعر {NATIVE_TOKENS[selectedSignal.network]?.symbol}...
+                </p>
+              </div>
+            )}
 
             {tradeResult && (
               <div className={`mt-4 rounded-xl p-4 ${tradeResult.success ? 'bg-emerald-500/20 border border-emerald-500/30' : 'bg-red-500/20 border border-red-500/30'}`}>
@@ -1472,7 +1883,7 @@ export function ManualTradesPage() {
         </div>
       )}
 
-      {/* Bottom status bar - محدث */}
+      {/* Bottom status bar */}
       <footer className="fixed bottom-0 left-0 right-0 z-30 flex h-9 items-center justify-between border-t border-slate-800/60 bg-slate-950/90 backdrop-blur-xl px-6 text-[10px]">
         <div className="flex items-center gap-3 text-slate-500">
           <span className="flex items-center gap-1.5 text-emerald-400">
@@ -1489,7 +1900,7 @@ export function ManualTradesPage() {
           <span>🔔 التنبيهات</span>
         </div>
         <div className="flex items-center gap-4 text-slate-500">
-          <span className="text-slate-400 font-medium">{getNetworkName(selectedNetwork)}</span>
+          <span className="text-cyan-400 font-medium">🌐 {selectedNetworks.length} شبكة</span>
           <span className="text-slate-300">{filteredSignals.length} عملة</span>
           <span className="text-emerald-400 font-medium">⭐ النتيجة {avgScore.toFixed(0)}</span>
         </div>
