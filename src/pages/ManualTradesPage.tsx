@@ -1,6 +1,7 @@
 // src/pages/ManualTradesPage.tsx
-// ✅ نسخة معدلة - دعم متعدد الشبكات (Multi-Network) مع ربط المحافظ
-// ✅ اختيار عدة شبكات في وقت واحد + عرض محافظ كل شبكة
+// ✅ نسخة كاملة - تداول يدوي مع تحليل Gemini AI حقيقي
+// ✅ عرض السعر، عدد الوحدات، التحليل، وجميع الميزات
+// ✅ اختيار الشبكة + اختيار المحفظة الفورية
 // ✅ لا توجد قيم افتراضية
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -103,6 +104,7 @@ interface Signal {
   dexName?: string;
   pairAddress?: string;
   dexUrl?: string;
+  // ✅ تحليل AI
   aiPriceTarget?: number | null;
   aiConfidence?: number | null;
   aiSummary?: string | null;
@@ -551,7 +553,7 @@ export function ManualTradesPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
   const [executing, setExecuting] = useState(false);
-  const [amount, setAmount] = useState(50);
+  const [amount, setAmount] = useState(0);
   const [amountInput, setAmountInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showAI, setShowAI] = useState(true);
@@ -584,7 +586,6 @@ export function ManualTradesPage() {
 
   const activeNetworks = botConfig?.networks || ['solana'];
 const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات الـ 9
-
   // ✅ الحصول على العملة الأساسية للشبكة المحددة
   const nativeToken = selectedSignal ? NATIVE_TOKENS[selectedSignal.network] || NATIVE_TOKENS.solana : null;
   
@@ -689,9 +690,8 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
       for (const network of networks) {
         const filtered = allWallets.filter(w => w.network === network);
         if (filtered.length > 0) {
-          walletsMap[network] = filtered[0]; // استخدم الأولى
+          walletsMap[network] = filtered[0];
         } else {
-          // إنشاء محفظة جديدة إذا لم توجد
           const newWallet = await AccountManager.createUserWallet(user.id, network);
           walletsMap[network] = newWallet;
         }
@@ -699,7 +699,6 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
       
       setUserWalletsMap(walletsMap);
       
-      // اختيار المحفظة الأولى كافتراضي
       const firstWallet = Object.values(walletsMap)[0];
       if (firstWallet) {
         setSelectedWalletId(firstWallet.id);
@@ -748,7 +747,20 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
           h1: 0,
           m5: 0,
         },
+        // ✅ الحقول المفقودة التي يحتاجها analyzeToken
+        txns24h: {
+          buys: signal.buys || 0,
+          sells: signal.sells || 0,
+        },
+        allPairs: [],
+        boosts: 0,
+        strategy: signal.ageInSeconds < 3600 ? 'new-listing' : 'established',
+        marketCap: signal.marketCap || 0,
+        fdv: signal.fdv || 0,
+        holders: signal.holders || 0,
       };
+
+      console.log('📦 [ManualTrades] tokenData:', tokenData);
 
       const analysis = await analyzeToken(tokenData);
       
@@ -918,7 +930,6 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
     setIsSearching(true);
 
     try {
-      // ✅ جلب البيانات من جميع الشبكات المختارة بالتوازي
       const allPairsPromises = networks.map(network => 
         discoverAllPairs(network as any).then(result => ({
           network,
@@ -928,19 +939,14 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
 
       const results = await Promise.all(allPairsPromises);
       
-      // ✅ دمج جميع الأزواج من جميع الشبكات
       const allPairs = results.flatMap(r => r.pairs);
       setAllPairs(allPairs);
 
-      // ✅ تحويل البيانات إلى إشارات
       const firstPage = allPairs.slice(0, ITEMS_PER_PAGE).map(dexPairToSignal);
       setSignals(firstPage);
       setHasMore(allPairs.length > ITEMS_PER_PAGE);
 
-      // ✅ جلب أسعار العملات الأساسية لكل شبكة
       await fetchAllNativePrices(networks);
-
-      // ✅ جلب محافظ المستخدم لكل شبكة
       await fetchAllUserWallets(networks);
 
       const totalPairs = allPairs.length;
@@ -992,7 +998,6 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
     setIsSearching(true);
 
     try {
-      // ✅ البحث في جميع الشبكات المختارة
       const searchPromises = selectedNetworks.map(async (network) => {
         const response = await fetch(
           `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`
@@ -1035,7 +1040,6 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
       return;
     }
 
-    // ✅ التحقق من اختيار المحفظة
     const selectedWallet = Object.values(userWalletsMap).find(w => w.id === selectedWalletId);
     if (!selectedWallet) {
       setTradeResult({ success: false, message: '⚠️ الرجاء اختيار محفظة أولاً' });
@@ -1594,6 +1598,7 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
                 <div className="text-[10px] text-cyan-400 font-mono">
                   الشبكة: {selectedSignal.network} | العملة: {NATIVE_TOKENS[selectedSignal.network]?.symbol || 'TOKEN'}
                 </div>
+                {/* ✅ عرض تحليل AI في الهيدر */}
                 {selectedSignal.aiConfidence && (
                   <div className="text-[9px] text-violet-400 mt-1 flex items-center gap-2">
                     <span>🤖 AI: {selectedSignal.aiConfidence}% ثقة</span>
@@ -1615,6 +1620,9 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
               </button>
             </div>
 
+            {/* ============================================================
+                ✅ عرض السعر والتفاصيل الأساسية
+                ============================================================ */}
             <div className="grid grid-cols-2 gap-3 text-[11px]">
               <div className="rounded-xl bg-slate-800/50 p-3.5">
                 <div className="text-slate-500">السعر</div>
@@ -1634,7 +1642,7 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
               </div>
             </div>
 
-            {/* ✅ اختيار المحفظة (من بين جميع المحافظ) */}
+            {/* ✅ اختيار المحفظة */}
             {Object.values(userWalletsMap).length > 0 && (
               <div className="flex items-center gap-2 mt-4 mb-2">
                 <Wallet className="w-4 h-4 text-slate-400" />
@@ -1680,6 +1688,9 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
               </div>
             </div>
 
+            {/* ============================================================
+                ✅ المبلغ والتداول
+                ============================================================ */}
             <div className="mt-4">
               <label className="mb-1.5 block text-[11px] text-slate-400 font-medium">
                 المبلغ ({NATIVE_TOKENS[selectedSignal.network]?.symbol || 'USD'})
@@ -1755,7 +1766,9 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
               </div>
             </div>
 
-            {/* ✅ عرض الكمية المتوقعة والقيمة - مع تحليل AI */}
+            {/* ============================================================
+                ✅ عرض الكمية المتوقعة والقيمة + تحليل AI
+                ============================================================ */}
             {amount > 0 && selectedSignal && nativePrices[selectedSignal.network] > 0 && (
               <div className="mt-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700">
                 {(() => {
@@ -1788,6 +1801,7 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
                         <span className="text-yellow-400">${nativePrice.toFixed(2)}</span>
                       </div>
                       
+                      {/* ✅ عرض تحليل AI */}
                       {hasAIAnalysis && priceTarget && expectedReturn !== null && (
                         <>
                           <div className="flex justify-between text-[10px] text-slate-500 mt-0.5 pt-0.5 border-t border-slate-700">
