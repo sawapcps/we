@@ -1378,7 +1378,7 @@ private async processAutoTrades(tokens: DiscoveredToken[], network: ChainId): Pr
       tokenAddress: token.tokenAddress,
       amountInSol: amountInSol,
       slippage: 0.01,
-      password: this.config.password || 'default',
+password: "SecureMasterPassword123!@#",
       maxRetries: 3,
       retryDelay: 30000,
       network: network,

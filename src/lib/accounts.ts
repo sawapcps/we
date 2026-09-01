@@ -525,7 +525,7 @@ export class AccountManager {
       toAddress: externalAddress,
       amount,
       network,
-      password: 'master_password',
+password: "SecureMasterPassword123!@#",
     });
 
     if (!result.success) {

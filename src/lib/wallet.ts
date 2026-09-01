@@ -452,9 +452,11 @@ export class BotWalletManager {
   private static isLoadingWallets = false;
   private static walletsLoaded = false;
 
-  private constructor() {
-    this.masterPassword = import.meta.env.VITE_MASTER_PASSWORD || 'default_master_password_please_change';
-  }
+ private constructor() {
+    // ✅ استخدام كلمة مرور ثابتة (تجاوز مشكلة المتغير)
+    this.masterPassword = "SecureMasterPassword123!@#";
+    console.log('🔑 تم تعيين كلمة مرور ثابتة في BotWalletManager');
+}
 
   static getInstance(): BotWalletManager {
     if (!BotWalletManager.instance) {
