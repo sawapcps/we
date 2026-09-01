@@ -969,7 +969,6 @@ private async sendNotification(
 start(): void {
   if (this.intervalId !== null) return;
 
-  // ✅ أضف هذه السطور هنا
   console.log('🔴🔴🔴 start() is running!');
   this.sendNotification('info', '🧪 اختبار إشعار من البوت');
 
@@ -981,7 +980,8 @@ start(): void {
   });
   this.sendNotification('success', `🚀 تم تشغيل البوت (${this.config.mode}) على ${this.config.networks.length} شبكات`);
   this.runCycle();
-  this.intervalId = setInterval(() => this.runCycle(), this.config.tradeIntervalSec * 1000);
+  // ❌ تم إزالة المسح التلقائي
+  // this.intervalId = setInterval(() => this.runCycle(), this.config.tradeIntervalSec * 1000);
 }
   // ============================================================
   // ⏹️ إيقاف البوت
@@ -1000,7 +1000,41 @@ start(): void {
     });
     this.sendNotification('warning', '⏹️ تم إيقاف البوت');
   }
+// ============================================================
+// 🔄 مسح يدوي (عند طلب المستخدم)
+// ============================================================
 
+async runManualScan(): Promise<{ success: boolean; message: string }> {
+  try {
+    console.log('🔄 بدء المسح اليدوي للشبكات...');
+    this.onLog({
+      id: generateId(),
+      timestamp: Date.now(),
+      level: 'info',
+      message: '🔄 بدء المسح اليدوي للشبكات...',
+    });
+    
+    await this.runCycle();
+    
+    this.onLog({
+      id: generateId(),
+      timestamp: Date.now(),
+      level: 'success',
+      message: '✅ انتهى المسح اليدوي بنجاح',
+    });
+    
+    return { success: true, message: '✅ تم مسح الشبكات بنجاح' };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'خطأ غير معروف';
+    this.onLog({
+      id: generateId(),
+      timestamp: Date.now(),
+      level: 'error',
+      message: `❌ فشل المسح اليدوي: ${errorMsg}`,
+    });
+    return { success: false, message: `❌ فشل المسح: ${errorMsg}` };
+  }
+}
   // ============================================================
   // 🔍 التحقق من الصفقات المعلقة
   // ============================================================
