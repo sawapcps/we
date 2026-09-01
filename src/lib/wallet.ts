@@ -64,14 +64,13 @@ function getWorkingRpcUrl(): string {
 }
 
 // ============================================================
-// 🔑 المفاتيح من KeyManager
+// 🔑 المفاتيح (من البيئة مباشرة - بدون keyManager)
 // ============================================================
 
-import { getJupiterKey, getAnkrKey, getHeliusKey } from './keyManager';
-
-const JUPITER_API_KEY = getJupiterKey() || import.meta.env.VITE_JUPITER_API_KEY;
-const ANKR_KEY = getAnkrKey() || import.meta.env.VITE_ANKR_KEY;
-const HELIUS_KEY = getHeliusKey() || import.meta.env.VITE_HELIUS_KEY;
+// ✅ استخدام المفاتيح مباشرة من import.meta.env
+const JUPITER_API_KEY = import.meta.env.VITE_JUPITER_API_KEY || '';
+const ANKR_KEY = import.meta.env.VITE_ANKR_KEY || '';
+const HELIUS_KEY = import.meta.env.VITE_HELIUS_KEY || '';
 
 // ============================================================
 // 🛠️ إنشاء محفظة جديدة

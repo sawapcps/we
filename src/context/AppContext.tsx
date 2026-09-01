@@ -849,35 +849,81 @@ const loadUserWallets = async () => {
     }
   };
 
+// ============================================================
+// 🔥 ربط محافظ المستخدم بالبوت تلقائياً (جديد)
+// ============================================================
+
+const autoLinkUserWalletsToBot = async (botId: string, userId: string) => {
+  try {
+    console.log(`🔗 ربط محافظ المستخدم ${userId} بالبوت ${botId}`);
+    
+    const userWalletsList = await AccountManager.getAllUserWallets(userId);
+    
+    if (userWalletsList.length === 0) {
+      console.log('⚠️ لا توجد محافظ للمستخدم، تخطي الربط');
+      return;
+    }
+
+    console.log(`📊 عدد محافظ المستخدم: ${userWalletsList.length}`);
+
+    for (const wallet of userWalletsList) {
+      try {
+        const result = await createBotWallet(
+          botId,
+          userId,
+          wallet.network,
+          wallet.address,
+          wallet.encryptedPrivateKey
+        );
+        if (result.success) {
+          console.log(`✅ تم ربط محفظة ${wallet.network} بالبوت ${botId}`);
+          await addLog('SUCCESS', `💰 تم ربط محفظة ${wallet.network} بالبوت`);
+        } else {
+          console.warn(`⚠️ فشل ربط محفظة ${wallet.network}:`, result.error);
+        }
+      } catch (error) {
+        console.warn(`⚠️ فشل ربط محفظة ${wallet.network}:`, error);
+      }
+    }
+    
+    await loadBotWallets();
+    console.log('✅ تم تحديث محافظ البوت بعد الربط');
+    
+  } catch (error) {
+    console.error('❌ فشل ربط المحافظ بالبوت:', error);
+  }
+};
+
    // ✅ createBot - معدل لدعم tradingAmount
   const createBot = async (
-    type: 'hunter' | 'signal' | 'manual' | 'scalper', 
-    name: string, 
-    userId?: string,
-    tradingAmount: number = 100
-  ) => {
-    const uid = userId || currentUserId || user?.id;
-    if (!uid) throw new Error('لا يوجد userId');
-    
-    try {
-      const result = await createBotInstance(uid, type, name, tradingAmount);
-      if (result.success) {
-        hasLoadedBotInstances.current = false;
-        await loadBotInstances(uid);
-        await addLog('SUCCESS', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
-        addNotification('success', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
-      } else {
-        await addLog('ERROR', `❌ فشل إنشاء البوت: ${result.error}`);
-        addNotification('error', `❌ فشل إنشاء البوت: ${result.error}`);
-      }
-      return result;
-    } catch (error) {
-      await addLog('ERROR', `❌ فشل إنشاء البوت: ${error}`);
-      addNotification('error', `❌ فشل إنشاء البوت`);
-      throw error;
+  type: 'hunter' | 'signal' | 'manual' | 'scalper', 
+  name: string, 
+  userId?: string,
+  tradingAmount: number = 100
+) => {
+  const uid = userId || currentUserId || user?.id;
+  if (!uid) throw new Error('لا يوجد userId');
+  
+  try {
+    const result = await createBotInstance(uid, type, name, tradingAmount);
+    if (result.success) {
+      const botId = result.botId!;
+      
+      // ✅✅✅ ربط محافظ المستخدم تلقائياً بالبوت
+      await autoLinkUserWalletsToBot(botId, uid);
+      
+      hasLoadedBotInstances.current = false;
+      await loadBotInstances(uid);
+      await addLog('SUCCESS', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
+      addNotification('success', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
     }
-  };
-
+    return result;
+  } catch (error) {
+    await addLog('ERROR', `❌ فشل إنشاء البوت: ${error}`);
+    addNotification('error', `❌ فشل إنشاء البوت`);
+    throw error;
+  }
+};
 const startBot = async (botId: string, userId?: string) => {
   const uid = userId || currentUserId || user?.id;
   if (!uid) throw new Error('لا يوجد userId');
