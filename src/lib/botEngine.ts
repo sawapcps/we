@@ -1,11 +1,8 @@
 // src/lib/botEngine.ts
 // ============================================================
-// 🤖 محرك التداول الرئيسي - النسخة المعدلة مع إشعارات شاملة
-// ✅ يدعم جميع البوتات الأربعة (Hunter, Signal, Manual, Scalper)
-// ✅ يرسل إشعارات لكل تحركات البوت (مسح، تحليل، تخطي، شراء، بيع، وقف خسارة، جني أرباح)
-// ✅ يدعم: تداول حقيقي عبر Jupiter + 1inch
-// ✅ يدعم: التحليل الذكي (Gemini + Hunter)
-// ✅ يدعم: إدارة المخاطر المتقدمة
+// 🤖 محرك التداول الرئيسي - نسخة معدلة مع تخفيف الشروط والتركيز على الزخم
+// ✅ يدعم المسح اليدوي/التلقائي مع وضع صامت لتوفير DB
+// ✅ يفضل العملات ذات الزخم الصاعد وحجم التداول المرتفع
 // ============================================================
 
 import type { BotConfig, Trade, ChainId, BotLogEntry, DiscoveredToken } from '@/types';
@@ -20,26 +17,26 @@ type LogCallback = (log: BotLogEntry) => void;
 type TradeCallback = (trade: Trade) => void;
 
 // ============================================================
-// 🔗 Worker URL (لتنفيذ الصفقات الحقيقية)
+// 🔗 Worker URL
 // ============================================================
 
 const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 const DB_ID = import.meta.env.VITE_MADARTECH_DB_ID || 'mt_live_AZyHOq0IztD6H5gsSafGbpjo00kDcKAPRDh0Gcob';
 
 // ============================================================
-// 📊 إعدادات المخاطر
+// 📊 إعدادات المخاطر (مخففة)
 // ============================================================
 
-const MAX_PRICE_IMPACT = 0.02; // 2% حد أقصى للانزلاق
-const MAX_VOLATILITY = 0.30; // 30% حد أقصى للتقلب
-const MAX_POSITION_TIME = 24 * 60 * 60 * 1000; // 24 ساعة كحد أقصى للصفقة
-const TRAILING_STOP_PERCENT = 8; // 8% وقف متحرك من أعلى سعر
-const RISK_PER_TRADE = 2; // 2% مخاطرة من المحفظة لكل صفقة
-const MAX_SELL_RETRIES = 5; // 5 محاولات للبيع
-const SELL_RETRY_DELAY = 15000; // 15 ثانية بين محاولات البيع
+const MAX_PRICE_IMPACT = 0.05; // 5% (كانت 2%)
+const MAX_VOLATILITY = 0.50; // 50% (كانت 30%)
+const MAX_POSITION_TIME = 24 * 60 * 60 * 1000;
+const TRAILING_STOP_PERCENT = 8;
+const RISK_PER_TRADE = 2;
+const MAX_SELL_RETRIES = 5;
+const SELL_RETRY_DELAY = 15000;
 
 // ============================================================
-// 📊 حساب حجم الصفقة بناءً على المخاطرة
+// 📊 حساب حجم الصفقة
 // ============================================================
 
 function calculatePositionSize(
@@ -50,49 +47,49 @@ function calculatePositionSize(
 ): number {
   const riskAmount = walletBalance * (riskPercent / 100);
   const riskPerToken = Math.abs(entryPrice - stopLossPrice);
-  
   if (riskPerToken <= 0) return 0;
   return riskAmount / riskPerToken;
 }
 
 // ============================================================
-// 📊 حساب درجة الثقة التقنية
+// 📊 حساب درجة الثقة التقنية (مع تركيز أكبر على الزخم)
 // ============================================================
 
 function calculateTechnicalScore(market: DiscoveredToken): number {
   let score = 0;
   
-  // السيولة
-  if (market.liquidityUsd >= 500_000) score += 20;
-  else if (market.liquidityUsd >= 100_000) score += 15;
+  // السيولة (مخففة)
+  if (market.liquidityUsd >= 200_000) score += 15;
   else if (market.liquidityUsd >= 50_000) score += 10;
+  else if (market.liquidityUsd >= 15_000) score += 5;
   
-  // حجم التداول
+  // حجم التداول (مخفف)
   const volumeRatio = market.volume24h / Math.max(market.marketCap || 1, 1);
-  if (volumeRatio >= 0.30) score += 20;
-  else if (volumeRatio >= 0.15) score += 10;
+  if (volumeRatio >= 0.20) score += 15;
+  else if (volumeRatio >= 0.10) score += 10;
+  else if (volumeRatio >= 0.05) score += 5;
   
-  // الزخم
-  if (market.priceChange.m5 > 1) score += 10;
-  if (market.priceChange.h1 > 3) score += 15;
-  if (market.priceChange.h6 > 5) score += 10;
+  // 🔥 الزخم (رفع الوزن)
+  if (market.priceChange.m5 > 2) score += 20; // كان 10
+  if (market.priceChange.h1 > 5) score += 25; // كان 15
+  if (market.priceChange.h6 > 8) score += 20; // كان 10
   
   // نشاط السوق
   const totalTxns = market.txns24h.buys + market.txns24h.sells;
-  if (totalTxns >= 1000) score += 15;
-  else if (totalTxns >= 500) score += 10;
-  else if (totalTxns >= 100) score += 5;
+  if (totalTxns >= 500) score += 15;
+  else if (totalTxns >= 200) score += 10;
+  else if (totalTxns >= 50) score += 5;
   
   // نسبة الشراء/البيع
   const buyRatio = market.txns24h.buys / Math.max(totalTxns, 1);
-  if (buyRatio > 0.65) score += 10;
-  else if (buyRatio > 0.55) score += 5;
+  if (buyRatio > 0.60) score += 10;
+  else if (buyRatio > 0.52) score += 5;
   
   return Math.min(score, 100);
 }
 
 // ============================================================
-// ✅ تنفيذ الصفقة عبر Worker (حقيقي)
+// ✅ تنفيذ الصفقة عبر Worker
 // ============================================================
 
 async function executeTradeViaWorker(params: {
@@ -124,7 +121,6 @@ async function executeTradeViaWorker(params: {
     }
 
     const data = await response.json();
-    
     if (!data.success) {
       return { txHash: null, price: null, error: data.error || 'Trade execution failed' };
     }
@@ -157,12 +153,10 @@ export class TradingBot {
   private userId: string;
   private botId?: string;
   
-  // إدارة الصفقات اليومية
   private dailyTrades: number = 0;
   private lastResetDate: string = '';
   private dynamicMaxTrades: number = 5;
   
-  // إدارة الصفقات المعلقة
   private pendingTrades: Map<string, {
     tokenAddress: string;
     amount: number;
@@ -171,8 +165,11 @@ export class TradingBot {
     status: 'pending' | 'processing' | 'completed' | 'failed';
   }> = new Map();
 
-  // تتبع أعلى سعر لكل صفقة (لـ Trailing Stop)
   private highestPrices: Map<string, number> = new Map();
+  
+  // ⏱️ التحكم بالمسح التلقائي
+  private autoScanIntervalId: number | null = null;
+  private scanIntervalMinutes: number = 5;
 
   constructor(
     config: BotConfig,
@@ -190,53 +187,50 @@ export class TradingBot {
   }
 
   // ============================================================
-  // 📢 إرسال إشعار للمستخدم عبر الـ Worker
+  // 📢 إرسال إشعار (مهم فقط)
   // ============================================================
-private async sendNotification(
-  type: 'success' | 'error' | 'warning' | 'info',
-  message: string
-): Promise<void> {
-  try {
-    // ✅ تحديد الإشعارات المهمة فقط (شراء، بيع، رصيد)
-    const isImportant = 
-      message.includes('تم شراء') ||
-      message.includes('تم بيع') ||
-      message.includes('بيع') ||
-      message.includes('شراء') ||
-      message.includes('الرصيد غير كافٍ') ||
-      message.includes('رصيد غير كافٍ');
+  private async sendNotification(
+    type: 'success' | 'error' | 'warning' | 'info',
+    message: string
+  ): Promise<void> {
+    try {
+      const isImportant = 
+        message.includes('تم شراء') ||
+        message.includes('تم بيع') ||
+        message.includes('بيع') ||
+        message.includes('شراء') ||
+        message.includes('الرصيد غير كافٍ') ||
+        message.includes('رصيد غير كافٍ');
 
-    // ✅ اطبع في Console دائماً
-    console.log(`📢 [${type}] ${message}`);
+      console.log(`📢 [${type}] ${message}`);
 
-    // ✅ احفظ فقط الإشعارات المهمة
-    if (isImportant) {
-      await saveLog({
-        level: type.toUpperCase(),
-        message,
-        timestamp: getTimestamp(),
-        context: { userId: this.userId, botId: this.botId }
-      });
-
-      await fetch(`${WORKER_URL}/notifications`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          app_id: 'hunter',
-          userId: this.userId,
-          type,
+      if (isImportant) {
+        await saveLog({
+          level: type.toUpperCase(),
           message,
-          timestamp: new Date().toISOString()
-        })
-      }).catch(() => {});
-    }
+          timestamp: getTimestamp(),
+          context: { userId: this.userId, botId: this.botId }
+        });
 
-  } catch (error) {
-    console.warn('⚠️ فشل إرسال الإشعار:', error);
+        await fetch(`${WORKER_URL}/notifications`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            app_id: 'hunter',
+            userId: this.userId,
+            type,
+            message,
+            timestamp: new Date().toISOString()
+          })
+        }).catch(() => {});
+      }
+    } catch (error) {
+      console.warn('⚠️ فشل إرسال الإشعار:', error);
+    }
   }
-} // ← قوس واحد فقط يغلق الدالة
+
   // ============================================================
-  // 📊 تحليل السوق (حقيقي)
+  // 📊 تحليل السوق (مخفف)
   // ============================================================
 
   private async analyzeMarketSignals(): Promise<{
@@ -248,16 +242,12 @@ private async sendNotification(
       const signals: string[] = [];
       let score = 0;
 
-      // ✅ جلب بيانات حقيقية من السوق
       const result = await discoverAllPairs('solana');
-      
       if (result.error || result.pairs.length === 0) {
         throw new Error('❌ لا توجد بيانات سوق: ' + (result.error || 'لا توجد أزواج'));
       }
 
       const pairs = result.pairs.slice(0, 100);
-      
-      // ✅ حساب المؤشرات الحقيقية
       let bullishCount = 0;
       let bearishCount = 0;
       let totalVolume = 0;
@@ -288,51 +278,39 @@ private async sendNotification(
       const buyRatio = totalTxns > 0 ? totalBuys / totalTxns : 0.5;
       const avgPriceChange = pairs.length > 0 ? totalPriceChange / pairs.length : 0;
 
-      // ✅ العملات الجديدة
       const newPairs = pairs.filter(p => {
         if (!p.pairCreatedAt) return false;
         return (Date.now() - p.pairCreatedAt) / (1000 * 60 * 60) < 24;
       });
 
-      // 1️⃣ نسبة العملات الخضراء
-      if (bullishRatio > 0.6) { score += 20; signals.push(`📈 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
-      else if (bullishRatio > 0.5) { score += 10; signals.push(`📊 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
-      else if (bullishRatio < 0.4) { score -= 10; signals.push(`📉 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
-      else { signals.push(`⚖️ ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
+      // تخفيف التقييمات
+      if (bullishRatio > 0.55) { score += 20; signals.push(`📈 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
+      else if (bullishRatio > 0.45) { score += 10; signals.push(`📊 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
+      else { score -= 5; signals.push(`📉 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
 
-      // 2️⃣ حجم التداول
-      if (volumeRatio > 1.5) { score += 20; signals.push('📊 حجم مرتفع جداً'); }
-      else if (volumeRatio > 1.2) { score += 15; signals.push('📊 حجم مرتفع'); }
-      else if (volumeRatio > 0.8) { signals.push('📊 حجم متوسط'); }
-      else { score -= 10; signals.push('📊 حجم منخفض'); }
+      if (volumeRatio > 1.2) { score += 20; signals.push('📊 حجم مرتفع'); }
+      else if (volumeRatio > 0.8) { score += 10; signals.push('📊 حجم متوسط'); }
+      else { score -= 5; signals.push('📊 حجم منخفض'); }
 
-      // 3️⃣ نسبة الشراء/البيع
-      if (buyRatio > 0.6) { score += 20; signals.push(`🟢 شراء ${(buyRatio * 100).toFixed(0)}%`); }
-      else if (buyRatio > 0.55) { score += 10; signals.push(`🟢 شراء ${(buyRatio * 100).toFixed(0)}%`); }
-      else if (buyRatio < 0.45) { score -= 10; signals.push(`🔴 شراء ${(buyRatio * 100).toFixed(0)}%`); }
-      else { signals.push(`⚖️ شراء ${(buyRatio * 100).toFixed(0)}%`); }
+      if (buyRatio > 0.58) { score += 20; signals.push(`🟢 شراء ${(buyRatio * 100).toFixed(0)}%`); }
+      else if (buyRatio > 0.50) { score += 10; signals.push(`🟢 شراء ${(buyRatio * 100).toFixed(0)}%`); }
+      else { score -= 5; signals.push(`🔴 شراء ${(buyRatio * 100).toFixed(0)}%`); }
 
-      // 4️⃣ تغير السعر
-      if (avgPriceChange > 5) { score += 20; signals.push(`📈 تغير +${avgPriceChange.toFixed(1)}%`); }
-      else if (avgPriceChange > 2) { score += 10; signals.push(`📈 تغير +${avgPriceChange.toFixed(1)}%`); }
-      else if (avgPriceChange < -3) { score -= 10; signals.push(`📉 تغير ${avgPriceChange.toFixed(1)}%`); }
+      if (avgPriceChange > 3) { score += 20; signals.push(`📈 تغير +${avgPriceChange.toFixed(1)}%`); }
+      else if (avgPriceChange > 1) { score += 10; signals.push(`📈 تغير +${avgPriceChange.toFixed(1)}%`); }
+      else if (avgPriceChange < -2) { score -= 5; signals.push(`📉 تغير ${avgPriceChange.toFixed(1)}%`); }
       else { signals.push(`⚖️ تغير ${avgPriceChange.toFixed(1)}%`); }
 
-      // 5️⃣ العملات الجديدة
-      if (newPairs.length > 15) { score += 20; signals.push(`🆕 ${newPairs.length} جديد`); }
-      else if (newPairs.length > 8) { score += 10; signals.push(`🆕 ${newPairs.length} جديد`); }
-      else if (newPairs.length < 3) { score -= 10; signals.push(`🆕 ${newPairs.length} جديد`); }
+      if (newPairs.length > 10) { score += 15; signals.push(`🆕 ${newPairs.length} جديد`); }
+      else if (newPairs.length > 5) { score += 5; signals.push(`🆕 ${newPairs.length} جديد`); }
       else { signals.push(`🆕 ${newPairs.length} جديد`); }
 
-      // ✅ استخدام trading_amount بدلاً من رصيد المحفظة
       const balanceUsd = this.config.tradingAmount || 100;
-
-      // ✅ حساب عدد الصفقات الديناميكي
       const multiplier = Math.max(0.3, Math.min(5, balanceUsd / 500));
       let baseTrades = 5;
-      if (score >= 80) baseTrades = 10;
-      else if (score >= 60) baseTrades = 8;
-      else if (score >= 40) baseTrades = 6;
+      if (score >= 70) baseTrades = 10;
+      else if (score >= 50) baseTrades = 8;
+      else if (score >= 30) baseTrades = 6;
       else baseTrades = 5;
 
       let maxTrades = Math.round(baseTrades * multiplier);
@@ -343,7 +321,7 @@ private async sendNotification(
         id: generateId(),
         timestamp: Date.now(),
         level: 'info',
-        message: `🧠 تحليل السوق: النقاط ${score}/100 | المبلغ المخصص: $${balanceUsd.toFixed(0)} | الصفقات: ${maxTrades}`,
+        message: `🧠 تحليل السوق: النقاط ${score}/100 | المبلغ: $${balanceUsd.toFixed(0)} | الصفقات: ${maxTrades}`,
       });
 
       for (const signal of signals) {
@@ -406,7 +384,7 @@ private async sendNotification(
   }
 
   // ============================================================
-  // 📊 التحقق من فرصة التداول (حقيقي)
+  // 📊 التحقق من فرصة التداول (مخفف)
   // ============================================================
 
   private async verifyTradeOpportunity(token: DiscoveredToken, network: ChainId): Promise<{
@@ -420,12 +398,11 @@ private async sendNotification(
     volatility: number;
   }> {
     try {
-      // ✅ التحقق من أن المبلغ المخصص كافٍ
       const tradingAmount = this.config.tradingAmount || 100;
-      if (tradingAmount < 10) {
+      if (tradingAmount < 5) {
         return {
           shouldBuy: false,
-          reason: `⚠️ المبلغ المخصص للتداول ($${tradingAmount}) أقل من الحد الأدنى ($10)`,
+          reason: `⚠️ المبلغ المخصص ($${tradingAmount}) أقل من الحد الأدنى ($5)`,
           currentPrice: token.priceUsd,
           currentVolume: token.volume24h,
           currentLiquidity: token.liquidityUsd,
@@ -435,7 +412,6 @@ private async sendNotification(
         };
       }
 
-      // ✅ جلب بيانات حقيقية من السوق
       const response = await fetch(`${WORKER_URL}/dex-data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -450,7 +426,6 @@ private async sendNotification(
       }
 
       const data = await response.json();
-      
       if (!data.success || !data.data) {
         throw new Error('❌ لا توجد بيانات سوق');
       }
@@ -461,12 +436,12 @@ private async sendNotification(
       const currentLiquidity = marketData.liquidity || token.liquidityUsd;
       const priceChange5m = marketData.priceChange?.m5 || 0;
 
-      // ✅ حساب الانزلاق السعري
+      // ✅ تخفيف شروط الانزلاق
       const priceImpact = Math.abs(currentPrice - token.priceUsd) / token.priceUsd;
       if (priceImpact > MAX_PRICE_IMPACT) {
         return {
           shouldBuy: false,
-          reason: `⚠️ الانزلاق السعري كبير: ${(priceImpact * 100).toFixed(2)}% (الحد الأقصى: ${MAX_PRICE_IMPACT * 100}%)`,
+          reason: `⚠️ الانزلاق السعري كبير: ${(priceImpact * 100).toFixed(2)}% (الحد: ${MAX_PRICE_IMPACT * 100}%)`,
           currentPrice,
           currentVolume,
           currentLiquidity,
@@ -476,12 +451,12 @@ private async sendNotification(
         };
       }
 
-      // ✅ حساب التقلبات
+      // ✅ تخفيف التقلبات
       const volatility = Math.abs(token.priceChange.h24) / 100;
       if (volatility > MAX_VOLATILITY) {
         return {
           shouldBuy: false,
-          reason: `⚠️ التقلبات عالية: ${(volatility * 100).toFixed(2)}% (الحد الأقصى: ${MAX_VOLATILITY * 100}%)`,
+          reason: `⚠️ التقلبات عالية: ${(volatility * 100).toFixed(2)}% (الحد: ${MAX_VOLATILITY * 100}%)`,
           currentPrice,
           currentVolume,
           currentLiquidity,
@@ -491,9 +466,9 @@ private async sendNotification(
         };
       }
 
-      // ✅ التحقق من تغير السعر
+      // ✅ تخفيف تغير السعر خلال 5 دقائق
       const priceChange = ((currentPrice - token.priceUsd) / token.priceUsd) * 100;
-      if (Math.abs(priceChange) > 5) {
+      if (Math.abs(priceChange) > 10) {
         return {
           shouldBuy: false,
           reason: `⚠️ تغير السعر ${priceChange.toFixed(2)}% خلال 5 دقائق (غير مستقر)`,
@@ -506,9 +481,9 @@ private async sendNotification(
         };
       }
 
-      // ✅ التحقق من الحجم
+      // ✅ تخفيف انخفاض الحجم
       const volumeChange = ((currentVolume - token.volume24h) / token.volume24h) * 100;
-      if (volumeChange < -50) {
+      if (volumeChange < -70) {
         return {
           shouldBuy: false,
           reason: `⚠️ انخفض الحجم ${Math.abs(volumeChange).toFixed(2)}% (ضعف النشاط)`,
@@ -521,9 +496,9 @@ private async sendNotification(
         };
       }
 
-      // ✅ التحقق من السيولة
+      // ✅ تخفيف انخفاض السيولة
       const liquidityChange = ((currentLiquidity - token.liquidityUsd) / token.liquidityUsd) * 100;
-      if (liquidityChange < -30) {
+      if (liquidityChange < -50) {
         return {
           shouldBuy: false,
           reason: `⚠️ انخفضت السيولة ${Math.abs(liquidityChange).toFixed(2)}% (سحب سيولة)`,
@@ -571,7 +546,6 @@ private async sendNotification(
     stopLossPrice: number
   ): Promise<number> {
     try {
-      // ✅ استخدام tradingAmount بدلاً من رصيد المحفظة
       const tradingAmount = this.config.tradingAmount || 100;
       const balanceUsd = tradingAmount;
       
@@ -592,7 +566,7 @@ private async sendNotification(
   }
 
   // ============================================================
-  // ✅ تنفيذ الشراء مع إعادة المحاولة (حقيقي)
+  // ✅ تنفيذ الشراء مع إعادة المحاولة
   // ============================================================
 
   private async executeBuyWithRetry(params: {
@@ -651,7 +625,6 @@ private async sendNotification(
           lastAttempt: Date.now()
         });
 
-        // ✅ تنفيذ صفقة حقيقية عبر Worker (يستخدم محفظة المستخدم)
         const result = await executeTradeViaWorker({
           side: 'buy',
           network: params.network,
@@ -684,7 +657,6 @@ private async sendNotification(
           continue;
         }
 
-        // ✅ نجحت الصفقة!
         this.onLog({
           id: generateId(),
           timestamp: Date.now(),
@@ -734,7 +706,7 @@ private async sendNotification(
   }
 
   // ============================================================
-  // ✅ تنفيذ البيع مع إعادة المحاولة (حقيقي)
+  // ✅ تنفيذ البيع مع إعادة المحاولة
   // ============================================================
 
   private async executeSellWithRetry(
@@ -750,7 +722,6 @@ private async sendNotification(
 
     for (let attempt = 1; attempt <= MAX_SELL_RETRIES; attempt++) {
       try {
-        // ✅ جلب السعر الحالي قبل كل محاولة
         if (attempt > 1) {
           const response = await fetch(`${WORKER_URL}/dex-data`, {
             method: 'POST',
@@ -796,7 +767,6 @@ private async sendNotification(
         });
         await this.sendNotification('info', `🔄 محاولة بيع ${token.symbol} ${attempt}/${MAX_SELL_RETRIES}`);
 
-        // ✅ تنفيذ بيع حقيقي عبر Worker (يستخدم محفظة المستخدم)
         const result = await executeTradeViaWorker({
           side: 'sell',
           network: network,
@@ -829,7 +799,6 @@ private async sendNotification(
           continue;
         }
 
-        // ✅ نجحت صفقة البيع!
         const pnl = (sellPrice - buyTrade.priceUsd) * buyTrade.quantity;
         
         this.onLog({
@@ -871,7 +840,6 @@ private async sendNotification(
         this.activePositions.delete(`${network}-${token.tokenAddress}`);
         this.highestPrices.delete(`${network}-${token.tokenAddress}`);
 
-        // ✅ حفظ الصفقة في قاعدة البيانات
         await saveTrade({
           token: sellTrade.tokenSymbol,
           tokenAddress: sellTrade.tokenAddress,
@@ -905,7 +873,6 @@ private async sendNotification(
       }
     }
 
-    // ❌ فشلت جميع المحاولات!
     const msg = `🚨 فشل بيع ${token.symbol} بعد ${MAX_SELL_RETRIES} محاولات!`;
     this.onLog({
       id: generateId(),
@@ -966,23 +933,23 @@ private async sendNotification(
   // ============================================================
   // 🚀 تشغيل البوت
   // ============================================================
-start(): void {
-  if (this.intervalId !== null) return;
+  start(): void {
+    if (this.intervalId !== null) return;
 
-  console.log('🔴🔴🔴 start() is running!');
-  this.sendNotification('info', '🧪 اختبار إشعار من البوت');
+    console.log('🔴🔴🔴 start() is running!');
+    this.sendNotification('info', '🧪 اختبار إشعار من البوت');
 
-  this.onLog({
-    id: generateId(),
-    timestamp: Date.now(),
-    level: 'info',
-    message: `🤖 Bot started in ${this.config.mode} mode on ${this.config.networks.length} networks`,
-  });
-  this.sendNotification('success', `🚀 تم تشغيل البوت (${this.config.mode}) على ${this.config.networks.length} شبكات`);
-  this.runCycle();
-  // ❌ تم إزالة المسح التلقائي
-  // this.intervalId = setInterval(() => this.runCycle(), this.config.tradeIntervalSec * 1000);
-}
+    this.onLog({
+      id: generateId(),
+      timestamp: Date.now(),
+      level: 'info',
+      message: `🤖 Bot started in ${this.config.mode} mode on ${this.config.networks.length} networks`,
+    });
+    this.sendNotification('success', `🚀 تم تشغيل البوت (${this.config.mode}) على ${this.config.networks.length} شبكات`);
+    this.runCycle();
+    // ❌ تم إزالة المسح التلقائي
+  }
+
   // ============================================================
   // ⏹️ إيقاف البوت
   // ============================================================
@@ -1000,48 +967,67 @@ start(): void {
     });
     this.sendNotification('warning', '⏹️ تم إيقاف البوت');
   }
-// ============================================================
-// 🔄 مسح يدوي (عند طلب المستخدم)
-// ============================================================
 
-async runManualScan(): Promise<{ success: boolean; message: string }> {
-  try {
-    console.log('🔄 بدء المسح اليدوي للشبكات...');
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'info',
-      message: '🔄 بدء المسح اليدوي للشبكات...',
-    });
-    
-    await this.runCycle();
-    
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'success',
-      message: '✅ انتهى المسح اليدوي بنجاح',
-    });
-    
-    return { success: true, message: '✅ تم مسح الشبكات بنجاح' };
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'خطأ غير معروف';
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'error',
-      message: `❌ فشل المسح اليدوي: ${errorMsg}`,
-    });
-    return { success: false, message: `❌ فشل المسح: ${errorMsg}` };
+  // ============================================================
+  // ⏱️ التحكم بالمسح التلقائي
+  // ============================================================
+
+  startAutoScan(): void {
+    if (this.autoScanIntervalId !== null) return;
+    const intervalMs = this.scanIntervalMinutes * 60 * 1000;
+    this.autoScanIntervalId = setInterval(() => {
+      this.runCycle(true); // صامت
+    }, intervalMs);
+    console.log(`🔄 [${this.botId || 'BOT'}] بدأ المسح التلقائي كل ${this.scanIntervalMinutes} دقيقة (صامت)`);
   }
-}
+
+  stopAutoScan(): void {
+    if (this.autoScanIntervalId !== null) {
+      clearInterval(this.autoScanIntervalId);
+      this.autoScanIntervalId = null;
+      console.log(`⏹️ [${this.botId || 'BOT'}] تم إيقاف المسح التلقائي`);
+    }
+  }
+
+  setScanInterval(minutes: number): void {
+    this.scanIntervalMinutes = Math.max(1, minutes);
+    if (this.autoScanIntervalId !== null) {
+      this.stopAutoScan();
+      this.startAutoScan();
+    }
+  }
+
+  getAutoScanStatus(): { active: boolean; interval: number } {
+    return {
+      active: this.autoScanIntervalId !== null,
+      interval: this.scanIntervalMinutes,
+    };
+  }
+
+  // ============================================================
+  // 🔄 مسح يدوي
+  // ============================================================
+
+  async runManualScan(): Promise<{ success: boolean; message: string }> {
+    try {
+      console.log('🔄 بدء المسح اليدوي للشبكات...');
+      await this.runCycle(true); // ✅ صامت
+      console.log('✅ انتهى المسح اليدوي بنجاح');
+      return { success: true, message: '✅ تم مسح الشبكات بنجاح (بدون إشعارات)' };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'خطأ غير معروف';
+      console.error('❌ فشل المسح اليدوي:', errorMsg);
+      return { success: false, message: `❌ فشل المسح: ${errorMsg}` };
+    }
+  }
+
   // ============================================================
   // 🔍 التحقق من الصفقات المعلقة
   // ============================================================
 
   private async checkPendingTrades(): Promise<void> {
     const now = Date.now();
-    const TIMEOUT = 120000; // 2 دقيقة
+    const TIMEOUT = 120000;
 
     for (const [key, pending] of this.pendingTrades) {
       if (now - pending.lastAttempt > TIMEOUT && pending.status === 'pending') {
@@ -1074,183 +1060,171 @@ async runManualScan(): Promise<{ success: boolean; message: string }> {
   }
 
   // ============================================================
-  // 🔄 دورة المسح الرئيسية
+  // 🔄 دورة المسح الرئيسية (مع silent)
   // ============================================================
-// ============================================================
-// 🔄 دورة المسح الرئيسية
-// ============================================================
-private async runCycle(): Promise<void> {
-  await this.checkPendingTrades();
-  await this.sendNotification('info', `🔄 بدء دورة مسح (${this.config.networks.join(', ')})`);
 
-  for (const network of this.config.networks) {
-    try {
-      await this.sendNotification('info', `🔍 مسح الشبكة: ${getNetworkName(network)}`);
-      
-      const result = await discoverAllPairs(network);
-      
-      if (result.error) {
-        const msg = `${getNetworkName(network)}: ${result.error}`;
+  private async runCycle(silent: boolean = false): Promise<void> {
+    await this.checkPendingTrades();
+    if (!silent) {
+      await this.sendNotification('info', `🔄 بدء دورة مسح (${this.config.networks.join(', ')})`);
+    }
+
+    for (const network of this.config.networks) {
+      try {
+        if (!silent) {
+          await this.sendNotification('info', `🔍 مسح الشبكة: ${getNetworkName(network)}`);
+        }
+        
+        const result = await discoverAllPairs(network);
+        
+        if (result.error) {
+          const msg = `${getNetworkName(network)}: ${result.error}`;
+          this.onLog({
+            id: generateId(),
+            timestamp: Date.now(),
+            level: 'error',
+            message: msg,
+          });
+          if (!silent) await this.sendNotification('error', msg);
+          continue;
+        }
+        
+        if (result.pairs.length === 0) {
+          const msg = `${getNetworkName(network)}: no pairs from any source`;
+          this.onLog({
+            id: generateId(),
+            timestamp: Date.now(),
+            level: 'warning',
+            message: msg,
+          });
+          if (!silent) await this.sendNotification('warning', msg);
+          continue;
+        }
+
+        const sourceStr = result.sources
+          .map((s) => `${s.name}:${s.count}${s.error ? '!' : ''}`)
+          .join(' | ');
+        
+        const pairsMsg = `${getNetworkName(network)}: ${result.pairs.length} pairs [${sourceStr}]`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: pairsMsg,
+        });
+        if (!silent) {
+          await this.sendNotification('info', `📦 ${pairsMsg}`);
+        }
+
+        // ✅ تخفيف شروط التصفية
+        const filters: HunterFilters = {
+          minLiquidityUsd: Math.min(this.config.minLiquidityUsd || 15000, 15000),
+          minVolume24h: Math.min(this.config.minVolume24h || 30000, 30000),
+          minPriceChange24h: this.config.minPriceChange24h || 0,
+        };
+
+        let huntResult;
+        try {
+          huntResult = runBotAnalysis(result.pairs, network, filters);
+        } catch (analysisError) {
+          console.error('❌ runBotAnalysis فشل:', analysisError);
+          huntResult = {
+            tokens: [],
+            stats: {
+              totalPairs: 0,
+              uniqueTokens: 0,
+              afterSecurity: 0,
+              afterLiquidity: 0,
+              afterVolume: 0,
+              candidates: 0,
+              watchlist: 0,
+              rejected: 0,
+              lastUpdate: Date.now(),
+              error: analysisError instanceof Error ? analysisError.message : 'Unknown error',
+            },
+            recommendations: [],
+          };
+        }
+
+        const safeStats = {
+          totalPairs: huntResult?.stats?.totalPairs || 0,
+          uniqueTokens: huntResult?.stats?.uniqueTokens || 0,
+          afterSecurity: huntResult?.stats?.afterSecurity || 0,
+          afterLiquidity: huntResult?.stats?.afterLiquidity || 0,
+          afterVolume: huntResult?.stats?.afterVolume || 0,
+          candidates: huntResult?.stats?.candidates || 0,
+          watchlist: huntResult?.stats?.watchlist || 0,
+          rejected: huntResult?.stats?.rejected || 0,
+          lastUpdate: Date.now(),
+          error: null,
+        };
+
+        const statsMsg = `${getNetworkName(network)}: ${safeStats.totalPairs} pairs -> ${safeStats.uniqueTokens} tokens -> ${safeStats.candidates} candidates`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: statsMsg,
+        });
+        if (!silent) {
+          await this.sendNotification('info', `📊 ${statsMsg}`);
+        }
+
+        const tokens = huntResult?.tokens || [];
+        if (tokens.length === 0) {
+          const msg = `${getNetworkName(network)}: no tokens met criteria this cycle`;
+          this.onLog({
+            id: generateId(),
+            timestamp: Date.now(),
+            level: 'info',
+            message: msg,
+          });
+          if (!silent) await this.sendNotification('info', msg);
+          continue;
+        }
+
+        if (this.config.mode === 'auto') {
+          await this.processAutoTrades(tokens, network, silent);
+        } else {
+          const candidates = getTopRecommendations(huntResult, 5);
+          const msg = `${getNetworkName(network)}: ${candidates.length} opportunities found (manual review)`;
+          this.onLog({
+            id: generateId(),
+            timestamp: Date.now(),
+            level: 'info',
+            message: msg,
+          });
+          if (!silent) await this.sendNotification('info', msg);
+        }
+
+      } catch (e) {
+        if (e instanceof Error && e.message?.includes('totalPairs')) {
+          console.warn('⚠️ stats غير مكتملة، تخطي الإشعار');
+          continue;
+        }
+        const msg = `Cycle error on ${getNetworkName(network)}: ${e instanceof Error ? e.message : 'unknown'}`;
         this.onLog({
           id: generateId(),
           timestamp: Date.now(),
           level: 'error',
           message: msg,
         });
-        await this.sendNotification('error', msg);
-        continue;
+        if (!silent) await this.sendNotification('error', msg);
       }
-      
-      if (result.pairs.length === 0) {
-        const msg = `${getNetworkName(network)}: no pairs from any source`;
-        this.onLog({
-          id: generateId(),
-          timestamp: Date.now(),
-          level: 'warning',
-          message: msg,
-        });
-        await this.sendNotification('warning', msg);
-        continue;
-      }
-
-      const sourceStr = result.sources
-        .map((s) => `${s.name}:${s.count}${s.error ? '!' : ''}`)
-        .join(' | ');
-      
-      const pairsMsg = `${getNetworkName(network)}: ${result.pairs.length} pairs [${sourceStr}]`;
-      this.onLog({
-        id: generateId(),
-        timestamp: Date.now(),
-        level: 'info',
-        message: pairsMsg,
-      });
-      await this.sendNotification('info', `📦 ${pairsMsg}`);
-
-      const filters: HunterFilters = {
-        minLiquidityUsd: this.config.minLiquidityUsd,
-        minVolume24h: this.config.minVolume24h,
-        minPriceChange24h: this.config.minPriceChange24h,
-      };
-
-      // ✅ استدعاء runBotAnalysis مع حماية كاملة
-      let huntResult;
-      try {
-        huntResult = runBotAnalysis(result.pairs, network, filters);
-      } catch (analysisError) {
-        console.error('❌ runBotAnalysis فشل:', analysisError);
-        huntResult = {
-          tokens: [],
-          stats: {
-            totalPairs: 0,
-            uniqueTokens: 0,
-            afterSecurity: 0,
-            afterLiquidity: 0,
-            afterVolume: 0,
-            candidates: 0,
-            watchlist: 0,
-            rejected: 0,
-            lastUpdate: Date.now(),
-            error: analysisError instanceof Error ? analysisError.message : 'Unknown error',
-          },
-          recommendations: [],
-        };
-      }
-
-      // ✅ حماية مضمونة 100%
-      const safeStats = {
-        totalPairs: huntResult?.stats?.totalPairs || 0,
-        uniqueTokens: huntResult?.stats?.uniqueTokens || 0,
-        afterSecurity: huntResult?.stats?.afterSecurity || 0,
-        afterLiquidity: huntResult?.stats?.afterLiquidity || 0,
-        afterVolume: huntResult?.stats?.afterVolume || 0,
-        candidates: huntResult?.stats?.candidates || 0,
-        watchlist: huntResult?.stats?.watchlist || 0,
-        rejected: huntResult?.stats?.rejected || 0,
-        lastUpdate: Date.now(),
-        error: null,
-      };
-
-      const statsMsg = `${getNetworkName(network)}: ${safeStats.totalPairs} pairs -> ${safeStats.uniqueTokens} tokens -> ${safeStats.candidates} candidates`;
-      this.onLog({
-        id: generateId(),
-        timestamp: Date.now(),
-        level: 'info',
-        message: statsMsg,
-      });
-      await this.sendNotification('info', `📊 ${statsMsg}`);
-
-      const tokens = huntResult?.tokens || [];
-      if (tokens.length === 0) {
-        const msg = `${getNetworkName(network)}: no tokens met criteria this cycle`;
-        this.onLog({
-          id: generateId(),
-          timestamp: Date.now(),
-          level: 'info',
-          message: msg,
-        });
-        await this.sendNotification('info', msg);
-        continue;
-      }
-
-      if (this.config.mode === 'auto') {
-        await this.processAutoTrades(tokens, network);
-      } else {
-        const candidates = getTopRecommendations(huntResult, 5);
-        const msg = `${getNetworkName(network)}: ${candidates.length} opportunities found (manual review)`;
-        this.onLog({
-          id: generateId(),
-          timestamp: Date.now(),
-          level: 'info',
-          message: msg,
-        });
-        await this.sendNotification('info', msg);
-      }
-
-    } catch (e) {
-      // ✅ منع إشعارات totalPairs المتكررة
-      if (e instanceof Error && e.message?.includes('totalPairs')) {
-        console.warn('⚠️ stats غير مكتملة، تخطي الإشعار');
-        continue;
-      }
-      const msg = `Cycle error on ${getNetworkName(network)}: ${e instanceof Error ? e.message : 'unknown'}`;
-      this.onLog({
-        id: generateId(),
-        timestamp: Date.now(),
-        level: 'error',
-        message: msg,
-      });
-      await this.sendNotification('error', msg);
     }
-  } // ← إغلاق حلقة for
 
-  await this.sendNotification('info', `✅ انتهت دورة المسح (${this.activePositions.size} صفقة مفتوحة)`);
-} // ← إغلاق دالة runCycle
-
-// ============================================================
-// 📊 معالجة الصفقات التلقائية
-// ============================================================
-
-private async processAutoTrades(tokens: DiscoveredToken[], network: ChainId): Promise<void> {
-  if (!(await this.canExecuteTrade())) {
-    const msg = `⏸️ توقف الشراء: تم الوصول للحد اليومي (${this.dynamicMaxTrades})`;
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'info',
-      message: msg,
-    });
-    await this.sendNotification('warning', msg);
-    return;
+    if (!silent) {
+      await this.sendNotification('info', `✅ انتهت دورة المسح (${this.activePositions.size} صفقة مفتوحة)`);
+    } else {
+      console.log(`✅ [SILENT] انتهى مسح ${this.botId || 'BOT'}`);
+    }
   }
 
-  const candidates = getTopRecommendations({ tokens, stats: null as any, recommendations: [] }, 3);
+  // ============================================================
+  // 📊 معالجة الصفقات التلقائية (مع silent)
+  // ============================================================
 
-  for (const token of tokens) {
-    if (token.status === 'reject') continue;
-
-    const priceUsd = token.priceUsd;
-    if (priceUsd <= 0) continue;
-
+  private async processAutoTrades(tokens: DiscoveredToken[], network: ChainId, silent: boolean = false): Promise<void> {
     if (!(await this.canExecuteTrade())) {
       const msg = `⏸️ توقف الشراء: تم الوصول للحد اليومي (${this.dynamicMaxTrades})`;
       this.onLog({
@@ -1259,76 +1233,141 @@ private async processAutoTrades(tokens: DiscoveredToken[], network: ChainId): Pr
         level: 'info',
         message: msg,
       });
-      await this.sendNotification('warning', msg);
+      if (!silent) await this.sendNotification('warning', msg);
       return;
     }
 
-    // ✅ إشعار بداية تحليل العملة
-    await this.sendNotification('info', `🧠 تحليل ${token.symbol} (نقاط: ${token.score}/100)`);
-
-    // ✅ 1. تحليل Gemini
-    let shouldBuy = token.status === 'candidate';
-    let reason = `Hunter score ${token.score}/100 — ${token.status} (${token.strategy})`;
-    let aiConfidence = 50;
-    let aiDecision = 'hold';
-
-    if (this.config.aiAssist && token.status === 'candidate') {
-      try {
-        const analysis = await analyzeToken(token);
-        aiDecision = analysis.recommendation;
-        aiConfidence = analysis.confidence;
-        shouldBuy = analysis.recommendation === 'strong_buy' || analysis.recommendation === 'buy';
-        reason = `AI: ${analysis.recommendation} (${analysis.confidence}%) — ${analysis.summary.slice(0, 80)}`;
-        await this.sendNotification('info', `📊 ${token.symbol}: AI ${analysis.recommendation} (${analysis.confidence}%)`);
-      } catch {
-        reason = `Hunter score ${token.score}/100 (AI unavailable)`;
-        await this.sendNotification('warning', `⚠️ ${token.symbol}: AI غير متاح، استخدام Hunter فقط`);
-      }
-    }
-
-    // ✅ 2. حساب النقاط التقنية
-    const technicalScore = calculateTechnicalScore(token);
-
-    // ✅ 3. دمج النقاط التقنية مع ثقة AI
-    const finalScore = (technicalScore * 0.60) + (aiConfidence * 0.40);
-
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'info',
-      message: `📊 ${token.symbol}: Technical=${technicalScore}, AI Confidence=${aiConfidence}, Final=${finalScore.toFixed(0)}`,
+    // ✅ ترتيب العملات حسب الزخم (الأعلى أولاً)
+    const sortedTokens = [...tokens].sort((a, b) => {
+      const momentumA = a.priceChange.h1 + a.priceChange.h6;
+      const momentumB = b.priceChange.h1 + b.priceChange.h6;
+      return momentumB - momentumA;
     });
 
-    // ✅ 4. القرار النهائي
-    if (!shouldBuy || finalScore < 60) {
-      const msg = `⏭️ تخطي ${token.symbol}: ${reason} (Final Score: ${finalScore.toFixed(0)})`;
+    for (const token of sortedTokens) {
+      if (token.status === 'reject') continue;
+
+      const priceUsd = token.priceUsd;
+      if (priceUsd <= 0) continue;
+
+      if (!(await this.canExecuteTrade())) {
+        const msg = `⏸️ توقف الشراء: تم الوصول للحد اليومي (${this.dynamicMaxTrades})`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: msg,
+        });
+        if (!silent) await this.sendNotification('warning', msg);
+        return;
+      }
+
+      if (!silent) {
+        await this.sendNotification('info', `🧠 تحليل ${token.symbol} (نقاط: ${token.score}/100)`);
+      }
+
+      let shouldBuy = token.status === 'candidate';
+      let reason = `Hunter score ${token.score}/100 — ${token.status} (${token.strategy})`;
+      let aiConfidence = 50;
+      let aiDecision = 'hold';
+
+      if (this.config.aiAssist && token.status === 'candidate') {
+        try {
+          const analysis = await analyzeToken(token);
+          aiDecision = analysis.recommendation;
+          aiConfidence = analysis.confidence;
+          shouldBuy = analysis.recommendation === 'strong_buy' || analysis.recommendation === 'buy';
+          reason = `AI: ${analysis.recommendation} (${analysis.confidence}%) — ${analysis.summary.slice(0, 80)}`;
+          if (!silent) {
+            await this.sendNotification('info', `📊 ${token.symbol}: AI ${analysis.recommendation} (${analysis.confidence}%)`);
+          }
+        } catch {
+          reason = `Hunter score ${token.score}/100 (AI unavailable)`;
+          if (!silent) {
+            await this.sendNotification('warning', `⚠️ ${token.symbol}: AI غير متاح، استخدام Hunter فقط`);
+          }
+        }
+      }
+
+      const technicalScore = calculateTechnicalScore(token);
+      const finalScore = (technicalScore * 0.60) + (aiConfidence * 0.40);
+
       this.onLog({
         id: generateId(),
         timestamp: Date.now(),
         level: 'info',
-        message: msg,
+        message: `📊 ${token.symbol}: Technical=${technicalScore}, AI Confidence=${aiConfidence}, Final=${finalScore.toFixed(0)}`,
       });
-      await this.sendNotification('warning', msg);
-      continue;
-    }
 
-    // ✅ 5. التحقق من وضع العملة
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'info',
-      message: `🔍 التحقق من وضع ${token.symbol}...`,
-    });
-    await this.sendNotification('info', `🔍 التحقق من وضع ${token.symbol}...`);
-    
-    const verification = await this.verifyTradeOpportunity(token, network);
+      // ✅ تخفيف شرط القبول (55 بدلاً من 60)
+      if (!shouldBuy || finalScore < 55) {
+        const msg = `⏭️ تخطي ${token.symbol}: ${reason} (Final Score: ${finalScore.toFixed(0)})`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: msg,
+        });
+        if (!silent) await this.sendNotification('warning', msg);
+        continue;
+      }
 
-    if (!verification.shouldBuy) {
       this.onLog({
         id: generateId(),
         timestamp: Date.now(),
-        level: 'warning',
-        message: `⛔ ${token.symbol}: ${verification.reason}`,
+        level: 'info',
+        message: `🔍 التحقق من وضع ${token.symbol}...`,
+      });
+      if (!silent) {
+        await this.sendNotification('info', `🔍 التحقق من وضع ${token.symbol}...`);
+      }
+      
+      const verification = await this.verifyTradeOpportunity(token, network);
+
+      if (!verification.shouldBuy) {
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'warning',
+          message: `⛔ ${token.symbol}: ${verification.reason}`,
+        });
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: `   📊 السعر الحالي: $${verification.currentPrice.toFixed(6)}`,
+        });
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: `   📊 الانزلاق: ${(verification.priceImpact * 100).toFixed(2)}%`,
+        });
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: `   📊 التقلبات: ${(verification.volatility * 100).toFixed(2)}%`,
+        });
+        if (!silent) await this.sendNotification('warning', `⛔ ${token.symbol}: ${verification.reason}`);
+        continue;
+      }
+
+      const stopLossPrice = verification.currentPrice * (1 - this.config.stopLossPct / 100);
+      const positionSize = await this.calculateDynamicPositionSize(
+        token,
+        verification.currentPrice,
+        stopLossPrice
+      );
+
+      const amountUsd = Math.min(positionSize, this.config.maxPositionUsd);
+      const amountInSol = amountUsd / 100;
+
+      this.onLog({
+        id: generateId(),
+        timestamp: Date.now(),
+        level: 'success',
+        message: `✅ ${token.symbol}: ${verification.reason}`,
       });
       this.onLog({
         id: generateId(),
@@ -1340,150 +1379,117 @@ private async processAutoTrades(tokens: DiscoveredToken[], network: ChainId): Pr
         id: generateId(),
         timestamp: Date.now(),
         level: 'info',
-        message: `   📊 الانزلاق: ${(verification.priceImpact * 100).toFixed(2)}%`,
+        message: `   📊 حجم الصفقة: $${amountUsd.toFixed(2)} (${RISK_PER_TRADE}% مخاطرة)`,
       });
       this.onLog({
         id: generateId(),
         timestamp: Date.now(),
         level: 'info',
-        message: `   📊 التقلبات: ${(verification.volatility * 100).toFixed(2)}%`,
+        message: `   📊 النقاط النهائية: ${finalScore.toFixed(0)}/100`,
       });
-      await this.sendNotification('warning', `⛔ ${token.symbol}: ${verification.reason}`);
-      continue;
+
+      if (!silent) {
+        await this.sendNotification('success', `✅ ${token.symbol}: ${verification.reason}`);
+        await this.sendNotification('info', `💰 حجم الصفقة: $${amountUsd.toFixed(2)} | النقاط: ${finalScore.toFixed(0)}/100`);
+      }
+
+      const balance = await this.wallet.refreshBalance(network);
+      if (!silent) {
+        await this.sendNotification('info', `💰 رصيد ${getNetworkName(network)}: $${balance.toFixed(2)}`);
+      }
+
+      if (balance < amountUsd) {
+        const msg = `⚠️ ${token.symbol}: الرصيد غير كافٍ ($${balance.toFixed(2)} < $${amountUsd.toFixed(2)})`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'warning',
+          message: msg,
+        });
+        if (!silent) await this.sendNotification('warning', msg);
+        continue;
+      }
+
+      const result = await this.executeBuyWithRetry({
+        tokenAddress: token.tokenAddress,
+        amountInSol: amountInSol,
+        slippage: 0.01,
+        password: "SecureMasterPassword123!@#",
+        maxRetries: 3,
+        retryDelay: 30000,
+        network: network,
+        tokenSymbol: token.symbol,
+      });
+
+      const status = result.success ? 'executed' : 'failed';
+      const trade: Trade = {
+        id: generateId(),
+        timestamp: Date.now(),
+        network,
+        tokenSymbol: token.symbol,
+        tokenAddress: token.tokenAddress,
+        pairAddress: token.pairAddress,
+        side: 'buy',
+        amountUsd,
+        priceUsd: verification.currentPrice,
+        quantity: amountUsd / verification.currentPrice,
+        status,
+        reason: `${reason} | Final Score: ${finalScore.toFixed(0)}`,
+        txHash: result.txHash,
+      };
+
+      if (result.error) {
+        const msg = `❌ BUY ${token.symbol} FAILED: ${result.error}`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'error',
+          message: msg,
+        });
+        if (!silent) await this.sendNotification('error', msg);
+      } else {
+        this.dailyTrades++;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: `📊 الصفقة ${this.dailyTrades}/${this.dynamicMaxTrades} اليوم`,
+        });
+        if (!silent) {
+          await this.sendNotification('success', `✅ تم شراء ${token.symbol} بمبلغ $${amountUsd.toFixed(2)}`);
+        }
+        
+        this.highestPrices.set(`${network}-${token.tokenAddress}`, verification.currentPrice);
+        this.activePositions.set(`${network}-${token.tokenAddress}`, trade);
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'success',
+          message: `✅ REAL BUY ${token.symbol} on ${getNetworkName(network)} @ $${verification.currentPrice.toFixed(6)} — tx: ${result.txHash?.slice(0, 16)}... — ${reason}`,
+        });
+        if (!silent) {
+          await this.sendNotification('info', `📈 ${token.symbol} @ $${verification.currentPrice.toFixed(6)} | التجزئة: ${result.txHash?.slice(0, 16)}...`);
+        }
+        
+        this.scheduleSellCheck(token, network, trade);
+      }
+
+      await saveTrade({
+        token: trade.tokenSymbol,
+        tokenAddress: trade.tokenAddress,
+        network: trade.network,
+        amount: trade.amountUsd,
+        price: trade.priceUsd,
+        type: 'BUY',
+        status: status === 'executed' ? 'EXECUTED' : 'FAILED',
+        timestamp: getTimestamp(),
+        txHash: trade.txHash,
+        pnl: 0,
+        pnlPercent: 0,
+      });
+      this.onTrade(trade);
     }
-
-    // ✅ 6. حساب حجم الصفقة الديناميكي
-    const stopLossPrice = verification.currentPrice * (1 - this.config.stopLossPct / 100);
-    const positionSize = await this.calculateDynamicPositionSize(
-      token,
-      verification.currentPrice,
-      stopLossPrice
-    );
-
-    const amountUsd = Math.min(positionSize, this.config.maxPositionUsd);
-    const amountInSol = amountUsd / 100;
-
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'success',
-      message: `✅ ${token.symbol}: ${verification.reason}`,
-    });
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'info',
-      message: `   📊 السعر الحالي: $${verification.currentPrice.toFixed(6)}`,
-    });
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'info',
-      message: `   📊 حجم الصفقة: $${amountUsd.toFixed(2)} (${RISK_PER_TRADE}% مخاطرة)`,
-    });
-    this.onLog({
-      id: generateId(),
-      timestamp: Date.now(),
-      level: 'info',
-      message: `   📊 النقاط النهائية: ${finalScore.toFixed(0)}/100`,
-    });
-
-    await this.sendNotification('success', `✅ ${token.symbol}: ${verification.reason}`);
-    await this.sendNotification('info', `💰 حجم الصفقة: $${amountUsd.toFixed(2)} | النقاط: ${finalScore.toFixed(0)}/100`);
-
-    // ✅ 7. التحقق من الرصيد
-    const balance = await this.wallet.refreshBalance(network);
-    await this.sendNotification('info', `💰 رصيد ${getNetworkName(network)}: $${balance.toFixed(2)}`);
-
-    if (balance < amountUsd) {
-      const msg = `⚠️ ${token.symbol}: الرصيد غير كافٍ ($${balance.toFixed(2)} < $${amountUsd.toFixed(2)})`;
-      this.onLog({
-        id: generateId(),
-        timestamp: Date.now(),
-        level: 'warning',
-        message: msg,
-      });
-      await this.sendNotification('warning', msg);
-      continue;
-    }
-
-    // ✅ 8. تنفيذ الشراء
-    const result = await this.executeBuyWithRetry({
-      tokenAddress: token.tokenAddress,
-      amountInSol: amountInSol,
-      slippage: 0.01,
-password: "SecureMasterPassword123!@#",
-      maxRetries: 3,
-      retryDelay: 30000,
-      network: network,
-      tokenSymbol: token.symbol,
-    });
-
-    const status = result.success ? 'executed' : 'failed';
-    const trade: Trade = {
-      id: generateId(),
-      timestamp: Date.now(),
-      network,
-      tokenSymbol: token.symbol,
-      tokenAddress: token.tokenAddress,
-      pairAddress: token.pairAddress,
-      side: 'buy',
-      amountUsd,
-      priceUsd: verification.currentPrice,
-      quantity: amountUsd / verification.currentPrice,
-      status,
-      reason: `${reason} | Final Score: ${finalScore.toFixed(0)}`,
-      txHash: result.txHash,
-    };
-
-    if (result.error) {
-      const msg = `❌ BUY ${token.symbol} FAILED: ${result.error}`;
-      this.onLog({
-        id: generateId(),
-        timestamp: Date.now(),
-        level: 'error',
-        message: msg,
-      });
-      await this.sendNotification('error', msg);
-    } else {
-      this.dailyTrades++;
-      this.onLog({
-        id: generateId(),
-        timestamp: Date.now(),
-        level: 'info',
-        message: `📊 الصفقة ${this.dailyTrades}/${this.dynamicMaxTrades} اليوم`,
-      });
-      await this.sendNotification('success', `✅ تم شراء ${token.symbol} بمبلغ $${amountUsd.toFixed(2)}`);
-      
-      this.highestPrices.set(`${network}-${token.tokenAddress}`, verification.currentPrice);
-      this.activePositions.set(`${network}-${token.tokenAddress}`, trade);
-      this.onLog({
-        id: generateId(),
-        timestamp: Date.now(),
-        level: 'success',
-        message: `✅ REAL BUY ${token.symbol} on ${getNetworkName(network)} @ $${verification.currentPrice.toFixed(6)} — tx: ${result.txHash?.slice(0, 16)}... — ${reason}`,
-      });
-      await this.sendNotification('info', `📈 ${token.symbol} @ $${verification.currentPrice.toFixed(6)} | التجزئة: ${result.txHash?.slice(0, 16)}...`);
-      
-      this.scheduleSellCheck(token, network, trade);
-    }
-
-    await saveTrade({
-      token: trade.tokenSymbol,
-      tokenAddress: trade.tokenAddress,
-      network: trade.network,
-      amount: trade.amountUsd,
-      price: trade.priceUsd,
-      type: 'BUY',
-      status: status === 'executed' ? 'EXECUTED' : 'FAILED',
-      timestamp: getTimestamp(),
-      txHash: trade.txHash,
-      pnl: 0,
-      pnlPercent: 0,
-    });
-    this.onTrade(trade);
   }
-}
 
   // ============================================================
   // 📊 مراقبة السعر للبيع
@@ -1510,7 +1516,6 @@ password: "SecureMasterPassword123!@#",
       }
 
       try {
-        // ✅ جلب السعر الحالي
         const response = await fetch(`${WORKER_URL}/dex-data`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1533,22 +1538,18 @@ password: "SecureMasterPassword123!@#",
           this.highestPrices.set(positionKey, highestPrice);
         }
 
-        // ✅ حالات البيع
         let sellReason: string | null = null;
         let sellPrice = currentPrice;
         let isPriceCritical = false;
 
-        // 1️⃣ وقف الخسارة الثابت
         if (currentPrice <= stopLoss) {
           sellReason = `Stop loss -${this.config.stopLossPct}%`;
           isPriceCritical = true;
         }
-        // 2️⃣ جني الأرباح
         else if (currentPrice >= takeProfit) {
           sellReason = `Take profit +${this.config.takeProfitPct}%`;
           isPriceCritical = false;
         }
-        // 3️⃣ Trailing Stop
         else {
           const trailingStopPrice = highestPrice * (1 - TRAILING_STOP_PERCENT / 100);
           if (currentPrice <= trailingStopPrice && highestPrice > buyTrade.priceUsd * 1.05) {
@@ -1557,7 +1558,6 @@ password: "SecureMasterPassword123!@#",
           }
         }
 
-        // 4️⃣ Time Exit
         if (!sellReason) {
           const positionAge = Date.now() - buyTrade.timestamp;
           if (positionAge > MAX_POSITION_TIME) {
@@ -1566,7 +1566,6 @@ password: "SecureMasterPassword123!@#",
           }
         }
 
-        // ✅ تنفيذ البيع
         if (sellReason) {
           clearInterval(checkId);
           this.onLog({
@@ -1588,7 +1587,7 @@ password: "SecureMasterPassword123!@#",
         }
 
       } catch {
-        // تجاهل الأخطاء مؤقتاً
+        // تجاهل الأخطاء
       }
     }, 15000);
   }

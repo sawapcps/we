@@ -39,7 +39,7 @@ import {
   Sparkles,
   Menu,
   X,
-    Bell, // ✅ أضف هذا
+  Bell,
   LogOut,
   User,
   Plus,
@@ -170,7 +170,7 @@ const StatusBadge: React.FC<{ status: 'running' | 'paused' | 'stopped' }> = ({ s
 };
 
 // ============================================================
-// 🧠 مكون إدارة البوتات الأربعة (النسخة النهائية)
+// 🧠 مكون إدارة البوتات الأربعة (النسخة النهائية مع تحكم المسح)
 // ============================================================
 const BotsManager: React.FC = () => {
   const {
@@ -184,8 +184,12 @@ const BotsManager: React.FC = () => {
     addLog,
     user,
     updateBotConfig,
+    runManualScan,          // دالة المسح اليدوي
+    startAutoScan,          // تشغيل المسح التلقائي
+    stopAutoScan,           // إيقاف المسح التلقائي
+    setScanInterval,        // تعيين الفاصل الزمني
+    getAutoScanStatus,      // جلب الحالة الحالية
   } = useApp();
-
 
   // ============================================================
   // ✅ دالة مساعدة لاستخراج الشبكات من البوت
@@ -220,6 +224,12 @@ const BotsManager: React.FC = () => {
   const [isStopping, setIsStopping] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isTogglingPaper, setIsTogglingPaper] = useState(false);
+
+  // ============================================================
+  // ✅ حالات المسح (جديدة)
+  // ============================================================
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanIntervalInput, setScanIntervalInput] = useState<Record<string, string>>({});
 
   // ============================================================
   // ✅ حالات الإنشاء (لكل نوع بوت)
@@ -542,7 +552,7 @@ const BotsManager: React.FC = () => {
       
    const updatedConfig = {
     maxPositionSize: editAmount,
-    max_position_size: editAmount, // ✅ أضف هذا
+    max_position_size: editAmount,
     takeProfit: editTakeProfit,
     stopLoss: editStopLoss,
     maxOpenTrades: editMaxTrades,
@@ -560,7 +570,6 @@ const BotsManager: React.FC = () => {
         await addLog('SUCCESS', `✅ تم تحديث إعدادات البوت ${selectedBot.name}`);
         console.log('✅ تم حفظ التعديلات بنجاح');
         
-        // ✅✅✅ إعادة تحميل القائمة بعد 500ms
         setTimeout(async () => {
           await loadBotInstances(user.id);
           console.log('🔄 تم إعادة تحميل البوتات');
@@ -637,6 +646,27 @@ const BotsManager: React.FC = () => {
       await addLog('ERROR', `❌ فشل تبديل الوضع: ${error}`);
     } finally {
       setIsTogglingPaper(false);
+    }
+  };
+
+  // ============================================================
+  // 🔄 مسح يدوي (جديد)
+  // ============================================================
+  const handleManualScan = async (botId: string) => {
+    if (!user?.id) return;
+    setIsScanning(true);
+    try {
+      const result = await runManualScan(botId);
+      if (result.success) {
+        await addLog('SUCCESS', result.message);
+        await loadBotInstances(user.id);
+      } else {
+        await addLog('ERROR', result.message);
+      }
+    } catch (error) {
+      await addLog('ERROR', `❌ فشل المسح: ${error}`);
+    } finally {
+      setIsScanning(false);
     }
   };
 
@@ -813,6 +843,8 @@ const BotsManager: React.FC = () => {
             const isRunning = bot.status === 'running';
             const botName = bot.name || 'بوت';
             const isPaperTrading = bot.paper_trading === 1;
+            const autoStatus = getAutoScanStatus(bot.id);
+            const intervalValue = scanIntervalInput[bot.id] || autoStatus.interval || 5;
 
             return (
               <GlassCard key={bot.id} hover glow className="p-5">
@@ -875,8 +907,11 @@ const BotsManager: React.FC = () => {
                   </div>
                 </div>
 
-                {/* أزرار التحكم */}
-                <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-[#1e1e2f] flex-wrap">
+                {/* ============================================================
+                    أزرار التحكم (مع إضافة أزرار المسح)
+                ============================================================ */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-3 border-t border-[#1e1e2f]">
+                  {/* تشغيل / إيقاف */}
                   {isRunning ? (
                     <Button
                       size="sm"
@@ -899,6 +934,7 @@ const BotsManager: React.FC = () => {
                     </Button>
                   )}
                   
+                  {/* محفظة */}
                   <Button
                     size="sm"
                     variant="secondary"
@@ -908,6 +944,49 @@ const BotsManager: React.FC = () => {
                     محفظة
                   </Button>
 
+                  {/* ✅ زر مسح يدوي */}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<RefreshCw className="w-3 h-3" />}
+                    onClick={() => handleManualScan(bot.id)}
+                    disabled={isScanning}
+                  >
+                    {isScanning ? 'جاري...' : 'مسح الآن'}
+                  </Button>
+
+                  {/* ✅ تحكم المسح التلقائي */}
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={intervalValue}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setScanIntervalInput(prev => ({ ...prev, [bot.id]: val }));
+                      }}
+                      className="w-12 bg-[#0a0a0f] border border-[#1e1e2f] rounded-lg px-1 py-1 text-white text-xs text-center"
+                    />
+                    <span className="text-[10px] text-[#64748b]">دقيقة</span>
+                    <Button
+                      size="sm"
+                      variant={autoStatus.active ? 'warning' : 'primary'}
+                      onClick={() => {
+                        const interval = parseInt(scanIntervalInput[bot.id]) || 5;
+                        if (autoStatus.active) {
+                          stopAutoScan(bot.id);
+                        } else {
+                          setScanInterval(bot.id, interval);
+                          startAutoScan(bot.id);
+                        }
+                      }}
+                    >
+                      {autoStatus.active ? 'إيقاف المسح' : 'بدء التلقائي'}
+                    </Button>
+                  </div>
+
+                  {/* تعديل */}
                   <Button
                     size="sm"
                     variant="secondary"
@@ -917,6 +996,7 @@ const BotsManager: React.FC = () => {
                     تعديل
                   </Button>
 
+                  {/* إغلاق الصفقات */}
                   <Button
                     size="sm"
                     variant="danger"
@@ -926,6 +1006,7 @@ const BotsManager: React.FC = () => {
                     إغلاق الصفقات
                   </Button>
 
+                  {/* حذف */}
                   <Button
                     size="sm"
                     variant="danger"
@@ -944,8 +1025,8 @@ const BotsManager: React.FC = () => {
       )}
 
       {/* ============================================================
-          مودال إنشاء بوت
-          ============================================================ */}
+          مودال إنشاء بوت (نفس الكود السابق)
+      ============================================================ */}
       {showCreateModal && (
         <div
           className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
@@ -1300,8 +1381,8 @@ const BotsManager: React.FC = () => {
       )}
 
       {/* ============================================================
-          مودال تعديل البوت
-          ============================================================ */}
+          مودال تعديل البوت (نفس الكود السابق)
+      ============================================================ */}
       {showEditModal && selectedBot && (
         <div
           className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
@@ -1473,8 +1554,7 @@ const Sidebar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     disconnectWallet,
     getWalletBalance,
     walletNetwork,
-        notifications, // ✅ أضف هذا
-
+    notifications,
   } = useApp();
 
   const [balance, setBalance] = useState(0);
@@ -1678,8 +1758,6 @@ const navItems = [
 // ============================================================
 // 🔔 مكون الإشعارات
 // ============================================================
-// 🔔 شريط الإشعارات الدائم + المنبثقة
-// ============================================================
 const Notifications: React.FC = () => {
     const { notifications, removeNotification } = useApp();
     const [showHistory, setShowHistory] = useState(false);
@@ -1690,7 +1768,6 @@ const Notifications: React.FC = () => {
     
     return (
         <>
-            {/* ✅ الإشعار المنبثق الحالي */}
             <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] w-full max-w-md px-4 pointer-events-none">
                 <div
                     className={`pointer-events-auto flex items-center justify-between gap-3 px-4 py-3 rounded-xl shadow-lg border backdrop-blur-xl ${
@@ -1715,7 +1792,6 @@ const Notifications: React.FC = () => {
                     </button>
                 </div>
                 
-                {/* ✅ سجل الإشعارات */}
                 {showHistory && (
                     <div className="pointer-events-auto mt-2 bg-[#14141e] border border-[#1e1e2f] rounded-xl shadow-2xl max-h-80 overflow-y-auto">
                         <div className="p-3 border-b border-[#1e1e2f] flex justify-between items-center">
@@ -1835,7 +1911,10 @@ const NotificationsPage: React.FC = () => {
         </div>
     );
 };
+
+// ============================================================
 // 🚀 التطبيق الرئيسي (AppContent)
+// ============================================================
 function AppContent() {
   const { user, addNotification, notifications } = useApp();
   const [pendingAnalysis, setPendingAnalysis] = useState<{ token: DiscoveredToken } | null>(null);
