@@ -677,9 +677,8 @@ const availableNetworks = NETWORKS; // ✅ يعرض جميع الشبكات ال
     setNativePrices(prices);
     return prices;
   }, [fetchNativePrice]);
-
-  // ✅ جلب محافظ المستخدم لكل شبكة
-  const fetchAllUserWallets = useCallback(async (networks: string[]) => {
+// ✅ جلب محافظ المستخدم لكل شبكة
+const fetchAllUserWallets = useCallback(async (networks: string[]) => {
   if (!user) return;
 
   setIsLoadingWallets(true);

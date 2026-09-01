@@ -552,11 +552,11 @@ export class AccountManager {
     return { success: true, txHash: result.txHash };
   }
 
-  // ============================================================
-  // 💰 إدارة محافظ المستخدمين (9 شبكات)
-  // ============================================================
+ // ============================================================
+// 💰 إدارة محافظ المستخدمين (9 شبكات)
+// ============================================================
 
-  // ✅ إنشاء محفظة للمستخدم على شبكة محددة
+// ✅ إنشاء محفظة للمستخدم على شبكة محددة
 static async createUserWallet(userId: string, network: string): Promise<UserWallet> {
   console.log(`💰 createUserWallet - إنشاء محفظة للمستخدم ${userId} على ${network}`);
   
@@ -592,107 +592,74 @@ static async createUserWallet(userId: string, network: string): Promise<UserWall
 
   return wallet;
 }
-    // ============================================================
-    // ⭐ ربط المحفظة مع bot_wallet (الإضافة الجديدة)
-    // ============================================================
-    try {
-      // الحصول على أول بوت للمستخدم
-      const botResult = await madarRead<{ id: string }>('bot_instances', {
-        where: { user_id: userId },
-        limit: 1
-      });
 
-      let botId = null;
-      if (botResult.success && botResult.data && Array.isArray(botResult.data) && botResult.data.length > 0) {
-        botId = botResult.data[0].id;
-      } else {
-        // إذا لم يكن للمستخدم بوت، أنشئ بوتاً افتراضياً
-        const newBot = await createBotInstance(userId, 'hunter', 'Default Bot', 100);
-        if (newBot.botId) botId = newBot.botId;
-      }
-
-      if (botId) {
-        const botWallet = {
-          id: generateId(),
-          bot_id: botId,
-          address: address,
-          encryptedPrivateKey: encryptedKey,
-          network: network,
-          balance: 0,
-          created_at: getTimestamp(),
-          updated_at: getTimestamp(),
-        };
-        await madarCreate('bot_wallet', botWallet);
-        console.log(`✅ تم إنشاء محفظة بوت لـ ${network}`);
-      } else {
-        console.warn(`⚠️ لم يتم العثور على بوت للمستخدم ${userId}، لم يتم إنشاء محفظة بوت`);
-      }
-    } catch (error) {
-      console.warn(`⚠️ فشل إنشاء محفظة بوت لـ ${network}:`, error);
-      // لا نوقف العملية إذا فشل إنشاء محفظة البوت
+// ✅ جلب محفظة المستخدم على شبكة محددة
+static async getUserWallet(userId: string, network: string): Promise<UserWallet | null> {
+  try {
+    const result = await madarRead<UserWallet>('user_wallets', { where: { userId, network } });
+    if (result.success && result.data && result.data.length > 0) {
+      return result.data[0];
     }
-
-    return wallet;
+    return null;
+  } catch (error) {
+    console.error('❌ getUserWallet Error:', error);
+    return null;
   }
+}
 
-  // ✅ جلب محفظة المستخدم على شبكة محددة
-  static async getUserWallet(userId: string, network: string): Promise<UserWallet | null> {
-    try {
-      const result = await madarRead<UserWallet>('user_wallets', { where: { userId, network } });
-      if (result.success && result.data && result.data.length > 0) {
-        return result.data[0];
-      }
-      return null;
-    } catch (error) {
-      console.error('❌ getUserWallet Error:', error);
-      return null;
-    }
-  }
-
-  // ✅ جلب جميع محافظ المستخدم
-  static async getAllUserWallets(userId: string): Promise<UserWallet[]> {
-    try {
-      const result = await madarRead<UserWallet>('user_wallets', { where: { userId } });
-      if (result.success && result.data) {
-        return Array.isArray(result.data) ? result.data : [result.data];
-      }
-      return [];
-    } catch (error) {
-      console.error('❌ getAllUserWallets Error:', error);
+// ✅ جلب جميع محافظ المستخدم
+static async getAllUserWallets(userId: string): Promise<UserWallet[]> {
+  try {
+    if (!userId || userId === 'undefined' || userId === 'null') {
+      console.warn('⚠️ userId غير صالح:', userId);
       return [];
     }
-  }
 
-  // ✅ إنشاء محافظ لجميع الشبكات (9 شبكات)
-  static async ensureAllUserWallets(userId: string): Promise<void> {
-    console.log(`🔄 ensureAllUserWallets - إنشاء محافظ لـ ${NETWORKS_LIST.length} شبكة للمستخدم ${userId}`);
+    const userIdStr = String(userId);
+    const result = await madarRead<UserWallet>('user_wallets', { where: { userId: userIdStr } });
     
-    for (const network of NETWORKS_LIST) {
-      try {
-        const existing = await this.getUserWallet(userId, network);
-        if (!existing) {
-          await this.createUserWallet(userId, network);
-          console.log(`✅ تم إنشاء محفظة ${network} للمستخدم ${userId}`);
-        } else {
-          console.log(`✅ محفظة ${network} موجودة بالفعل للمستخدم ${userId}`);
-        }
-      } catch (error) {
-        console.warn(`⚠️ فشل إنشاء محفظة ${network}:`, error);
+    if (result.success && result.data) {
+      const wallets = Array.isArray(result.data) ? result.data : [result.data];
+      const filtered = wallets.filter(w => String(w.userId) === userIdStr);
+      console.log(`✅ تم جلب ${filtered.length} محفظة للمستخدم ${userIdStr}`);
+      return filtered;
+    }
+    return [];
+  } catch (error) {
+    console.error('❌ getAllUserWallets Error:', error);
+    return [];
+  }
+}
+
+// ✅ إنشاء محافظ لجميع الشبكات (9 شبكات)
+static async ensureAllUserWallets(userId: string): Promise<void> {
+  console.log(`🔄 ensureAllUserWallets - إنشاء محافظ لـ ${NETWORKS_LIST.length} شبكة للمستخدم ${userId}`);
+  
+  for (const network of NETWORKS_LIST) {
+    try {
+      const existing = await this.getUserWallet(userId, network);
+      if (!existing) {
+        await this.createUserWallet(userId, network);
+        console.log(`✅ تم إنشاء محفظة ${network} للمستخدم ${userId}`);
+      } else {
+        console.log(`✅ محفظة ${network} موجودة بالفعل للمستخدم ${userId}`);
       }
+    } catch (error) {
+      console.warn(`⚠️ فشل إنشاء محفظة ${network}:`, error);
     }
   }
+}
 
-  // ✅ تحديث رصيد محفظة المستخدم
-  static async updateUserWalletBalance(userId: string, network: string, balance: number): Promise<void> {
-    const wallet = await this.getUserWallet(userId, network);
-    if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على ${network}`);
-    
-    await madarUpdate('user_wallets', wallet.id!, {
-      balance,
-      updated_at: getTimestamp(),
-    });
-  }
-
+// ✅ تحديث رصيد محفظة المستخدم
+static async updateUserWalletBalance(userId: string, network: string, balance: number): Promise<void> {
+  const wallet = await this.getUserWallet(userId, network);
+  if (!wallet) throw new Error(`لا توجد محفظة للمستخدم على ${network}`);
+  
+  await madarUpdate('user_wallets', wallet.id!, {
+    balance,
+    updated_at: getTimestamp(),
+  });
+}
   // ✅ جلب رصيد محفظة المستخدم من الشبكة
   static async getUserWalletBalance(userId: string, network: string): Promise<number> {
     const wallet = await this.getUserWallet(userId, network);

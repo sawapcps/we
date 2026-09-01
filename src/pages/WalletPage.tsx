@@ -231,69 +231,70 @@ export function WalletPage() {
   // ============================================================
   // تحميل البيانات (مع دمج المحافظ وتحديث الرصيد من user_wallets)
   // ============================================================
- const loadData = useCallback(async (forceRefresh: boolean = false) => {
-  if (isLoadingData.current && !forceRefresh) {
-    console.log("⏳ جاري التحميل بالفعل، تخطي...");
-    return;
-  }
-  
-  isLoadingData.current = true;
-  setIsLoading(true);
-  setError(null);
-  
-  try {
-    console.log(`🔄 جاري تحميل المحافظ${forceRefresh ? ' (إجباري)' : ''}...`);
+  const loadData = useCallback(async (forceRefresh: boolean = false) => {
+    if (isLoadingData.current && !forceRefresh) {
+      console.log("⏳ جاري التحميل بالفعل، تخطي...");
+      return;
+    }
     
-    // 1. تحميل محافظ البوت (للإدارة فقط)
-    await loadBotWallets();
-    const botWallet = BotWalletManager.getInstance();
-    const botWalletsList = botWallet.getAllWallets();
+    isLoadingData.current = true;
+    setIsLoading(true);
+    setError(null);
     
-    // 2. تحميل محافظ المستخدمين فقط
-    let userWalletsList: UserWallet[] = [];
-    if (user) {
-      if (forceRefresh) {
-        await loadUserWallets();
-      }
-      userWalletsList = userWallets || [];
-      if (userWalletsList.length === 0) {
-        await loadUserWallets();
+    try {
+      console.log(`🔄 جاري تحميل المحافظ${forceRefresh ? ' (إجباري)' : ''}...`);
+      
+      // 1. تحميل محافظ البوت (للإدارة فقط)
+      await loadBotWallets();
+      const botWallet = BotWalletManager.getInstance();
+      const botWalletsList = botWallet.getAllWallets();
+      
+      // 2. تحميل محافظ المستخدمين فقط
+      let userWalletsList: UserWallet[] = [];
+      if (user) {
+        if (forceRefresh) {
+          await loadUserWallets();
+        }
         userWalletsList = userWallets || [];
+        if (userWalletsList.length === 0) {
+          await loadUserWallets();
+          userWalletsList = userWallets || [];
+        }
       }
+      
+      console.log(`📊 محافظ البوت: ${botWalletsList.length}`);
+      console.log(`📊 محافظ المستخدم: ${userWalletsList.length}`);
+      
+      // 3. ✅ عرض محافظ المستخدم فقط (وليس محافظ البوت)
+      let combined: (BotWalletData | UserWallet)[] = [];
+      if (user) {
+        combined = userWalletsList;  // ✅ المستخدم يرى محافظه فقط
+      } else {
+        combined = botWalletsList;   // ✅ الضيف يرى محافظ البوت
+      }
+      
+      setWallets(combined);
+      
+      // حساب إجمالي الرصيد
+      const total = combined.reduce((sum, w) => sum + ((w as any).balance || 0), 0);
+      setTotalBalance(total);
+      
+      // جلب إحصائيات النظام
+      const stats = await AccountManager.getSystemStats();
+      setSystemStats(stats);
+      
+      console.log(`✅ تم تحميل ${combined.length} محفظة`);
+      console.log(`💰 إجمالي الرصيد: $${total.toFixed(2)}`);
+      
+    } catch (error) {
+      console.error("❌ خطأ في تحميل البيانات:", error);
+      setError("❌ فشل تحميل المحافظ");
+    } finally {
+      setIsLoading(false);
+      isLoadingData.current = false;
     }
-    
-    console.log(`📊 محافظ البوت: ${botWalletsList.length}`);
-    console.log(`📊 محافظ المستخدم: ${userWalletsList.length}`);
-    
-    // 3. ✅ عرض محافظ المستخدم فقط (وليس محافظ البوت)
-    let combined: (BotWalletData | UserWallet)[] = [];
-    if (user) {
-      combined = userWalletsList;  // ✅ المستخدم يرى محافظه فقط
-    } else {
-      combined = botWalletsList;   // ✅ الضيف يرى محافظ البوت
-    }
-    
-    setWallets(combined);
-    
-    // حساب إجمالي الرصيد
-    const total = combined.reduce((sum, w) => sum + ((w as any).balance || 0), 0);
-    setTotalBalance(total);
-    
-    // جلب إحصائيات النظام
-    const stats = await AccountManager.getSystemStats();
-    setSystemStats(stats);
-    
-    console.log(`✅ تم تحميل ${combined.length} محفظة`);
-    console.log(`💰 إجمالي الرصيد: $${total.toFixed(2)}`);
-    
-  } catch (error) {
-    console.error("❌ خطأ في تحميل البيانات:", error);
-    setError("❌ فشل تحميل المحافظ");
-  } finally {
-    setIsLoading(false);
-    isLoadingData.current = false;
-  }
-}, [user, loadBotWallets, loadUserWallets, userWallets]);
+  }, [user, loadBotWallets, loadUserWallets, userWallets]);
+
   // ============================================================
   // تحميل أولي
   // ============================================================
