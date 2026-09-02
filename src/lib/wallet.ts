@@ -16,19 +16,18 @@ import { AccountManager, UserWallet } from './accounts';
 // 📊 الأنواع
 // ============================================================
 
-// src/lib/wallet.ts - السطر ~28
-
 export interface BotWalletData {
   id?: string;
-  bot_id: string;              // ✅ underscore
+  bot_id: string;
   address: string;
-  encrypted_private_key: string;  // ✅ underscore (ليس encryptedPrivateKey)
+  encrypted_private_key: string;
   network: string;
   balance: number;
-  created_at: string;          // ✅ underscore (ليس createdAt)
-  updated_at: string;          // ✅ underscore (ليس updatedAt)
+  created_at: string;
+  updated_at: string;
   userId?: string;
 }
+
 export interface TradeResult {
   success: boolean;
   txHash?: string;
@@ -47,7 +46,7 @@ export interface TradeResult {
 const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 
 // ============================================================
-// 🌐 RPC URLs احتياطي (في حال فشل Worker)
+// 🌐 RPC URLs احتياطي
 // ============================================================
 
 const RPC_URLS = [
@@ -64,10 +63,9 @@ function getWorkingRpcUrl(): string {
 }
 
 // ============================================================
-// 🔑 المفاتيح (من البيئة مباشرة - بدون keyManager)
+// 🔑 المفاتيح (من البيئة مباشرة)
 // ============================================================
 
-// ✅ استخدام المفاتيح مباشرة من import.meta.env
 const JUPITER_API_KEY = import.meta.env.VITE_JUPITER_API_KEY || '';
 const ANKR_KEY = import.meta.env.VITE_ANKR_KEY || '';
 const HELIUS_KEY = import.meta.env.VITE_HELIUS_KEY || '';
@@ -108,7 +106,6 @@ export function createWallet(network: string): { address: string; privateKey: st
 // ============================================================
 
 export async function getSolanaBalance(address: string): Promise<number> {
-  // ✅ محاولة عبر Worker أولاً
   try {
     const response = await fetch(`${WORKER_URL}/solana`, {
       method: 'POST',
@@ -136,11 +133,12 @@ export async function getSolanaBalanceDirect(address: string): Promise<number> {
   const url = getWorkingRpcUrl();
   try {
     const connection = new Connection(url, 'confirmed');
+    // ✅ تصحيح: استخدام new PublicKey بدلاً من Vk.from
     const pubKey = new PublicKey(address);
     const balance = await connection.getBalance(pubKey);
     return balance / LAMPORTS_PER_SOL;
   } catch (error: any) {
-    if (error.message?.includes('403') || error.message?.includes('Access forbidden') || 
+    if (error.message?.includes('403') || error.message?.includes('Access forbidden') ||
         error.message?.includes('429') || error.message?.includes('fetch')) {
       workingRpcIndex = (workingRpcIndex + 1) % RPC_URLS.length;
       console.log(`🔄 تبديل RPC إلى: ${RPC_URLS[workingRpcIndex]}`);
@@ -224,14 +222,12 @@ async function executeJupiterSwap(params: {
   try {
     const SOL_MINT = 'So11111111111111111111111111111111111111112';
     const amountLamports = Math.floor(params.amountInSol * 1e9);
-    
-    // ✅ تحديد اتجاه الصفقة
+
     const inputMint = params.side === 'sell' ? params.tokenAddress : SOL_MINT;
     const outputMint = params.side === 'sell' ? SOL_MINT : params.tokenAddress;
-    
-    // ✅ جلب السعر من Jupiter
+
     const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountLamports}&slippageBps=${Math.floor(params.slippage * 100)}`;
-    
+
     const quoteResponse = await fetch(quoteUrl, {
       headers: JUPITER_API_KEY ? { Authorization: `Bearer ${JUPITER_API_KEY}` } : {},
     });
@@ -242,12 +238,11 @@ async function executeJupiterSwap(params: {
     }
 
     const quote = await quoteResponse.json();
-    
+
     if (!quote || !quote.outAmount) {
       return { txHash: '', price: 0, error: '❌ لا توجد أسعار من Jupiter' };
     }
 
-    // ✅ تنفيذ الصفقة
     const swapResponse = await fetch('https://quote-api.jup.ag/v6/swap', {
       method: 'POST',
       headers: {
@@ -269,12 +264,11 @@ async function executeJupiterSwap(params: {
     }
 
     const swapData = await swapResponse.json();
-    
+
     if (!swapData || !swapData.swapTransaction) {
       return { txHash: '', price: 0, error: '❌ لا توجد معاملة من Jupiter' };
     }
 
-    // ✅ حساب السعر الفعلي
     const outAmount = parseFloat(quote.outAmount) / 1e9;
     const price = params.side === 'buy' ? params.amountInSol / outAmount : outAmount / params.amountInSol;
 
@@ -326,18 +320,16 @@ async function executeParaSwapTrade(params: {
   const amount = params.side === 'buy' ? params.amount * 1e18 : params.amount * 1e18;
 
   try {
-    // ✅ جلب السعر من ParaSwap
     const priceUrl = `https://api.paraswap.io/prices?srcToken=${srcToken}&destToken=${destToken}&amount=${amount}&side=${params.side === 'buy' ? 'SELL' : 'BUY'}&network=${chainId}`;
     const priceResponse = await fetch(priceUrl);
-    
+
     if (!priceResponse.ok) {
       const error = await priceResponse.text();
       return { txHash: '', price: 0, error: `❌ فشل جلب السعر: ${error}` };
     }
-    
+
     const priceData = await priceResponse.json();
 
-    // ✅ تنفيذ الصفقة
     const swapUrl = `https://api.paraswap.io/transactions/${chainId}`;
     const swapResponse = await fetch(swapUrl, {
       method: 'POST',
@@ -358,8 +350,7 @@ async function executeParaSwapTrade(params: {
     }
 
     const swapData = await swapResponse.json();
-    
-    // ✅ حساب السعر الفعلي
+
     const price = parseFloat(priceData.destAmount) / parseFloat(priceData.srcAmount);
 
     return {
@@ -422,7 +413,7 @@ async function sendEVMTx(params: {
   try {
     const provider = new ethers.JsonRpcProvider(`https://rpc.ankr.com/${params.network}/${ANKR_KEY}`);
     const wallet = new ethers.Wallet(params.privateKey, provider);
-    
+
     const tx = await wallet.sendTransaction({
       to: params.toAddress,
       value: ethers.parseEther(params.amount.toString()),
@@ -446,17 +437,16 @@ export class BotWalletManager {
   private static instance: BotWalletManager;
   private wallets: BotWalletData[] = [];
   private masterPassword: string;
-  
+
   private static isInitialized = false;
   private static initializationPromise: Promise<BotWalletData> | null = null;
   private static isLoadingWallets = false;
   private static walletsLoaded = false;
 
- private constructor() {
-    // ✅ استخدام كلمة مرور ثابتة (تجاوز مشكلة المتغير)
+  private constructor() {
     this.masterPassword = "SecureMasterPassword123!@#";
     console.log('🔑 تم تعيين كلمة مرور ثابتة في BotWalletManager');
-}
+  }
 
   static getInstance(): BotWalletManager {
     if (!BotWalletManager.instance) {
@@ -492,7 +482,7 @@ export class BotWalletManager {
     console.log(`🔄 بدء تحميل محفظة ${network}...`);
     BotWalletManager.isLoadingWallets = true;
     BotWalletManager.initializationPromise = this._initInternal(network);
-    
+
     try {
       const result = await BotWalletManager.initializationPromise;
       BotWalletManager.isInitialized = true;
@@ -505,66 +495,60 @@ export class BotWalletManager {
     }
   }
 
-// src/lib/wallet.ts - السطر ~535
+  private async _initInternal(network: string = 'solana'): Promise<BotWalletData> {
+    const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
 
-// src/lib/wallet.ts - دالة _initInternal
+    if (!VALID_NETWORKS.includes(network)) {
+      console.warn(`⚠️ شبكة غير صالحة: ${network} - تجاهل`);
+      throw new Error(`شبكة غير صالحة: ${network}`);
+    }
 
-private async _initInternal(network: string = 'solana'): Promise<BotWalletData> {
-  // ✅ الشبكات الصحيحة فقط
-  const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
-  
-  if (!VALID_NETWORKS.includes(network)) {
-    console.warn(`⚠️ شبكة غير صالحة: ${network} - تجاهل`);
-    throw new Error(`شبكة غير صالحة: ${network}`);
+    const result = await madarRead<BotWalletData>('bot_wallet', {});
+    this.wallets = result.success && result.data ? result.data : [];
+
+    this.wallets = this.wallets.filter(w => VALID_NETWORKS.includes(w.network));
+
+    let existingWallet = this.wallets.find((w) => w.network === network);
+
+    if (existingWallet && existingWallet.address) {
+      console.log(`✅ تم تحميل محفظة ${network}:`, existingWallet.address);
+      const balance = await getWalletBalance(network, existingWallet.address);
+      existingWallet.balance = balance;
+      await this.updateWallet(existingWallet);
+      return existingWallet;
+    }
+
+    console.log(`⚠️ لا توجد محفظة لـ ${network}، جاري إنشاء محفظة جديدة...`);
+    const { address, privateKey } = createWallet(network);
+    const encryptedKey = encrypt(privateKey, this.masterPassword);
+
+    const newWallet: BotWalletData = {
+      id: generateId(),
+      bot_id: 'admin_wallet',
+      address,
+      encrypted_private_key: encryptedKey,
+      network,
+      balance: 0,
+      created_at: getTimestamp(),
+      updated_at: getTimestamp(),
+    };
+
+    await this.saveWallet(newWallet);
+    this.wallets.push(newWallet);
+    console.log(`✅ تم إنشاء محفظة ${network}:`, newWallet.address);
+    return newWallet;
   }
-  
-  const result = await madarRead<BotWalletData>('bot_wallet', {});
-  this.wallets = result.success && result.data ? result.data : [];
-  
-  // ✅ فلترة المحافظ الصالحة فقط
-  this.wallets = this.wallets.filter(w => VALID_NETWORKS.includes(w.network));
 
-  let existingWallet = this.wallets.find((w) => w.network === network);
-
-  if (existingWallet && existingWallet.address) {
-    console.log(`✅ تم تحميل محفظة ${network}:`, existingWallet.address);
-    const balance = await getWalletBalance(network, existingWallet.address);
-    existingWallet.balance = balance;
-    await this.updateWallet(existingWallet);
-    return existingWallet;
-  }
-
-  console.log(`⚠️ لا توجد محفظة لـ ${network}، جاري إنشاء محفظة جديدة...`);
-  const { address, privateKey } = createWallet(network);
-  const encryptedKey = encrypt(privateKey, this.masterPassword);
-
-  const newWallet: BotWalletData = {
-    id: generateId(),
-    bot_id: 'admin_wallet',
-    address,
-    encrypted_private_key: encryptedKey,
-    network,
-    balance: 0,
-    created_at: getTimestamp(),
-    updated_at: getTimestamp(),
-  };
-
-  await this.saveWallet(newWallet);
-  this.wallets.push(newWallet);
-  console.log(`✅ تم إنشاء محفظة ${network}:`, newWallet.address);
-  return newWallet;
-}
   private async saveWallet(wallet: BotWalletData): Promise<void> {
     console.log(`💾 جاري حفظ محفظة ${wallet.network}:`, wallet.address);
     await madarCreate('bot_wallet', wallet);
   }
 
-  // ✅ صحيح: استخدم updated_at
-private async updateWallet(wallet: BotWalletData): Promise<void> {
-  if (!wallet.id) return;
-  wallet.updated_at = getTimestamp();  // ✅ صحيح
-  await madarUpdate('bot_wallet', wallet.id, wallet);
-}
+  private async updateWallet(wallet: BotWalletData): Promise<void> {
+    if (!wallet.id) return;
+    wallet.updated_at = getTimestamp();
+    await madarUpdate('bot_wallet', wallet.id, wallet);
+  }
 
   getWallet(network?: string): BotWalletData | null {
     if (network) {
@@ -581,15 +565,15 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
     return this.wallets;
   }
 
- getAdminWallets(): BotWalletData[] {
-  return this.wallets.filter(w => w.bot_id === 'admin_wallet');
-}
+  getAdminWallets(): BotWalletData[] {
+    return this.wallets.filter(w => w.bot_id === 'admin_wallet');
+  }
 
- getPrivateKey(network: string, password: string): string {
-  const wallet = this.wallets.find((w) => w.network === network);
-  if (!wallet) throw new Error(`المحفظة (${network}) غير موجودة`);
-  return decrypt(wallet.encrypted_private_key, password);
-}
+  getPrivateKey(network: string, password: string): string {
+    const wallet = this.wallets.find((w) => w.network === network);
+    if (!wallet) throw new Error(`المحفظة (${network}) غير موجودة`);
+    return decrypt(wallet.encrypted_private_key, password);
+  }
 
   async refreshBalance(network?: string): Promise<number> {
     const targetNetwork = network || (this.wallets.length > 0 ? this.wallets[0].network : 'solana');
@@ -621,25 +605,15 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
       if (!wallet) throw new Error(`المحفظة (${network}) غير موجودة`);
       if (!wallet.address) throw new Error('عنوان المحفظة غير موجود');
 
-      // ✅ التحقق من الرصيد
-       const balance = await this.refreshBalance(network);
+      const balance = await this.refreshBalance(network);
       if (balance < params.amount) {
-        // ✅ تسجيل الإشعار
-        await saveLog({
-          level: 'ERROR',
-          message: `❌ الرصيد غير كافٍ على ${network}: ${balance} < ${params.amount}`,
-          timestamp: getTimestamp(),
-          context: { network, balance, required: params.amount, side: 'buy' }
-        });
-        
-        return { 
-          success: false, 
-          error: `❌ الرصيد غير كافٍ: ${balance} < ${params.amount}`, 
-          amount: params.amount, 
-          tokenAddress: params.tokenAddress 
+        return {
+          success: false,
+          error: `❌ الرصيد غير كافٍ: ${balance} < ${params.amount}`,
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
         };
       }
-      // ✅ جلب سعر التوكن الحالي
       const currentPrice = await getTokenPrice(params.tokenAddress, network);
 
       if (network === 'solana') {
@@ -667,7 +641,6 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
         };
       }
 
-      // ✅ EVM
       const result = await executeParaSwapTrade({
         network,
         tokenAddress: params.tokenAddress,
@@ -715,15 +688,14 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
       if (!wallet) throw new Error(`المحفظة (${network}) غير موجودة`);
       if (!wallet.address) throw new Error('عنوان المحفظة غير موجود');
 
-      // ✅ جلب سعر التوكن الحالي
       const currentPrice = await getTokenPrice(params.tokenAddress, network);
 
       if (currentPrice <= 0) {
-        return { 
-          success: false, 
-          error: '❌ لا يمكن جلب سعر التوكن للبيع', 
-          amount: params.amount, 
-          tokenAddress: params.tokenAddress 
+        return {
+          success: false,
+          error: '❌ لا يمكن جلب سعر التوكن للبيع',
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
         };
       }
 
@@ -752,7 +724,6 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
         };
       }
 
-      // ✅ EVM
       const result = await executeParaSwapTrade({
         network,
         tokenAddress: params.tokenAddress,
@@ -798,26 +769,17 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
       if (!wallet) throw new Error(`المحفظة (${params.network}) غير موجودة`);
       if (!wallet.address) throw new Error('عنوان المحفظة غير موجود');
 
-      // ✅ التحقق من الرصيد
-          const balance = await this.refreshBalance(params.network);
+      const balance = await this.refreshBalance(params.network);
       if (balance < params.amount) {
-        // ✅ تسجيل الإشعار
-        await saveLog({
-          level: 'ERROR',
-          message: `❌ الرصيد غير كافٍ على ${params.network}: ${balance} < ${params.amount}`,
-          timestamp: getTimestamp(),
-          context: { network: params.network, balance, required: params.amount }
-        });
-        
-        return { 
-          success: false, 
-          error: `❌ الرصيد غير كافٍ: ${balance} < ${params.amount}`, 
-          amount: params.amount, 
-          tokenAddress: params.toAddress 
+        return {
+          success: false,
+          error: `❌ الرصيد غير كافٍ: ${balance} < ${params.amount}`,
+          amount: params.amount,
+          tokenAddress: params.toAddress,
         };
       }
 
-      const privateKey = decrypt(wallet.encryptedPrivateKey, params.password);
+      const privateKey = decrypt(wallet.encrypted_private_key, params.password);
       let result;
 
       if (params.network === 'solana') {
@@ -837,11 +799,11 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
       }
 
       if (result.error) {
-        return { 
-          success: false, 
-          error: result.error, 
-          amount: params.amount, 
-          tokenAddress: params.toAddress 
+        return {
+          success: false,
+          error: result.error,
+          amount: params.amount,
+          tokenAddress: params.toAddress,
         };
       }
 
@@ -878,11 +840,11 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
 
     try {
       const network = params.network || 'solana';
-      
+
       const userWallet = await AccountManager.getUserWallet(params.userId, network);
       if (!userWallet) {
-        return { 
-          success: false, 
+        return {
+          success: false,
           error: `لا توجد محفظة للمستخدم على ${network}`,
           amount: params.amount,
           tokenAddress: params.tokenAddress,
@@ -890,25 +852,23 @@ private async updateWallet(wallet: BotWalletData): Promise<void> {
       }
 
       // ✅ التحقق من كلمة المرور (متجاوز للتجربة)
-try {
-  decrypt(userWallet.encryptedPrivateKey, params.password);
-} catch (decryptError) {
-  console.warn('⚠️ فشل التحقق من كلمة المرور، ولكن سيتم استمرار التنفيذ (للتجربة)');
-  // لا نوقف التنفيذ، نستمر
-}
+      try {
+        decrypt(userWallet.encryptedPrivateKey, params.password);
+      } catch (decryptError) {
+        console.warn('⚠️ فشل التحقق من كلمة المرور، ولكن سيتم استمرار التنفيذ (للتجربة)');
+        // لا نوقف التنفيذ، نستمر
+      }
 
-      // ✅ التحقق من الرصيد
       const balance = await AccountManager.getUserWalletBalance(params.userId, network);
       if (balance < params.amount) {
-        return { 
-          success: false, 
-          error: `❌ الرصيد غير كافٍ: ${balance} < ${params.amount}`, 
-          amount: params.amount, 
-          tokenAddress: params.tokenAddress 
+        return {
+          success: false,
+          error: `❌ الرصيد غير كافٍ: ${balance} < ${params.amount}`,
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
         };
       }
 
-      // ✅ جلب سعر التوكن الحالي
       const currentPrice = await getTokenPrice(params.tokenAddress, network);
 
       if (network === 'solana') {
@@ -925,7 +885,7 @@ try {
         }
 
         await AccountManager.updateUserWalletBalance(params.userId, network, userWallet.balance);
-        
+
         return {
           success: true,
           txHash: result.txHash,
@@ -937,7 +897,6 @@ try {
         };
       }
 
-      // ✅ EVM
       const result = await executeParaSwapTrade({
         network,
         tokenAddress: params.tokenAddress,
@@ -952,7 +911,7 @@ try {
       }
 
       await AccountManager.updateUserWalletBalance(params.userId, network, userWallet.balance);
-      
+
       return {
         success: true,
         txHash: result.txHash,
@@ -964,11 +923,11 @@ try {
       };
     } catch (error) {
       console.error('❌ [executeBuyForUser] خطأ:', error);
-      return { 
-        success: false, 
-        error: String(error), 
-        amount: params.amount, 
-        tokenAddress: params.tokenAddress 
+      return {
+        success: false,
+        error: String(error),
+        amount: params.amount,
+        tokenAddress: params.tokenAddress,
       };
     }
   }
@@ -992,35 +951,33 @@ try {
 
     try {
       const network = params.network || 'solana';
-      
+
       const userWallet = await AccountManager.getUserWallet(params.userId, network);
       if (!userWallet) {
-        return { 
-          success: false, 
+        return {
+          success: false,
           error: `لا توجد محفظة للمستخدم على ${network}`,
           amount: params.amount,
           tokenAddress: params.tokenAddress,
         };
       }
 
-      // ✅ التحقق من كلمة المرور
-     // ✅ التحقق من كلمة المرور (متجاوز للتجربة)
-try {
-  decrypt(userWallet.encryptedPrivateKey, params.password);
-} catch (decryptError) {
-  console.warn('⚠️ فشل التحقق من كلمة المرور، ولكن سيتم استمرار التنفيذ (للتجربة)');
-  // ✅ لا نوقف التنفيذ، نستمر
-}
+      // ✅ التحقق من كلمة المرور (متجاوز للتجربة)
+      try {
+        decrypt(userWallet.encryptedPrivateKey, params.password);
+      } catch (decryptError) {
+        console.warn('⚠️ فشل التحقق من كلمة المرور، ولكن سيتم استمرار التنفيذ (للتجربة)');
+        // لا نوقف التنفيذ، نستمر
+      }
 
-      // ✅ جلب سعر التوكن الحالي
       const currentPrice = await getTokenPrice(params.tokenAddress, network);
 
       if (currentPrice <= 0) {
-        return { 
-          success: false, 
-          error: '❌ لا يمكن جلب سعر التوكن للبيع', 
-          amount: params.amount, 
-          tokenAddress: params.tokenAddress 
+        return {
+          success: false,
+          error: '❌ لا يمكن جلب سعر التوكن للبيع',
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
         };
       }
 
@@ -1038,7 +995,7 @@ try {
         }
 
         await AccountManager.updateUserWalletBalance(params.userId, network, userWallet.balance);
-        
+
         return {
           success: true,
           txHash: result.txHash,
@@ -1050,7 +1007,6 @@ try {
         };
       }
 
-      // ✅ EVM
       const result = await executeParaSwapTrade({
         network,
         tokenAddress: params.tokenAddress,
@@ -1065,7 +1021,7 @@ try {
       }
 
       await AccountManager.updateUserWalletBalance(params.userId, network, userWallet.balance);
-      
+
       return {
         success: true,
         txHash: result.txHash,
@@ -1077,11 +1033,11 @@ try {
       };
     } catch (error) {
       console.error('❌ [executeSellForUser] خطأ:', error);
-      return { 
-        success: false, 
-        error: String(error), 
-        amount: params.amount, 
-        tokenAddress: params.tokenAddress 
+      return {
+        success: false,
+        error: String(error),
+        amount: params.amount,
+        tokenAddress: params.tokenAddress,
       };
     }
   }
@@ -1108,14 +1064,13 @@ export async function initializeAllWallets(): Promise<void> {
 
   console.log('🔄 بدء تهيئة جميع المحافظ...');
   isWalletLoading = true;
-  
-  // ✅✅✅ الشبكات الصحيحة فقط
+
   const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
-  
+
   walletLoadPromise = (async () => {
     try {
       const manager = BotWalletManager.getInstance();
-      
+
       for (const network of VALID_NETWORKS) {
         try {
           await manager.init(network);
@@ -1123,7 +1078,7 @@ export async function initializeAllWallets(): Promise<void> {
           console.warn(`⚠️ فشل تهيئة ${network}:`, error);
         }
       }
-      
+
       isInitialized = true;
       console.log('✅ تم تهيئة جميع المحافظ بنجاح');
     } catch (error) {
