@@ -170,7 +170,7 @@ const StatusBadge: React.FC<{ status: 'running' | 'paused' | 'stopped' }> = ({ s
 };
 
 // ============================================================
-// 🧠 مكون إدارة البوتات الأربعة (النسخة النهائية مع تحكم المسح)
+// 🧠 مكون إدارة البوتات الأربعة (النسخة النهائية مع تحكم المسح + عرض المحفظة)
 // ============================================================
 const BotsManager: React.FC = () => {
   const {
@@ -189,7 +189,13 @@ const BotsManager: React.FC = () => {
     stopAutoScan,           // إيقاف المسح التلقائي
     setScanInterval,        // تعيين الفاصل الزمني
     getAutoScanStatus,      // جلب الحالة الحالية
+    // ✅ إضافة بيانات المحفظة
+    botWallets,              // قائمة محافظ البوتات
+    loadBotWallets,          // دالة تحديث المحافظ
+    refreshBotBalance,       // دالة تحديث الرصيد
   } = useApp();
+
+  // ... (جميع الكود الموجود، دوال المساعدة، الحالات، المؤثرات، إلخ) ...
 
   // ============================================================
   // ✅ دالة مساعدة لاستخراج الشبكات من البوت
@@ -606,6 +612,8 @@ const BotsManager: React.FC = () => {
       if (result.success) {
         await addLog('SUCCESS', `💰 تم إنشاء محفظة لـ ${network}`);
         await loadBotInstances(user.id);
+        // ✅ تحديث محافظ البوت بعد الإنشاء
+        await loadBotWallets();
       } else {
         await addLog('ERROR', `❌ فشل إنشاء المحفظة: ${result.error}`);
       }
@@ -794,6 +802,21 @@ const BotsManager: React.FC = () => {
 
   if (!user) return null;
 
+  // ============================================================
+  // ✅ دالة مساعدة لجلب عنوان المحفظة المختصر
+  // ============================================================
+  const getWalletDisplay = (botId: string) => {
+    const wallet = botWallets?.find(w => w.bot_id === botId);
+    if (!wallet || !wallet.address) return null;
+    const addr = wallet.address;
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
+
+  const getWalletBalance = (botId: string) => {
+    const wallet = botWallets?.find(w => w.bot_id === botId);
+    return wallet?.balance?.toFixed(2) || '0.00';
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -845,6 +868,8 @@ const BotsManager: React.FC = () => {
             const isPaperTrading = bot.paper_trading === 1;
             const autoStatus = getAutoScanStatus(bot.id);
             const intervalValue = scanIntervalInput[bot.id] || autoStatus.interval || 5;
+            const walletDisplay = getWalletDisplay(bot.id);
+            const walletBalance = getWalletBalance(bot.id);
 
             return (
               <GlassCard key={bot.id} hover glow className="p-5">
@@ -905,10 +930,26 @@ const BotsManager: React.FC = () => {
                       {(bot.today_pnl || 0) >= 0 ? '+' : ''}{(bot.today_pnl || 0).toFixed(2)}%
                     </p>
                   </div>
+
+                  {/* ✅ عرض المحفظة - إضافة جديدة */}
+                  <div className="col-span-2 mt-2 p-2 bg-[#0a0a0f]/60 rounded-lg border border-[#1e1e2f]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-[#64748b]">💰 المحفظة</span>
+                      <span className="text-[10px] font-mono text-[#10b981]">
+                        {walletDisplay || 'لا توجد محفظة'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-[10px] text-[#64748b]">الرصيد</span>
+                      <span className="text-[10px] text-white">
+                        ${walletBalance}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* ============================================================
-                    أزرار التحكم (مع إضافة أزرار المسح)
+                    أزرار التحكم (مع إضافة أزرار المسح وتحديث الرصيد)
                 ============================================================ */}
                 <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-3 border-t border-[#1e1e2f]">
                   {/* تشغيل / إيقاف */}
@@ -942,6 +983,25 @@ const BotsManager: React.FC = () => {
                     onClick={() => handleCreateWallet(bot.id)}
                   >
                     محفظة
+                  </Button>
+
+                  {/* ✅ زر تحديث الرصيد - إضافة جديدة */}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<RefreshCw className="w-3 h-3" />}
+                    onClick={async () => {
+                      const botWallet = botWallets?.find(w => w.bot_id === bot.id);
+                      if (botWallet && botWallet.network) {
+                        await refreshBotBalance(botWallet.network);
+                        await loadBotWallets();
+                        await addLog('SUCCESS', `🔄 تم تحديث رصيد ${bot.name}`);
+                      } else {
+                        await addLog('WARNING', `⚠️ لا توجد محفظة لـ ${bot.name}`);
+                      }
+                    }}
+                  >
+                    تحديث الرصيد
                   </Button>
 
                   {/* ✅ زر مسح يدوي */}

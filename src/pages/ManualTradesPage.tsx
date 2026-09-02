@@ -3,7 +3,8 @@
 // ✅ عرض السعر، عدد الوحدات، التحليل، وجميع الميزات
 // ✅ اختيار الشبكة + اختيار المحفظة الفورية
 // ✅ لا توجد قيم افتراضية
-
+import { ethers } from 'ethers';
+import { PublicKey } from '@solana/web3.js';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatUsd } from '../lib/format';
