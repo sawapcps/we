@@ -9,7 +9,7 @@
 // ✅ حقل المبلغ يدعم الأصفار والأرقام العشرية
 // ✅ إمكانية اختيار المحفظة (عند وجود عدة محافظ على نفس الشبكة)
 // ============================================================
-mport { ethers } from 'ethers';
+import { ethers } from 'ethers';
 import { PublicKey } from '@solana/web3.js';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
