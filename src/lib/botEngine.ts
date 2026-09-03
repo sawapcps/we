@@ -1387,93 +1387,98 @@ export class TradingBot {
         level: 'info',
         message: `   📊 النقاط النهائية: ${finalScore.toFixed(0)}/100`,
       });
+// ✅ إشعار باختيار العملة (يظهر دائماً)
+await this.sendNotification('info', `🎯 تم اختيار ${token.symbol} للتداول (النقاط: ${finalScore.toFixed(0)}/100)`);
 
-      if (!silent) {
-        await this.sendNotification('success', `✅ ${token.symbol}: ${verification.reason}`);
-        await this.sendNotification('info', `💰 حجم الصفقة: $${amountUsd.toFixed(2)} | النقاط: ${finalScore.toFixed(0)}/100`);
-      }
+// ✅ إشعار نجاح التحقق (في الوضع العادي فقط)
+if (!silent) {
+  await this.sendNotification('success', `✅ ${token.symbol}: ${verification.reason}`);
+  await this.sendNotification('info', `💰 حجم الصفقة: $${amountUsd.toFixed(2)} | النقاط: ${finalScore.toFixed(0)}/100`);
+}
 
-      const balance = await this.wallet.refreshBalance(network);
-      if (!silent) {
-        await this.sendNotification('info', `💰 رصيد ${getNetworkName(network)}: $${balance.toFixed(2)}`);
-      }
+// ✅ جلب الرصيد
+const balance = await this.wallet.refreshBalance(network);
+if (!silent) {
+  await this.sendNotification('info', `💰 رصيد ${getNetworkName(network)}: $${balance.toFixed(2)}`);
+}
 
-      if (balance < amountUsd) {
-        const msg = `⚠️ ${token.symbol}: الرصيد غير كافٍ ($${balance.toFixed(2)} < $${amountUsd.toFixed(2)})`;
-        this.onLog({
-          id: generateId(),
-          timestamp: Date.now(),
-          level: 'warning',
-          message: msg,
-        });
-        if (!silent) await this.sendNotification('warning', msg);
-        continue;
-      }
+// ✅ التحقق من كفاية الرصيد (مع إشعار دائم)
+if (balance < amountUsd) {
+  const msg = `⚠️ ${token.symbol}: الرصيد غير كافٍ ($${balance.toFixed(2)} < $${amountUsd.toFixed(2)})`;
+  this.onLog({
+    id: generateId(),
+    timestamp: Date.now(),
+    level: 'warning',
+    message: msg,
+  });
+  await this.sendNotification('warning', msg); // ✅ دائماً (حتى في الوضع الصامت)
+  continue;
+}
 
-      const result = await this.executeBuyWithRetry({
-        tokenAddress: token.tokenAddress,
-        amountInSol: amountInSol,
-        slippage: 0.01,
-        password: "SecureMasterPassword123!@#",
-        maxRetries: 3,
-        retryDelay: 30000,
-        network: network,
-        tokenSymbol: token.symbol,
-      });
+// ✅ تنفيذ الشراء
+const result = await this.executeBuyWithRetry({
+  tokenAddress: token.tokenAddress,
+  amountInSol: amountInSol,
+  slippage: 0.01,
+  password: "SecureMasterPassword123!@#",
+  maxRetries: 3,
+  retryDelay: 30000,
+  network: network,
+  tokenSymbol: token.symbol,
+});
 
-      const status = result.success ? 'executed' : 'failed';
-      const trade: Trade = {
-        id: generateId(),
-        timestamp: Date.now(),
-        network,
-        tokenSymbol: token.symbol,
-        tokenAddress: token.tokenAddress,
-        pairAddress: token.pairAddress,
-        side: 'buy',
-        amountUsd,
-        priceUsd: verification.currentPrice,
-        quantity: amountUsd / verification.currentPrice,
-        status,
-        reason: `${reason} | Final Score: ${finalScore.toFixed(0)}`,
-        txHash: result.txHash,
-      };
+const status = result.success ? 'executed' : 'failed';
+const trade: Trade = {
+  id: generateId(),
+  timestamp: Date.now(),
+  network,
+  tokenSymbol: token.symbol,
+  tokenAddress: token.tokenAddress,
+  pairAddress: token.pairAddress,
+  side: 'buy',
+  amountUsd,
+  priceUsd: verification.currentPrice,
+  quantity: amountUsd / verification.currentPrice,
+  status,
+  reason: `${reason} | Final Score: ${finalScore.toFixed(0)}`,
+  txHash: result.txHash,
+};
 
-      if (result.error) {
-        const msg = `❌ BUY ${token.symbol} FAILED: ${result.error}`;
-        this.onLog({
-          id: generateId(),
-          timestamp: Date.now(),
-          level: 'error',
-          message: msg,
-        });
-        if (!silent) await this.sendNotification('error', msg);
-      } else {
-        this.dailyTrades++;
-        this.onLog({
-          id: generateId(),
-          timestamp: Date.now(),
-          level: 'info',
-          message: `📊 الصفقة ${this.dailyTrades}/${this.dynamicMaxTrades} اليوم`,
-        });
-        if (!silent) {
-          await this.sendNotification('success', `✅ تم شراء ${token.symbol} بمبلغ $${amountUsd.toFixed(2)}`);
-        }
-        
-        this.highestPrices.set(`${network}-${token.tokenAddress}`, verification.currentPrice);
-        this.activePositions.set(`${network}-${token.tokenAddress}`, trade);
-        this.onLog({
-          id: generateId(),
-          timestamp: Date.now(),
-          level: 'success',
-          message: `✅ REAL BUY ${token.symbol} on ${getNetworkName(network)} @ $${verification.currentPrice.toFixed(6)} — tx: ${result.txHash?.slice(0, 16)}... — ${reason}`,
-        });
-        if (!silent) {
-          await this.sendNotification('info', `📈 ${token.symbol} @ $${verification.currentPrice.toFixed(6)} | التجزئة: ${result.txHash?.slice(0, 16)}...`);
-        }
-        
-        this.scheduleSellCheck(token, network, trade);
-      }
-
+if (result.error) {
+  const msg = `❌ BUY ${token.symbol} FAILED: ${result.error}`;
+  this.onLog({
+    id: generateId(),
+    timestamp: Date.now(),
+    level: 'error',
+    message: msg,
+  });
+  if (!silent) await this.sendNotification('error', msg);
+} else {
+  this.dailyTrades++;
+  this.onLog({
+    id: generateId(),
+    timestamp: Date.now(),
+    level: 'info',
+    message: `📊 الصفقة ${this.dailyTrades}/${this.dynamicMaxTrades} اليوم`,
+  });
+  if (!silent) {
+    await this.sendNotification('success', `✅ تم شراء ${token.symbol} بمبلغ $${amountUsd.toFixed(2)}`);
+  }
+  
+  this.highestPrices.set(`${network}-${token.tokenAddress}`, verification.currentPrice);
+  this.activePositions.set(`${network}-${token.tokenAddress}`, trade);
+  this.onLog({
+    id: generateId(),
+    timestamp: Date.now(),
+    level: 'success',
+    message: `✅ REAL BUY ${token.symbol} on ${getNetworkName(network)} @ $${verification.currentPrice.toFixed(6)} — tx: ${result.txHash?.slice(0, 16)}... — ${reason}`,
+  });
+  if (!silent) {
+    await this.sendNotification('info', `📈 ${token.symbol} @ $${verification.currentPrice.toFixed(6)} | التجزئة: ${result.txHash?.slice(0, 16)}...`);
+  }
+  
+  this.scheduleSellCheck(token, network, trade);
+}
       await saveTrade({
         token: trade.tokenSymbol,
         tokenAddress: trade.tokenAddress,
