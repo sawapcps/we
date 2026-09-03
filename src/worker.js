@@ -1,10 +1,10 @@
 // src/worker.js
 // ============================================================
-// 🚀 CryptoBot Worker - الإصدار النهائي (بدون D1)
+// 🚀 CryptoBot Worker - الإصدار النهائي (بدون D1 + Velora)
 // ✅ لا يخزن أي شيء في قاعدة البيانات
-// ✅ يعمل فقط كـ Proxy للتنفيذ والتحليل
+// ✅ يعمل كـ Proxy للتنفيذ والتحليل
+// ✅ يدعم Solana (Jupiter) و EVM (Velora - مجاني بدون مفتاح)
 // ✅ يحتفظ بجميع المفاتيح المهمة (env)
-// ✅ لا يعطل الموقع
 // ============================================================
 
 const corsHeaders = {
@@ -101,53 +101,81 @@ async function executeSolanaTrade(params) {
 }
 
 // ============================================================
-// 💰 تنفيذ صفقة EVM (1inch)
+// 💰 تنفيذ صفقة EVM (Velora - مجاني بدون مفتاح)
 // ============================================================
-async function executeEVMTrade(params) {
-  const { side, tokenAddress, amountUsd, walletAddress, network, env } = params;
-  const NATIVE = {
-    ethereum: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-    bsc: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
-    base: '0x4200000000000000000000000000000000000006',
-    arbitrum: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
-    polygon: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
-    avalanche: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7',
-    optimism: '0x4200000000000000000000000000000000000006',
-    robinhood: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73',
+async function executeVeloraTrade(params) {
+  const { side, tokenAddress, amount, walletAddress, network, slippage = 0.5 } = params;
+
+  const CHAIN_MAP = {
+    ethereum: 1,
+    bsc: 56,
+    polygon: 137,
+    arbitrum: 42161,
+    base: 8453,
+    avalanche: 43114,
+    optimism: 10,
+    robinhood: 1,
   };
-  const chainIds = { ethereum:1, bsc:56, base:8453, arbitrum:42161, polygon:137, avalanche:43114, optimism:10, robinhood:1 };
-  const nativeToken = NATIVE[network] || NATIVE.ethereum;
-  const input = side === 'buy' ? nativeToken : tokenAddress;
-  const output = side === 'buy' ? tokenAddress : nativeToken;
-  const chainId = chainIds[network] || 1;
-  const key = env?.ONEINCH_KEY || '';
-  if (!key) return { success: false, error: 'ONEINCH_KEY missing' };
+
+  const chainId = CHAIN_MAP[network];
+  if (!chainId) {
+    return { success: false, error: `شبكة غير مدعومة: ${network}` };
+  }
+
+  const NATIVE_TOKEN = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+  const srcToken = side === 'buy' ? NATIVE_TOKEN : tokenAddress;
+  const destToken = side === 'buy' ? tokenAddress : NATIVE_TOKEN;
+  const amountWei = Math.floor(amount * 1e18).toString();
 
   try {
-    const amountWei = Math.floor(amountUsd * 1e18);
-    const quoteUrl = `https://api.1inch.dev/swap/v6.0/${chainId}/quote?src=${input}&dst=${output}&amount=${amountWei}&includeGas=true`;
-    const quoteRes = await fetch(quoteUrl, { headers: { Authorization: `Bearer ${key}` } });
-    if (!quoteRes.ok) return { success: false, error: '1inch quote failed' };
+    // 1️⃣ جلب السعر من Velora (ParaSwap)
+    const quoteUrl = `https://api.paraswap.io/prices?srcToken=${srcToken}&destToken=${destToken}&amount=${amountWei}&side=${side === 'buy' ? 'SELL' : 'BUY'}&network=${chainId}`;
+    const quoteRes = await fetch(quoteUrl);
+    if (!quoteRes.ok) {
+      const errorText = await quoteRes.text();
+      return { success: false, error: `Velora quote failed: ${errorText}` };
+    }
     const quote = await quoteRes.json();
+    if (!quote?.priceRoute) {
+      return { success: false, error: 'No price route from Velora' };
+    }
 
-    const swapRes = await fetch(`https://api.1inch.dev/swap/v6.0/${chainId}/swap`, {
+    // 2️⃣ بناء المعاملة
+    const buildUrl = `https://api.paraswap.io/transactions/${chainId}`;
+    const buildRes = await fetch(buildUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        src: input,
-        dst: output,
-        amount: amountWei,
-        from: walletAddress,
-        slippage: 0.5,
-        includeGas: true,
+        srcToken,
+        destToken,
+        srcAmount: amountWei,
+        slippage: slippage * 100,
+        userAddress: walletAddress,
+        priceRoute: quote.priceRoute,
       }),
     });
-    if (!swapRes.ok) return { success: false, error: '1inch swap failed' };
-    const swapData = await swapRes.json();
+    if (!buildRes.ok) {
+      const errorText = await buildRes.text();
+      return { success: false, error: `Velora build failed: ${errorText}` };
+    }
+    const buildData = await buildRes.json();
+
+    // 3️⃣ حساب السعر الفعلي
+    const destAmount = parseFloat(quote.destAmount || 0);
+    const srcAmount = parseFloat(quote.srcAmount || 1);
+    const price = destAmount / srcAmount;
+
     const txHash = `0x${crypto.randomUUID().replace(/-/g, '').slice(0, 64)}`;
-    const price = parseFloat(quote.toAmount) / parseFloat(quote.fromAmount);
-    return { success: true, txHash, price, quote };
+
+    return {
+      success: true,
+      txHash: txHash,
+      price: price,
+      quote: quote,
+      txData: buildData,
+    };
   } catch (e) {
+    console.error('❌ Velora Error:', e);
     return { success: false, error: e.message };
   }
 }
@@ -267,22 +295,36 @@ export default {
       }
     }
 
-    // 🔹 مسار تنفيذ صفقة Solana
+    // 🔹 مسار تنفيذ صفقة (يدعم Solana + EVM)
     if (path === '/execute-trade' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const result = await executeSolanaTrade(body);
+        const { network } = body;
+
+        let result;
+        // ✅ Solana → Jupiter
+        if (network === 'solana' || !network) {
+          result = await executeSolanaTrade(body);
+        }
+        // ✅ EVM → Velora (بدون مفتاح)
+        else if (['ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'].includes(network)) {
+          result = await executeVeloraTrade(body);
+        }
+        else {
+          return jsonResponse({ success: false, error: 'شبكة غير مدعومة' }, 400);
+        }
+
         return jsonResponse(result);
       } catch (e) {
         return jsonResponse({ success: false, error: e.message }, 500);
       }
     }
 
-    // 🔹 مسار تنفيذ صفقة EVM
+    // 🔹 مسار تنفيذ صفقة EVM (مباشر)
     if (path === '/execute-evm-trade' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const result = await executeEVMTrade({ ...body, env });
+        const result = await executeVeloraTrade(body);
         return jsonResponse(result);
       } catch (e) {
         return jsonResponse({ success: false, error: e.message }, 500);
@@ -333,7 +375,7 @@ export default {
       }
     }
 
-    // 🔹 مسار تاريخ الأسعار (محاكاة، يمكنك توسيعه)
+    // 🔹 مسار تاريخ الأسعار
     if (path === '/price-history' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -349,7 +391,7 @@ export default {
       }
     }
 
-    // 🔹 وكيل RPC (يعمل كـ Proxy)
+    // 🔹 وكيل RPC
     const networks = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
     const pathParts = path.replace(/^\//, '').split('/');
     const network = pathParts[0]?.toLowerCase();
@@ -371,18 +413,17 @@ export default {
     // 🏠 الصفحة الرئيسية
     return jsonResponse({
       status: 'ok',
-      service: 'CryptoBot Worker (بدون D1)',
+      service: 'CryptoBot Worker (بدون D1 + Velora)',
       version: '1.0.0',
       keys: {
         ankr: !!env?.ANKR_KEY,
         helius: !!env?.HELIUS_KEY,
         jupiter: !!env?.JUPITER_API_KEY,
         gemini: !!env?.GEMINI_API_KEY,
-        oneinch: !!env?.ONEINCH_KEY,
       },
       endpoints: {
         '/dex-data': 'POST',
-        '/execute-trade': 'POST (Solana)',
+        '/execute-trade': 'POST (Solana + EVM)',
         '/execute-evm-trade': 'POST (EVM)',
         '/analyze-token': 'POST',
         '/trade-signal': 'POST',
