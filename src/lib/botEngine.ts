@@ -1,8 +1,10 @@
 // src/lib/botEngine.ts
 // ============================================================
-// 🤖 محرك التداول الرئيسي - نسخة معدلة مع تخفيف الشروط والتركيز على الزخم
-// ✅ يدعم المسح اليدوي/التلقائي مع وضع صامت لتوفير DB
-// ✅ يفضل العملات ذات الزخم الصاعد وحجم التداول المرتفع
+// 🤖 محرك التداول الرئيسي - النسخة النهائية المعدلة
+// ✅ يدعم المسح اليدوي/التلقائي مع وضع صامت
+// ✅ إشعارات فورية لكل تحركات البوت (اختيار عملة، رصيد، شراء، بيع)
+// ✅ يدعم تحديث الشبكات والمسح التلقائي بالوقت المحدد
+// ✅ زر المسح التلقائي يعمل بشكل صحيح مع إشعارات
 // ============================================================
 
 import type { BotConfig, Trade, ChainId, BotLogEntry, DiscoveredToken } from '@/types';
@@ -27,8 +29,8 @@ const DB_ID = import.meta.env.VITE_MADARTECH_DB_ID || 'mt_live_AZyHOq0IztD6H5gsS
 // 📊 إعدادات المخاطر (مخففة)
 // ============================================================
 
-const MAX_PRICE_IMPACT = 0.05; // 5% (كانت 2%)
-const MAX_VOLATILITY = 0.50; // 50% (كانت 30%)
+const MAX_PRICE_IMPACT = 0.05;
+const MAX_VOLATILITY = 0.50;
 const MAX_POSITION_TIME = 24 * 60 * 60 * 1000;
 const TRAILING_STOP_PERCENT = 8;
 const RISK_PER_TRADE = 2;
@@ -58,29 +60,25 @@ function calculatePositionSize(
 function calculateTechnicalScore(market: DiscoveredToken): number {
   let score = 0;
   
-  // السيولة (مخففة)
   if (market.liquidityUsd >= 200_000) score += 15;
   else if (market.liquidityUsd >= 50_000) score += 10;
   else if (market.liquidityUsd >= 15_000) score += 5;
   
-  // حجم التداول (مخفف)
   const volumeRatio = market.volume24h / Math.max(market.marketCap || 1, 1);
   if (volumeRatio >= 0.20) score += 15;
   else if (volumeRatio >= 0.10) score += 10;
   else if (volumeRatio >= 0.05) score += 5;
   
   // 🔥 الزخم (رفع الوزن)
-  if (market.priceChange.m5 > 2) score += 20; // كان 10
-  if (market.priceChange.h1 > 5) score += 25; // كان 15
-  if (market.priceChange.h6 > 8) score += 20; // كان 10
+  if (market.priceChange.m5 > 2) score += 20;
+  if (market.priceChange.h1 > 5) score += 25;
+  if (market.priceChange.h6 > 8) score += 20;
   
-  // نشاط السوق
   const totalTxns = market.txns24h.buys + market.txns24h.sells;
   if (totalTxns >= 500) score += 15;
   else if (totalTxns >= 200) score += 10;
   else if (totalTxns >= 50) score += 5;
   
-  // نسبة الشراء/البيع
   const buyRatio = market.txns24h.buys / Math.max(totalTxns, 1);
   if (buyRatio > 0.60) score += 10;
   else if (buyRatio > 0.52) score += 5;
@@ -187,50 +185,44 @@ export class TradingBot {
   }
 
   // ============================================================
-  // 📢 إرسال إشعار (مهم فقط)
+  // 📢 إرسال إشعار (جميع الإشعارات مهمة الآن)
   // ============================================================
   private async sendNotification(
     type: 'success' | 'error' | 'warning' | 'info',
     message: string
   ): Promise<void> {
     try {
-      const isImportant = 
-        message.includes('تم شراء') ||
-        message.includes('تم بيع') ||
-        message.includes('بيع') ||
-        message.includes('شراء') ||
-        message.includes('الرصيد غير كافٍ') ||
-        message.includes('رصيد غير كافٍ');
-
+      // ✅ جميع الإشعارات تُرسل الآن (لا توجد تصفية)
       console.log(`📢 [${type}] ${message}`);
 
-      if (isImportant) {
-        await saveLog({
-          level: type.toUpperCase(),
-          message,
-          timestamp: getTimestamp(),
-          context: { userId: this.userId, botId: this.botId }
-        });
+      // ✅ حفظ في قاعدة البيانات
+      await saveLog({
+        level: type.toUpperCase(),
+        message,
+        timestamp: getTimestamp(),
+        context: { userId: this.userId, botId: this.botId }
+      });
 
-        await fetch(`${WORKER_URL}/notifications`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            app_id: 'hunter',
-            userId: this.userId,
-            type,
-            message,
-            timestamp: new Date().toISOString()
-          })
-        }).catch(() => {});
-      }
+      // ✅ إرسال إلى Worker
+      await fetch(`${WORKER_URL}/notifications`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          app_id: 'hunter',
+          userId: this.userId,
+          type,
+          message,
+          timestamp: new Date().toISOString()
+        })
+      }).catch(() => {});
+
     } catch (error) {
       console.warn('⚠️ فشل إرسال الإشعار:', error);
     }
   }
 
   // ============================================================
-  // 📊 تحليل السوق (مخفف)
+  // 📊 تحليل السوق
   // ============================================================
 
   private async analyzeMarketSignals(): Promise<{
@@ -283,7 +275,6 @@ export class TradingBot {
         return (Date.now() - p.pairCreatedAt) / (1000 * 60 * 60) < 24;
       });
 
-      // تخفيف التقييمات
       if (bullishRatio > 0.55) { score += 20; signals.push(`📈 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
       else if (bullishRatio > 0.45) { score += 10; signals.push(`📊 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
       else { score -= 5; signals.push(`📉 ${(bullishRatio * 100).toFixed(0)}% خضراء`); }
@@ -384,7 +375,7 @@ export class TradingBot {
   }
 
   // ============================================================
-  // 📊 التحقق من فرصة التداول (مخفف)
+  // 📊 التحقق من فرصة التداول
   // ============================================================
 
   private async verifyTradeOpportunity(token: DiscoveredToken, network: ChainId): Promise<{
@@ -436,7 +427,6 @@ export class TradingBot {
       const currentLiquidity = marketData.liquidity || token.liquidityUsd;
       const priceChange5m = marketData.priceChange?.m5 || 0;
 
-      // ✅ تخفيف شروط الانزلاق
       const priceImpact = Math.abs(currentPrice - token.priceUsd) / token.priceUsd;
       if (priceImpact > MAX_PRICE_IMPACT) {
         return {
@@ -451,7 +441,6 @@ export class TradingBot {
         };
       }
 
-      // ✅ تخفيف التقلبات
       const volatility = Math.abs(token.priceChange.h24) / 100;
       if (volatility > MAX_VOLATILITY) {
         return {
@@ -466,7 +455,6 @@ export class TradingBot {
         };
       }
 
-      // ✅ تخفيف تغير السعر خلال 5 دقائق
       const priceChange = ((currentPrice - token.priceUsd) / token.priceUsd) * 100;
       if (Math.abs(priceChange) > 10) {
         return {
@@ -481,7 +469,6 @@ export class TradingBot {
         };
       }
 
-      // ✅ تخفيف انخفاض الحجم
       const volumeChange = ((currentVolume - token.volume24h) / token.volume24h) * 100;
       if (volumeChange < -70) {
         return {
@@ -496,7 +483,6 @@ export class TradingBot {
         };
       }
 
-      // ✅ تخفيف انخفاض السيولة
       const liquidityChange = ((currentLiquidity - token.liquidityUsd) / token.liquidityUsd) * 100;
       if (liquidityChange < -50) {
         return {
@@ -614,9 +600,10 @@ export class TradingBot {
           id: generateId(),
           timestamp: Date.now(),
           level: 'info',
-          message: `🔄 محاولة ${attempt}/${params.maxRetries} لشراء ${params.tokenAddress.slice(0, 8)}...`,
+          message: `🔄 محاولة ${attempt}/${params.maxRetries} لشراء ${params.tokenSymbol}`,
         });
-        await this.sendNotification('info', `🔄 محاولة ${attempt}/${params.maxRetries} لشراء ${params.tokenSymbol}`);
+        
+        await this.sendNotification('info', `🔄 جاري شراء ${params.tokenSymbol} (محاولة ${attempt}/${params.maxRetries})`);
         
         this.pendingTrades.set(key, {
           ...pending!,
@@ -663,7 +650,8 @@ export class TradingBot {
           level: 'success',
           message: `✅ تم الشراء بنجاح في المحاولة ${attempt}`,
         });
-        await this.sendNotification('success', `✅ تم شراء ${params.tokenSymbol} بنجاح في المحاولة ${attempt}`);
+        
+        await this.sendNotification('success', `✅ تم شراء ${params.tokenSymbol} بنجاح بمبلغ $${(params.amountInSol * 100).toFixed(2)}`);
         
         this.pendingTrades.set(key, {
           ...pending!,
@@ -695,6 +683,8 @@ export class TradingBot {
         }
       }
     }
+
+    await this.sendNotification('error', `❌ فشل شراء ${params.tokenSymbol} بعد ${params.maxRetries} محاولات`);
 
     this.pendingTrades.delete(key);
     return {
@@ -923,8 +913,25 @@ export class TradingBot {
 
   updateConfig(config: BotConfig): void {
     this.config = config;
-    if (config.status === 'running' && this.intervalId === null) {
-      this.start();
+    
+    if (config.status === 'running') {
+      if (this.intervalId !== null) {
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+      }
+      this.runCycle(true);
+      if (this.autoScanIntervalId !== null) {
+        this.stopAutoScan();
+        this.startAutoScan();
+      }
+      
+      this.onLog({
+        id: generateId(),
+        timestamp: Date.now(),
+        level: 'info',
+        message: `🔄 تم تحديث إعدادات البوت (الشبكات: ${config.networks.join(', ')})`,
+      });
+      this.sendNotification('info', `🔄 تم تحديث إعدادات البوت (الشبكات: ${config.networks.join(', ')})`);
     } else if (config.status !== 'running' && this.intervalId !== null) {
       this.stop();
     }
@@ -947,7 +954,6 @@ export class TradingBot {
     });
     this.sendNotification('success', `🚀 تم تشغيل البوت (${this.config.mode}) على ${this.config.networks.length} شبكات`);
     this.runCycle();
-    // ❌ تم إزالة المسح التلقائي
   }
 
   // ============================================================
@@ -969,16 +975,31 @@ export class TradingBot {
   }
 
   // ============================================================
-  // ⏱️ التحكم بالمسح التلقائي
+  // ⏱️ التحكم بالمسح التلقائي (معدل)
   // ============================================================
 
   startAutoScan(): void {
-    if (this.autoScanIntervalId !== null) return;
+    if (this.autoScanIntervalId !== null) {
+      console.log(`⚠️ [${this.botId || 'BOT'}] المسح التلقائي يعمل بالفعل`);
+      return;
+    }
+    
     const intervalMs = this.scanIntervalMinutes * 60 * 1000;
+    console.log(`🔄 [${this.botId || 'BOT'}] بدأ المسح التلقائي كل ${this.scanIntervalMinutes} دقيقة`);
+    
+    // ✅ إشعار ببدء المسح التلقائي
+    this.sendNotification('success', `▶️ بدأ المسح التلقائي كل ${this.scanIntervalMinutes} دقيقة`);
+    
+    // ✅ تشغيل المسح التلقائي
     this.autoScanIntervalId = setInterval(() => {
+      console.log(`🔄 [${this.botId || 'BOT'}] تنفيذ دورة مسح تلقائي (كل ${this.scanIntervalMinutes} دقيقة)`);
       this.runCycle(true); // صامت
     }, intervalMs);
-    console.log(`🔄 [${this.botId || 'BOT'}] بدأ المسح التلقائي كل ${this.scanIntervalMinutes} دقيقة (صامت)`);
+    
+    // ✅ تنفيذ دورة فورية عند البدء
+    setTimeout(() => {
+      this.runCycle(true);
+    }, 1000);
   }
 
   stopAutoScan(): void {
@@ -986,12 +1007,27 @@ export class TradingBot {
       clearInterval(this.autoScanIntervalId);
       this.autoScanIntervalId = null;
       console.log(`⏹️ [${this.botId || 'BOT'}] تم إيقاف المسح التلقائي`);
+      
+      // ✅ إشعار بإيقاف المسح التلقائي
+      this.sendNotification('warning', '⏹️ تم إيقاف المسح التلقائي');
+    } else {
+      console.log(`⚠️ [${this.botId || 'BOT'}] المسح التلقائي غير نشط`);
     }
   }
 
   setScanInterval(minutes: number): void {
-    this.scanIntervalMinutes = Math.max(1, minutes);
+    // ✅ تأكد من أن القيمة بين 1 و 60 دقيقة
+    const oldInterval = this.scanIntervalMinutes;
+    this.scanIntervalMinutes = Math.max(1, Math.min(60, minutes));
+    
+    console.log(`⏱️ [${this.botId || 'BOT'}] تغيير وقت المسح: ${oldInterval} → ${this.scanIntervalMinutes} دقيقة`);
+    
+    // ✅ إشعار بتغيير الوقت
+    this.sendNotification('info', `⏱️ تم تغيير وقت المسح إلى ${this.scanIntervalMinutes} دقيقة`);
+    
+    // ✅ إذا كان المسح التلقائي نشطاً، أعد تشغيله بالوقت الجديد
     if (this.autoScanIntervalId !== null) {
+      console.log(`🔄 [${this.botId || 'BOT'}] إعادة تشغيل المسح التلقائي بالوقت الجديد`);
       this.stopAutoScan();
       this.startAutoScan();
     }
@@ -1011,12 +1047,15 @@ export class TradingBot {
   async runManualScan(): Promise<{ success: boolean; message: string }> {
     try {
       console.log('🔄 بدء المسح اليدوي للشبكات...');
-      await this.runCycle(true); // ✅ صامت
+      await this.sendNotification('info', '🔄 بدء المسح اليدوي...');
+      await this.runCycle(false);
       console.log('✅ انتهى المسح اليدوي بنجاح');
-      return { success: true, message: '✅ تم مسح الشبكات بنجاح (بدون إشعارات)' };
+      await this.sendNotification('success', '✅ انتهى المسح اليدوي بنجاح');
+      return { success: true, message: '✅ تم مسح الشبكات بنجاح' };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'خطأ غير معروف';
       console.error('❌ فشل المسح اليدوي:', errorMsg);
+      await this.sendNotification('error', `❌ فشل المسح اليدوي: ${errorMsg}`);
       return { success: false, message: `❌ فشل المسح: ${errorMsg}` };
     }
   }
@@ -1060,7 +1099,7 @@ export class TradingBot {
   }
 
   // ============================================================
-  // 🔄 دورة المسح الرئيسية (مع silent)
+  // 🔄 دورة المسح الرئيسية
   // ============================================================
 
   private async runCycle(silent: boolean = false): Promise<void> {
@@ -1116,7 +1155,6 @@ export class TradingBot {
           await this.sendNotification('info', `📦 ${pairsMsg}`);
         }
 
-        // ✅ تخفيف شروط التصفية
         const filters: HunterFilters = {
           minLiquidityUsd: Math.min(this.config.minLiquidityUsd || 15000, 15000),
           minVolume24h: Math.min(this.config.minVolume24h || 30000, 30000),
@@ -1221,7 +1259,7 @@ export class TradingBot {
   }
 
   // ============================================================
-  // 📊 معالجة الصفقات التلقائية (مع silent)
+  // 📊 معالجة الصفقات التلقائية
   // ============================================================
 
   private async processAutoTrades(tokens: DiscoveredToken[], network: ChainId, silent: boolean = false): Promise<void> {
@@ -1233,11 +1271,10 @@ export class TradingBot {
         level: 'info',
         message: msg,
       });
-      if (!silent) await this.sendNotification('warning', msg);
+      await this.sendNotification('warning', msg);
       return;
     }
 
-    // ✅ ترتيب العملات حسب الزخم (الأعلى أولاً)
     const sortedTokens = [...tokens].sort((a, b) => {
       const momentumA = a.priceChange.h1 + a.priceChange.h6;
       const momentumB = b.priceChange.h1 + b.priceChange.h6;
@@ -1258,13 +1295,11 @@ export class TradingBot {
           level: 'info',
           message: msg,
         });
-        if (!silent) await this.sendNotification('warning', msg);
+        await this.sendNotification('warning', msg);
         return;
       }
 
-      if (!silent) {
-        await this.sendNotification('info', `🧠 تحليل ${token.symbol} (نقاط: ${token.score}/100)`);
-      }
+      await this.sendNotification('info', `🧠 تحليل ${token.symbol} (نقاط: ${token.score}/100)`);
 
       let shouldBuy = token.status === 'candidate';
       let reason = `Hunter score ${token.score}/100 — ${token.status} (${token.strategy})`;
@@ -1278,14 +1313,10 @@ export class TradingBot {
           aiConfidence = analysis.confidence;
           shouldBuy = analysis.recommendation === 'strong_buy' || analysis.recommendation === 'buy';
           reason = `AI: ${analysis.recommendation} (${analysis.confidence}%) — ${analysis.summary.slice(0, 80)}`;
-          if (!silent) {
-            await this.sendNotification('info', `📊 ${token.symbol}: AI ${analysis.recommendation} (${analysis.confidence}%)`);
-          }
+          await this.sendNotification('info', `📊 ${token.symbol}: AI ${analysis.recommendation} (${analysis.confidence}%)`);
         } catch {
           reason = `Hunter score ${token.score}/100 (AI unavailable)`;
-          if (!silent) {
-            await this.sendNotification('warning', `⚠️ ${token.symbol}: AI غير متاح، استخدام Hunter فقط`);
-          }
+          await this.sendNotification('warning', `⚠️ ${token.symbol}: AI غير متاح، استخدام Hunter فقط`);
         }
       }
 
@@ -1299,7 +1330,6 @@ export class TradingBot {
         message: `📊 ${token.symbol}: Technical=${technicalScore}, AI Confidence=${aiConfidence}, Final=${finalScore.toFixed(0)}`,
       });
 
-      // ✅ تخفيف شرط القبول (55 بدلاً من 60)
       if (!shouldBuy || finalScore < 55) {
         const msg = `⏭️ تخطي ${token.symbol}: ${reason} (Final Score: ${finalScore.toFixed(0)})`;
         this.onLog({
@@ -1308,9 +1338,12 @@ export class TradingBot {
           level: 'info',
           message: msg,
         });
-        if (!silent) await this.sendNotification('warning', msg);
+        await this.sendNotification('warning', msg);
         continue;
       }
+
+      const selectionMsg = `🎯 تم اختيار ${token.symbol} للتداول (النقاط: ${finalScore.toFixed(0)}/100)`;
+      await this.sendNotification('info', selectionMsg);
 
       this.onLog({
         id: generateId(),
@@ -1318,9 +1351,7 @@ export class TradingBot {
         level: 'info',
         message: `🔍 التحقق من وضع ${token.symbol}...`,
       });
-      if (!silent) {
-        await this.sendNotification('info', `🔍 التحقق من وضع ${token.symbol}...`);
-      }
+      await this.sendNotification('info', `🔍 التحقق من وضع ${token.symbol}...`);
       
       const verification = await this.verifyTradeOpportunity(token, network);
 
@@ -1349,7 +1380,7 @@ export class TradingBot {
           level: 'info',
           message: `   📊 التقلبات: ${(verification.volatility * 100).toFixed(2)}%`,
         });
-        if (!silent) await this.sendNotification('warning', `⛔ ${token.symbol}: ${verification.reason}`);
+        await this.sendNotification('warning', `⛔ ${token.symbol}: ${verification.reason}`);
         continue;
       }
 
@@ -1387,98 +1418,84 @@ export class TradingBot {
         level: 'info',
         message: `   📊 النقاط النهائية: ${finalScore.toFixed(0)}/100`,
       });
-// ✅ إشعار باختيار العملة (يظهر دائماً)
-await this.sendNotification('info', `🎯 تم اختيار ${token.symbol} للتداول (النقاط: ${finalScore.toFixed(0)}/100)`);
 
-// ✅ إشعار نجاح التحقق (في الوضع العادي فقط)
-if (!silent) {
-  await this.sendNotification('success', `✅ ${token.symbol}: ${verification.reason}`);
-  await this.sendNotification('info', `💰 حجم الصفقة: $${amountUsd.toFixed(2)} | النقاط: ${finalScore.toFixed(0)}/100`);
-}
+      await this.sendNotification('success', `✅ ${token.symbol}: ${verification.reason}`);
+      await this.sendNotification('info', `💰 حجم الصفقة: $${amountUsd.toFixed(2)} | النقاط: ${finalScore.toFixed(0)}/100`);
 
-// ✅ جلب الرصيد
-const balance = await this.wallet.refreshBalance(network);
-if (!silent) {
-  await this.sendNotification('info', `💰 رصيد ${getNetworkName(network)}: $${balance.toFixed(2)}`);
-}
+      const balance = await this.wallet.refreshBalance(network);
+      await this.sendNotification('info', `💰 رصيد ${getNetworkName(network)}: $${balance.toFixed(2)}`);
 
-// ✅ التحقق من كفاية الرصيد (مع إشعار دائم)
-if (balance < amountUsd) {
-  const msg = `⚠️ ${token.symbol}: الرصيد غير كافٍ ($${balance.toFixed(2)} < $${amountUsd.toFixed(2)})`;
-  this.onLog({
-    id: generateId(),
-    timestamp: Date.now(),
-    level: 'warning',
-    message: msg,
-  });
-  await this.sendNotification('warning', msg); // ✅ دائماً (حتى في الوضع الصامت)
-  continue;
-}
+      if (balance < amountUsd) {
+        const msg = `⚠️ ${token.symbol}: الرصيد غير كافٍ ($${balance.toFixed(2)} < $${amountUsd.toFixed(2)})`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'warning',
+          message: msg,
+        });
+        await this.sendNotification('warning', msg);
+        continue;
+      }
 
-// ✅ تنفيذ الشراء
-const result = await this.executeBuyWithRetry({
-  tokenAddress: token.tokenAddress,
-  amountInSol: amountInSol,
-  slippage: 0.01,
-  password: "SecureMasterPassword123!@#",
-  maxRetries: 3,
-  retryDelay: 30000,
-  network: network,
-  tokenSymbol: token.symbol,
-});
+      const result = await this.executeBuyWithRetry({
+        tokenAddress: token.tokenAddress,
+        amountInSol: amountInSol,
+        slippage: 0.01,
+        password: "SecureMasterPassword123!@#",
+        maxRetries: 3,
+        retryDelay: 30000,
+        network: network,
+        tokenSymbol: token.symbol,
+      });
 
-const status = result.success ? 'executed' : 'failed';
-const trade: Trade = {
-  id: generateId(),
-  timestamp: Date.now(),
-  network,
-  tokenSymbol: token.symbol,
-  tokenAddress: token.tokenAddress,
-  pairAddress: token.pairAddress,
-  side: 'buy',
-  amountUsd,
-  priceUsd: verification.currentPrice,
-  quantity: amountUsd / verification.currentPrice,
-  status,
-  reason: `${reason} | Final Score: ${finalScore.toFixed(0)}`,
-  txHash: result.txHash,
-};
+      const status = result.success ? 'executed' : 'failed';
+      const trade: Trade = {
+        id: generateId(),
+        timestamp: Date.now(),
+        network,
+        tokenSymbol: token.symbol,
+        tokenAddress: token.tokenAddress,
+        pairAddress: token.pairAddress,
+        side: 'buy',
+        amountUsd,
+        priceUsd: verification.currentPrice,
+        quantity: amountUsd / verification.currentPrice,
+        status,
+        reason: `${reason} | Final Score: ${finalScore.toFixed(0)}`,
+        txHash: result.txHash,
+      };
 
-if (result.error) {
-  const msg = `❌ BUY ${token.symbol} FAILED: ${result.error}`;
-  this.onLog({
-    id: generateId(),
-    timestamp: Date.now(),
-    level: 'error',
-    message: msg,
-  });
-  if (!silent) await this.sendNotification('error', msg);
-} else {
-  this.dailyTrades++;
-  this.onLog({
-    id: generateId(),
-    timestamp: Date.now(),
-    level: 'info',
-    message: `📊 الصفقة ${this.dailyTrades}/${this.dynamicMaxTrades} اليوم`,
-  });
-  if (!silent) {
-    await this.sendNotification('success', `✅ تم شراء ${token.symbol} بمبلغ $${amountUsd.toFixed(2)}`);
-  }
-  
-  this.highestPrices.set(`${network}-${token.tokenAddress}`, verification.currentPrice);
-  this.activePositions.set(`${network}-${token.tokenAddress}`, trade);
-  this.onLog({
-    id: generateId(),
-    timestamp: Date.now(),
-    level: 'success',
-    message: `✅ REAL BUY ${token.symbol} on ${getNetworkName(network)} @ $${verification.currentPrice.toFixed(6)} — tx: ${result.txHash?.slice(0, 16)}... — ${reason}`,
-  });
-  if (!silent) {
-    await this.sendNotification('info', `📈 ${token.symbol} @ $${verification.currentPrice.toFixed(6)} | التجزئة: ${result.txHash?.slice(0, 16)}...`);
-  }
-  
-  this.scheduleSellCheck(token, network, trade);
-}
+      if (result.error) {
+        const msg = `❌ BUY ${token.symbol} FAILED: ${result.error}`;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'error',
+          message: msg,
+        });
+        await this.sendNotification('error', msg);
+      } else {
+        this.dailyTrades++;
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'info',
+          message: `📊 الصفقة ${this.dailyTrades}/${this.dynamicMaxTrades} اليوم`,
+        });
+        await this.sendNotification('success', `✅ تم شراء ${token.symbol} بمبلغ $${amountUsd.toFixed(2)}`);
+        
+        this.highestPrices.set(`${network}-${token.tokenAddress}`, verification.currentPrice);
+        this.activePositions.set(`${network}-${token.tokenAddress}`, trade);
+        this.onLog({
+          id: generateId(),
+          timestamp: Date.now(),
+          level: 'success',
+          message: `✅ REAL BUY ${token.symbol} on ${getNetworkName(network)} @ $${verification.currentPrice.toFixed(6)} — tx: ${result.txHash?.slice(0, 16)}... — ${reason}`,
+        });
+        await this.sendNotification('info', `📈 ${token.symbol} @ $${verification.currentPrice.toFixed(6)} | التجزئة: ${result.txHash?.slice(0, 16)}...`);
+        
+        this.scheduleSellCheck(token, network, trade);
+      }
       await saveTrade({
         token: trade.tokenSymbol,
         tokenAddress: trade.tokenAddress,
