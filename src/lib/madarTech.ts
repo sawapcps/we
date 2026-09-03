@@ -351,6 +351,11 @@ export async function madarDelete(
 // ============================================================
 // 🤖 دوال البوتات (4 أنواع) - محلية فقط
 // ============================================================
+// src/lib/madarTech.ts
+
+// ============================================================
+// 🤖 دوال البوتات (معدلة)
+// ============================================================
 
 export async function createBotInstance(
   userId: string,
@@ -364,6 +369,7 @@ export async function createBotInstance(
     const botId = generateId();
     const now = getTimestamp();
 
+    // ✅ تأكد من أن networks JSON صحيح
     let networksJson = JSON.stringify(['solana']);
     if (networks && Array.isArray(networks) && networks.length > 0) {
       networksJson = JSON.stringify(networks.map(n => String(n)));
@@ -377,7 +383,7 @@ export async function createBotInstance(
       description: description || '',
       status: 'stopped',
       mode: 'auto',
-      networks: networksJson,
+      networks: networksJson, // ✅ JSON صحيح
       paper_trading: 1,
       max_position_size: tradingAmount,
       take_profit: 30,
@@ -407,14 +413,51 @@ export async function createBotInstance(
   }
 }
 
+// ✅✅✅ الدالة المعدلة - إصلاح networks عند القراءة
 export async function getUserBots(userId: string): Promise<BotInstanceData[]> {
   try {
     const result = await madarRead<BotInstanceData>('bot_instances', {
       where: { user_id: userId },
       orderBy: { created_at: 'desc' }
     });
+    
     if (result.success && result.data) {
-      return Array.isArray(result.data) ? result.data : [result.data];
+      const bots = Array.isArray(result.data) ? result.data : [result.data];
+      
+      // ✅✅✅ إصلاح networks عند القراءة
+      return bots.map(bot => {
+        if (bot.networks && typeof bot.networks === 'string') {
+          // ✅ إذا كانت "solana" (بدون أقواس)، حوّلها إلى JSON
+          if (!bot.networks.startsWith('[')) {
+            bot.networks = JSON.stringify([bot.networks]);
+            console.log(`🔧 تم إصلاح networks للبوت ${bot.id}: "${bot.networks}"`);
+            
+            // ✅ حفظ الإصلاح في localStorage
+            try {
+              localStorage.setItem(`madartech_bot_instances_${bot.id}`, JSON.stringify(bot));
+            } catch (e) {
+              console.warn('⚠️ فشل حفظ الإصلاح:', e);
+            }
+          } else {
+            // ✅ التحقق من صحة JSON
+            try {
+              const parsed = JSON.parse(bot.networks);
+              if (!Array.isArray(parsed)) {
+                // ❌ JSON ولكن ليس مصفوفة
+                bot.networks = JSON.stringify([bot.networks.replace(/[\[\]"]/g, '')]);
+                localStorage.setItem(`madartech_bot_instances_${bot.id}`, JSON.stringify(bot));
+                console.log(`🔧 تم إصلاح networks (غير مصفوفة) للبوت ${bot.id}`);
+              }
+            } catch {
+              // ❌ JSON تالف
+              bot.networks = JSON.stringify([bot.networks.replace(/[\[\]"]/g, '')]);
+              localStorage.setItem(`madartech_bot_instances_${bot.id}`, JSON.stringify(bot));
+              console.log(`🔧 تم إصلاح JSON التالف للبوت ${bot.id}`);
+            }
+          }
+        }
+        return bot;
+      });
     }
     return [];
   } catch (error) {
@@ -465,13 +508,21 @@ export async function updateBotConfigRemote(
   data: any
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    // ✅ إذا كان networks موجوداً، تأكد من أنه JSON
+    if (data.networks) {
+      if (Array.isArray(data.networks)) {
+        data.networks = JSON.stringify(data.networks);
+      } else if (typeof data.networks === 'string' && !data.networks.startsWith('[')) {
+        data.networks = JSON.stringify([data.networks]);
+      }
+    }
+    
     await madarUpdate('bot_instances', botId, data);
     return { success: true };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
-
 // ============================================================
 // 💰 دوال محافظ البوت (محلية)
 // ============================================================
