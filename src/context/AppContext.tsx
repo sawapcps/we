@@ -903,35 +903,45 @@ export function AppProvider({ children }: AppProviderProps) {
   };
 
   // ✅ createBot - معدل لدعم tradingAmount
-  const createBot = async (
-    type: 'hunter' | 'signal' | 'manual' | 'scalper', 
-    name: string, 
-    userId?: string,
-    tradingAmount: number = 100
-  ) => {
-    const uid = userId || currentUserId || user?.id;
-    if (!uid) throw new Error('لا يوجد userId');
-    
-    try {
-      const result = await createBotInstance(uid, type, name, tradingAmount);
-      if (result.success) {
-        const botId = result.botId!;
-        
-        // ✅✅✅ ربط محافظ المستخدم تلقائياً بالبوت
+const createBot = async (
+  type: 'hunter' | 'signal' | 'manual' | 'scalper',
+  name: string,
+  userId?: string,
+  tradingAmount: number = 100,
+  walletId?: string // ✅ معامل جديد
+) => {
+  const uid = userId || currentUserId || user?.id;
+  if (!uid) throw new Error('لا يوجد userId');
+  
+  try {
+    const result = await createBotInstance(uid, type, name, tradingAmount);
+    if (result.success) {
+      const botId = result.botId!;
+      
+      // ✅ إذا كان هناك walletId محدد، اربطه بالبوت
+      if (walletId) {
+        const wallet = userWallets.find(w => w.id === walletId);
+        if (wallet) {
+          await createBotWallet(botId, uid, wallet.network, wallet.address, wallet.encryptedPrivateKey);
+          await addLog('SUCCESS', `🔗 تم ربط المحفظة ${wallet.address.slice(0, 8)}... بالبوت`);
+        }
+      } else {
+        // ✅ السلوك القديم: ربط محافظ المستخدم تلقائياً
         await autoLinkUserWalletsToBot(botId, uid);
-        
-        hasLoadedBotInstances.current = false;
-        await loadBotInstances(uid);
-        await addLog('SUCCESS', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
-        addNotification('success', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
       }
-      return result;
-    } catch (error) {
-      await addLog('ERROR', `❌ فشل إنشاء البوت: ${error}`);
-      addNotification('error', `❌ فشل إنشاء البوت`);
-      throw error;
+      
+      hasLoadedBotInstances.current = false;
+      await loadBotInstances(uid);
+      await addLog('SUCCESS', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
+      addNotification('success', `✅ تم إنشاء البوت ${name} بمبلغ $${tradingAmount}`);
     }
-  };
+    return result;
+  } catch (error) {
+    await addLog('ERROR', `❌ فشل إنشاء البوت: ${error}`);
+    addNotification('error', `❌ فشل إنشاء البوت`);
+    throw error;
+  }
+};
 
   const startBot = async (botId: string, userId?: string) => {
     const uid = userId || currentUserId || user?.id;
