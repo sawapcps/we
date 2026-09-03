@@ -1,6 +1,7 @@
 // src/App.tsx
 // ============================================================
 // تطبيق MadarTech Trading System - يدعم 4 بوتات و 9 شبكات
+// مع إمكانية اختيار المحفظة عند إنشاء البوت
 // ============================================================
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -170,7 +171,7 @@ const StatusBadge: React.FC<{ status: 'running' | 'paused' | 'stopped' }> = ({ s
 };
 
 // ============================================================
-// 🧠 مكون إدارة البوتات الأربعة (النسخة النهائية مع تحكم المسح + عرض المحفظة)
+// 🧠 مكون إدارة البوتات (مع اختيار المحفظة عند الإنشاء)
 // ============================================================
 const BotsManager: React.FC = () => {
   const {
@@ -184,18 +185,17 @@ const BotsManager: React.FC = () => {
     addLog,
     user,
     updateBotConfig,
-    runManualScan,          // دالة المسح اليدوي
-    startAutoScan,          // تشغيل المسح التلقائي
-    stopAutoScan,           // إيقاف المسح التلقائي
-    setScanInterval,        // تعيين الفاصل الزمني
-    getAutoScanStatus,      // جلب الحالة الحالية
-    // ✅ إضافة بيانات المحفظة
-    botWallets,              // قائمة محافظ البوتات
-    loadBotWallets,          // دالة تحديث المحافظ
-    refreshBotBalance,       // دالة تحديث الرصيد
+    runManualScan,
+    startAutoScan,
+    stopAutoScan,
+    setScanInterval,
+    getAutoScanStatus,
+    botWallets,
+    loadBotWallets,
+    refreshBotBalance,
+    userWallets,        // ✅ قائمة محافظ المستخدم
+    loadUserWallets,    // ✅ دالة تحميل محافظ المستخدم
   } = useApp();
-
-  // ... (جميع الكود الموجود، دوال المساعدة، الحالات، المؤثرات، إلخ) ...
 
   // ============================================================
   // ✅ دالة مساعدة لاستخراج الشبكات من البوت
@@ -232,13 +232,18 @@ const BotsManager: React.FC = () => {
   const [isTogglingPaper, setIsTogglingPaper] = useState(false);
 
   // ============================================================
-  // ✅ حالات المسح (جديدة)
+  // ✅ حالات المسح
   // ============================================================
   const [isScanning, setIsScanning] = useState(false);
   const [scanIntervalInput, setScanIntervalInput] = useState<Record<string, string>>({});
 
   // ============================================================
-  // ✅ حالات الإنشاء (لكل نوع بوت)
+  // ✅ حالة اختيار المحفظة (جديدة)
+  // ============================================================
+  const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
+
+  // ============================================================
+  // ✅ حالات الإنشاء
   // ============================================================
   const [createAmount, setCreateAmount] = useState(100);
   const [createTakeProfit, setCreateTakeProfit] = useState(30);
@@ -274,6 +279,19 @@ const BotsManager: React.FC = () => {
       loadBotInstances(user.id);
     }
   }, [user?.id]);
+
+  // ============================================================
+  // تحميل محافظ المستخدم عند فتح مودال الإنشاء
+  // ============================================================
+  useEffect(() => {
+    if (showCreateModal && user?.id) {
+      loadUserWallets();
+    }
+    // إعادة تعيين اختيار المحفظة عند إغلاق المودال
+    if (!showCreateModal) {
+      setSelectedWalletId(null);
+    }
+  }, [showCreateModal, user?.id, loadUserWallets]);
 
   // ============================================================
   // تحديث القائمة
@@ -322,7 +340,7 @@ const BotsManager: React.FC = () => {
   };
 
   // ============================================================
-  // ✅ إنشاء بوت جديد (مع إنشاء محفظة تلقائياً)
+  // ✅ إنشاء بوت جديد (مع دعم اختيار المحفظة)
   // ============================================================
   const handleCreateBot = async () => {
     if (!botName.trim() || !user?.id) {
@@ -337,9 +355,17 @@ const BotsManager: React.FC = () => {
         name: botName,
         userId: user.id,
         amount: createAmount,
+        selectedWalletId,
       });
       
-      const result = await createBot(selectedType, botName.trim(), user.id, createAmount);
+      // ✅ تمرير selectedWalletId إذا كان موجوداً
+      const result = await createBot(
+        selectedType,
+        botName.trim(),
+        user.id,
+        createAmount,
+        selectedWalletId || undefined // ✅ تمرير المحفظة إذا كانت محددة
+      );
       console.log('📦 نتيجة createBot:', result);
       
       if (!result.success || !result.botId) {
@@ -380,8 +406,10 @@ const BotsManager: React.FC = () => {
       const updateResult = await updateBotConfig(result.botId, config, user.id);
       console.log('📦 نتيجة updateBotConfig:', updateResult);
       
-      // ✅ إنشاء محفظة للشبكة المختارة تلقائياً
-      await ensureWalletForBot(result.botId, selectedNetwork);
+      // ✅ إذا لم يكن هناك محفظة محددة، أنشئ محفظة جديدة تلقائياً
+      if (!selectedWalletId) {
+        await ensureWalletForBot(result.botId, selectedNetwork);
+      }
       
       console.log('🔄 جاري تحديث قائمة البوتات...');
       await loadBotInstances(user.id);
@@ -390,6 +418,7 @@ const BotsManager: React.FC = () => {
       setShowCreateModal(false);
       setBotName('');
       resetCreateForm();
+      setSelectedWalletId(null);
       
       await addLog('SUCCESS', `✅ تم إنشاء البوت ${botName} (${selectedType}) بمبلغ $${createAmount}`);
       
@@ -544,7 +573,7 @@ const BotsManager: React.FC = () => {
   };
 
   // ============================================================
-  // حفظ تعديلات البوت (مع إنشاء محافظ تلقائياً للشبكات الجديدة)
+  // حفظ تعديلات البوت
   // ============================================================
   const handleSaveEdit = async () => {
     if (!selectedBot || !user?.id) {
@@ -593,7 +622,7 @@ const BotsManager: React.FC = () => {
 };
 
   // ============================================================
-  // إنشاء محفظة للبوت (باستخدام الشبكة الأولى المختارة)
+  // إنشاء محفظة للبوت
   // ============================================================
   const handleCreateWallet = async (botId: string) => {
     if (!user?.id) return;
@@ -612,7 +641,6 @@ const BotsManager: React.FC = () => {
       if (result.success) {
         await addLog('SUCCESS', `💰 تم إنشاء محفظة لـ ${network}`);
         await loadBotInstances(user.id);
-        // ✅ تحديث محافظ البوت بعد الإنشاء
         await loadBotWallets();
       } else {
         await addLog('ERROR', `❌ فشل إنشاء المحفظة: ${result.error}`);
@@ -658,7 +686,7 @@ const BotsManager: React.FC = () => {
   };
 
   // ============================================================
-  // 🔄 مسح يدوي (جديد)
+  // 🔄 مسح يدوي
   // ============================================================
   const handleManualScan = async (botId: string) => {
     if (!user?.id) return;
@@ -931,7 +959,7 @@ const BotsManager: React.FC = () => {
                     </p>
                   </div>
 
-                  {/* ✅ عرض المحفظة - إضافة جديدة */}
+                  {/* ✅ عرض المحفظة */}
                   <div className="col-span-2 mt-2 p-2 bg-[#0a0a0f]/60 rounded-lg border border-[#1e1e2f]">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] text-[#64748b]">💰 المحفظة</span>
@@ -948,11 +976,8 @@ const BotsManager: React.FC = () => {
                   </div>
                 </div>
 
-                {/* ============================================================
-                    أزرار التحكم (مع إضافة أزرار المسح وتحديث الرصيد)
-                ============================================================ */}
+                {/* أزرار التحكم */}
                 <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-3 border-t border-[#1e1e2f]">
-                  {/* تشغيل / إيقاف */}
                   {isRunning ? (
                     <Button
                       size="sm"
@@ -975,7 +1000,6 @@ const BotsManager: React.FC = () => {
                     </Button>
                   )}
                   
-                  {/* محفظة */}
                   <Button
                     size="sm"
                     variant="secondary"
@@ -985,7 +1009,6 @@ const BotsManager: React.FC = () => {
                     محفظة
                   </Button>
 
-                  {/* ✅ زر تحديث الرصيد - إضافة جديدة */}
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1004,7 +1027,6 @@ const BotsManager: React.FC = () => {
                     تحديث الرصيد
                   </Button>
 
-                  {/* ✅ زر مسح يدوي */}
                   <Button
                     size="sm"
                     variant="secondary"
@@ -1015,7 +1037,6 @@ const BotsManager: React.FC = () => {
                     {isScanning ? 'جاري...' : 'مسح الآن'}
                   </Button>
 
-                  {/* ✅ تحكم المسح التلقائي */}
                   <div className="flex items-center gap-1">
                     <input
                       type="number"
@@ -1046,7 +1067,6 @@ const BotsManager: React.FC = () => {
                     </Button>
                   </div>
 
-                  {/* تعديل */}
                   <Button
                     size="sm"
                     variant="secondary"
@@ -1056,7 +1076,6 @@ const BotsManager: React.FC = () => {
                     تعديل
                   </Button>
 
-                  {/* إغلاق الصفقات */}
                   <Button
                     size="sm"
                     variant="danger"
@@ -1066,7 +1085,6 @@ const BotsManager: React.FC = () => {
                     إغلاق الصفقات
                   </Button>
 
-                  {/* حذف */}
                   <Button
                     size="sm"
                     variant="danger"
@@ -1085,7 +1103,7 @@ const BotsManager: React.FC = () => {
       )}
 
       {/* ============================================================
-          مودال إنشاء بوت (نفس الكود السابق)
+          مودال إنشاء بوت (مع اختيار المحفظة)
       ============================================================ */}
       {showCreateModal && (
         <div
@@ -1144,6 +1162,29 @@ const BotsManager: React.FC = () => {
                   placeholder="مثال: Scalper Pro"
                   className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white placeholder-[#64748b] focus:outline-none focus:border-[#10b981] transition-colors"
                 />
+              </div>
+
+              {/* ✅ قائمة اختيار المحفظة (جديدة) */}
+              <div>
+                <label className="text-sm text-[#94a3b8] block mb-1">💰 اختيار المحفظة</label>
+                <select
+                  value={selectedWalletId || ''}
+                  onChange={(e) => setSelectedWalletId(e.target.value || null)}
+                  className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors"
+                >
+                  <option value="">🔄 إنشاء محفظة جديدة تلقائياً</option>
+                  {userWallets
+                    .filter(w => w.network === selectedNetwork)
+                    .map(w => (
+                      <option key={w.id} value={w.id}>
+                        {w.address.slice(0, 8)}...{w.address.slice(-6)} (رصيد: {w.balance.toFixed(4)} {w.network})
+                      </option>
+                    ))
+                  }
+                </select>
+                {userWallets.filter(w => w.network === selectedNetwork).length === 0 && (
+                  <p className="text-xs text-amber-400 mt-1">⚠️ لا توجد محافظ على هذه الشبكة، سيتم إنشاء محفظة جديدة</p>
+                )}
               </div>
 
               <div>
@@ -1740,11 +1781,11 @@ const navItems = [
                             setShowWalletDropdown(false);
                           }}
                           disabled={!provider.installed && provider.id !== 'walletconnect'}
-                          className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                          className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${(
                             provider.installed || provider.id === 'walletconnect'
                               ? 'hover:bg-[#1e1e2f] text-[#94a3b8] hover:text-white'
                               : 'opacity-50 cursor-not-allowed text-[#64748b]'
-                          }`}
+                          )}`}
                         >
                           <span className="text-lg">{provider.icon}</span>
                           <span className="flex-1 text-left">{provider.name}</span>
