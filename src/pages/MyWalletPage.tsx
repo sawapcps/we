@@ -4,6 +4,7 @@
 // ✅ يدعم: إنشاء محفظة، عرض المحافظ، تحديث الرصيد
 // ✅ يدعم: إيداع (عرض العنوان)، سحب (تحويل حقيقي)
 // ✅ يدعم: عرض المفتاح الخاص (مشفر)، نسخ العنوان
+// ✅ يدعم: حذف محفظة واحدة أو حذف الكل
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -13,7 +14,8 @@ import { formatUsd } from "../lib/format";
 import { 
   Copy, Check, Key, Eye, EyeOff, Loader2, RefreshCw, 
   Wallet, ChevronDown, ChevronRight, Clock, Plus, Globe,
-  AlertCircle, ArrowUpRight, ArrowDown, Zap, Link2, ExternalLink
+  AlertCircle, ArrowUpRight, ArrowDown, Zap, Link2, ExternalLink,
+  Trash2
 } from "lucide-react";
 import { NETWORKS, getNetworkName, getNetworkColor, getNetworkIcon } from "../config/networks";
 
@@ -100,7 +102,8 @@ export function MyWalletPage() {
     loadUserWallets, 
     userWallets, 
     refreshUserBalance,
-    addTransaction 
+    addTransaction,
+    addNotification 
   } = useApp();
   
   const [wallets, setWallets] = useState<UserWallet[]>([]);
@@ -269,6 +272,84 @@ export function MyWalletPage() {
       }
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  // ============================================================
+  // ✅ دالة حذف محفظة واحدة
+  // ============================================================
+  
+  const handleDeleteWallet = async (walletId: string, network: string) => {
+    if (!user) return;
+    
+    if (!window.confirm(`⚠️ هل أنت متأكد من حذف محفظة ${getNetworkName(network)}؟\nلا يمكن التراجع عن هذا الإجراء.`)) {
+      return;
+    }
+
+    try {
+      // ✅ حذف من localStorage
+      const key = `madartech_wallets_${walletId}`;
+      localStorage.removeItem(key);
+      
+      // ✅ حذف من قائمة userWallets في localStorage
+      const userWalletsStr = localStorage.getItem('userWallets');
+      if (userWalletsStr) {
+        try {
+          const userWalletsList = JSON.parse(userWalletsStr);
+          const filtered = userWalletsList.filter((w: any) => w.id !== walletId);
+          localStorage.setItem('userWallets', JSON.stringify(filtered));
+        } catch (e) {
+          console.warn('⚠️ فشل تحديث userWallets:', e);
+        }
+      }
+      
+      // ✅ تحديث القائمة
+      await loadData(true);
+      setSuccess(`🗑️ تم حذف محفظة ${getNetworkName(network)} بنجاح`);
+      addLog("SUCCESS", `🗑️ تم حذف محفظة ${getNetworkName(network)}`);
+      
+      if (addNotification) {
+        addNotification('success', `🗑️ تم حذف محفظة ${getNetworkName(network)}`);
+      }
+    } catch (error) {
+      console.error('❌ فشل حذف المحفظة:', error);
+      setError('❌ فشل حذف المحفظة');
+      addLog("ERROR", `❌ فشل حذف المحفظة: ${error}`);
+    }
+  };
+
+  // ============================================================
+  // ✅ دالة حذف جميع المحافظ
+  // ============================================================
+  
+  const handleDeleteAllWallets = async () => {
+    if (!user) return;
+    
+    if (!window.confirm('⚠️ هل أنت متأكد من حذف جميع المحافظ؟\nلا يمكن التراجع عن هذا الإجراء.')) {
+      return;
+    }
+
+    try {
+      // ✅ حذف جميع محافظ المستخدم من localStorage
+      localStorage.removeItem('userWallets');
+      
+      const keys = Object.keys(localStorage).filter(k => k.startsWith('madartech_wallets_'));
+      keys.forEach(key => localStorage.removeItem(key));
+      
+      console.log(`🗑️ تم حذف ${keys.length} محفظة`);
+      
+      // ✅ تحديث القائمة
+      await loadData(true);
+      setSuccess(`🗑️ تم حذف ${keys.length} محفظة بنجاح`);
+      addLog("SUCCESS", `🗑️ تم حذف ${keys.length} محفظة`);
+      
+      if (addNotification) {
+        addNotification('success', `🗑️ تم حذف ${keys.length} محفظة`);
+      }
+    } catch (error) {
+      console.error('❌ فشل حذف المحافظ:', error);
+      setError('❌ فشل حذف المحافظ');
+      addLog("ERROR", `❌ فشل حذف المحافظ: ${error}`);
     }
   };
 
@@ -612,6 +693,15 @@ ${address}
             >
               {isLoading ? 'جاري التحديث...' : 'تحديث الكل'}
             </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handleDeleteAllWallets}
+              disabled={wallets.length === 0}
+              icon={<Trash2 className="w-4 h-4" />}
+            >
+              حذف الكل
+            </Button>
           </div>
         </div>
       </GlassCard>
@@ -772,7 +862,7 @@ ${address}
                       )}
                     </div>
 
-                    {/* ✅ أزرار الإجراءات - سحب وإيداع وربط */}
+                    {/* ✅ أزرار الإجراءات - سحب وإيداع وربط وحذف */}
                     <div className="flex flex-wrap gap-2 pt-3 border-t border-[#1e1e2f]">
                       <Button
                         size="sm"
@@ -815,6 +905,15 @@ ${address}
                       >
                         استكشاف
                       </Button>
+
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => handleDeleteWallet(wallet.id, wallet.network)}
+                        icon={<Trash2 className="w-3 h-3" />}
+                      >
+                        حذف
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -854,6 +953,10 @@ ${address}
           <li className="flex items-start gap-2 text-emerald-400">
             <span className="text-[#10b981] font-bold">➕</span>
             <span>يمكنك ربط محفظة خارجية لتسهيل السحب</span>
+          </li>
+          <li className="flex items-start gap-2 text-red-400">
+            <span className="text-[#ef4444] font-bold">🗑️</span>
+            <span>يمكنك حذف محفظة واحدة أو حذف الكل</span>
           </li>
         </ul>
       </GlassCard>
