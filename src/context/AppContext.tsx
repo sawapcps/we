@@ -955,7 +955,7 @@ const createBot = async (
         if (botData) {
           const config = {
             mode: botData.mode || 'auto',
-            networks: JSON.parse(botData.networks || '["solana"]'),
+networks: parseNetworks(botData.networks),
             tradingAmount: botData.trading_amount || 100,
             maxPositionUsd: botData.max_position_size || 100,
             takeProfitPct: botData.take_profit || 30,
