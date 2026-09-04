@@ -2,11 +2,12 @@
 // ============================================================
 // 👤 نظام إدارة الحسابات والمستخدمين (محلي بالكامل)
 // ✅ يعتمد على localStorage عبر دوال madar...
-// ✅ لا يحتوي على أي اتصال خارجي (Worker / D1)
+// ✅ يدعم إنشاء محافظ صالحة (Solana / EVM)
 // ============================================================
 
 import { generateId, getTimestamp, madarCreate, madarRead, madarUpdate, madarDelete } from './madarTech';
 import { encrypt, decrypt } from './encryption';
+import { createWallet } from './wallet'; // ✅ استيراد createWallet
 
 // ============================================================
 // 📊 الأنواع
@@ -167,7 +168,6 @@ export class AccountManager {
     const user = await this.getUserById(userId);
     if (!user) return null;
 
-    // ✅ جلب الصفقات من localStorage
     const tradesResult = await madarRead<any>('trades', {
       where: { userId },
     });
@@ -177,19 +177,15 @@ export class AccountManager {
 
     const totalTrades = trades.length;
     const totalProfit = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-    const totalDeposited = 0;
-    const totalWithdrawn = 0;
-    const totalFees = 0;
-    const feePercentage = 0;
     const netBalance = user.balance;
 
     return {
       totalProfit,
-      totalFees,
-      totalDeposited,
-      totalWithdrawn,
+      totalFees: 0,
+      totalDeposited: 0,
+      totalWithdrawn: 0,
       netBalance,
-      feePercentage,
+      feePercentage: 0,
       tradesCount: totalTrades,
     };
   }
@@ -226,10 +222,10 @@ export class AccountManager {
   }
 
   // ============================================================
-  // 💰 دوال المحافظ (للمستخدمين)
+  // 💰 دوال المحافظ (للمستخدمين) - معدلة
   // ============================================================
 
-  // ✅ إنشاء محفظة للمستخدم
+  // ✅ إنشاء محفظة للمستخدم (مع عنوان صالح)
   static async createUserWallet(
     userId: string,
     network: string,
@@ -242,12 +238,24 @@ export class AccountManager {
       return existing;
     }
 
+    // ✅ إنشاء عنوان صالح للشبكة المطلوبة
+    let walletAddress = address;
+    let privKey = encryptedPrivateKey;
+
+    if (!walletAddress) {
+      // ✅ استخدام createWallet لإنشاء عنوان صالح
+      const newWallet = createWallet(network);
+      walletAddress = newWallet.address;
+      privKey = newWallet.privateKey;
+      console.log(`🆕 تم إنشاء عنوان ${network} صالح: ${walletAddress}`);
+    }
+
     const wallet: UserWallet = {
       id: generateId(),
       userId,
       network,
-      address: address || `0x${generateId()}`,
-      encryptedPrivateKey: encryptedPrivateKey || `encrypted_${generateId()}`,
+      address: walletAddress, // ✅ عنوان صالح
+      encryptedPrivateKey: privKey || `encrypted_${generateId()}`,
       balance: 0,
       createdAt: getTimestamp(),
       updatedAt: getTimestamp(),
@@ -305,6 +313,49 @@ export class AccountManager {
     return wallet.balance;
   }
 
+  // ✅ حذف محفظة مستخدم
+  static async deleteUserWallet(userId: string, network: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const wallet = await this.getUserWallet(userId, network);
+      if (!wallet) {
+        return { success: false, error: `لا توجد محفظة على ${network}` };
+      }
+
+      // حذف من جدول user_wallets
+      await madarDelete('user_wallets', wallet.id);
+
+      // حذف من localStorage مباشرة (للتأكد)
+      const key = `madartech_user_wallets_${wallet.id}`;
+      localStorage.removeItem(key);
+
+      console.log(`✅ تم حذف محفظة ${network} للمستخدم ${userId}`);
+      return { success: true };
+    } catch (error) {
+      console.error('❌ فشل حذف المحفظة:', error);
+      return { success: false, error: String(error) };
+    }
+  }
+
+  // ✅ حذف جميع محافظ المستخدم
+  static async deleteAllUserWallets(userId: string): Promise<{ success: boolean; count: number; error?: string }> {
+    try {
+      const wallets = await this.getAllUserWallets(userId);
+      const count = wallets.length;
+
+      for (const wallet of wallets) {
+        await madarDelete('user_wallets', wallet.id);
+        const key = `madartech_user_wallets_${wallet.id}`;
+        localStorage.removeItem(key);
+      }
+
+      console.log(`🗑️ تم حذف ${count} محفظة للمستخدم ${userId}`);
+      return { success: true, count };
+    } catch (error) {
+      console.error('❌ فشل حذف المحافظ:', error);
+      return { success: false, count: 0, error: String(error) };
+    }
+  }
+
   // ============================================================
   // 📊 دوال الصفقات والمعاملات
   // ============================================================
@@ -359,7 +410,6 @@ export class AccountManager {
   // ✅ زيادة عدد صفقات المستخدم
   static async incrementUserTrades(userId: string): Promise<void> {
     // لا نحتاج إلى تخزين منفصل، يمكن حسابه من الصفقات
-    // هذه الدالة للتوافق مع الكود القديم
   }
 
   // ✅ إضافة ربح للمستخدم
@@ -372,7 +422,6 @@ export class AccountManager {
     if (!user) return;
     const newBalance = (user.balance || 0) + profit;
     await this.updateUser(userId, { balance: newBalance });
-    // تسجيل كمعاملة
     await this.addTransaction({
       userId,
       type: 'TRADE',
