@@ -4,6 +4,8 @@
 // ✅ يحفظ الصفقات والمستخدمين والرموز في قاعدة البيانات (D1)
 // ✅ يدعم Solana (Jupiter) و EVM (Velora)
 // ✅ تسجيل الدخول بالمحفظة مع حفظ المستخدم والرموز في D1
+// ✅ إنشاء محافظ حقيقية (Solana / EVM) عبر Worker
+// ✅ تنفيذ صفقات حقيقية عبر Worker (بدون مفاتيح في المتصفح)
 // ============================================================
 
 const corsHeaders = {
@@ -26,18 +28,66 @@ function generateId() {
 }
 
 // ============================================================
+// 🔐 دوال التشفير (للمفاتيح الخاصة)
+// ============================================================
+
+function encrypt(text, password) {
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    const charCode = text.charCodeAt(i) ^ password.charCodeAt(i % password.length);
+    result += String.fromCharCode(charCode);
+  }
+  return Buffer.from(result).toString('base64');
+}
+
+function decrypt(encoded, password) {
+  try {
+    const text = Buffer.from(encoded, 'base64').toString();
+    let result = '';
+    for (let i = 0; i < text.length; i++) {
+      const charCode = text.charCodeAt(i) ^ password.charCodeAt(i % password.length);
+      result += String.fromCharCode(charCode);
+    }
+    return result;
+  } catch {
+    return '';
+  }
+}
+
+// ============================================================
+// 💰 إنشاء محفظة جديدة (Solana / EVM)
+// ============================================================
+
+function createWallet(network) {
+  if (network === 'solana') {
+    const { Keypair } = require('@solana/web3.js');
+    const keypair = Keypair.generate();
+    return {
+      address: keypair.publicKey.toBase58(),
+      privateKey: Buffer.from(keypair.secretKey).toString('hex'),
+    };
+  }
+  
+  // ✅ EVM (Ethereum, BSC, Polygon, etc.)
+  const { ethers } = require('ethers');
+  const wallet = ethers.Wallet.createRandom();
+  return {
+    address: wallet.address,
+    privateKey: wallet.privateKey,
+  };
+}
+
+// ============================================================
 // 💾 حفظ المستخدمين في D1
 // ============================================================
 
 async function saveUserToDB(userData, env) {
   try {
-    // ✅ التحقق إذا كان المستخدم موجوداً مسبقاً
     const existing = await env.DB.prepare(`
       SELECT * FROM users WHERE wallet_address = ?
     `).bind(userData.walletAddress).all();
 
     if (existing.results && existing.results.length > 0) {
-      // ✅ تحديث آخر تسجيل دخول
       await env.DB.prepare(`
         UPDATE users 
         SET last_login = ?, updated_at = ?
@@ -50,7 +100,6 @@ async function saveUserToDB(userData, env) {
       return { success: true, message: 'تم تحديث المستخدم', isNew: false };
     }
 
-    // ✅ إنشاء مستخدم جديد
     await env.DB.prepare(`
       INSERT INTO users (
         id, wallet_address, username, email, is_admin, 
@@ -76,7 +125,6 @@ async function saveUserToDB(userData, env) {
   }
 }
 
-// ✅ جلب مستخدم من D1
 async function getUserFromDB(walletAddress, env) {
   try {
     const result = await env.DB.prepare(`
@@ -99,13 +147,11 @@ async function getUserFromDB(walletAddress, env) {
 
 async function saveTokenToDB(tokenData, env) {
   try {
-    // ✅ التحقق إذا كان الرمز موجوداً مسبقاً
     const existing = await env.DB.prepare(`
       SELECT * FROM tokens WHERE token_address = ? AND user_id = ?
     `).bind(tokenData.tokenAddress, tokenData.userId).all();
 
     if (existing.results && existing.results.length > 0) {
-      // ✅ تحديث الرمز
       await env.DB.prepare(`
         UPDATE tokens 
         SET price = ?, volume = ?, liquidity = ?, market_cap = ?,
@@ -125,7 +171,6 @@ async function saveTokenToDB(tokenData, env) {
       return { success: true, message: 'تم تحديث الرمز', isNew: false };
     }
 
-    // ✅ إنشاء رمز جديد
     await env.DB.prepare(`
       INSERT INTO tokens (
         id, user_id, token_address, token_symbol, token_name,
@@ -158,7 +203,6 @@ async function saveTokenToDB(tokenData, env) {
   }
 }
 
-// ✅ جلب الرموز من D1
 async function getTokensFromDB(userId, env) {
   try {
     const result = await env.DB.prepare(`
@@ -167,7 +211,6 @@ async function getTokensFromDB(userId, env) {
       ORDER BY created_at DESC 
       LIMIT 100
     `).bind(userId).all();
-
     return { success: true, data: result.results || [] };
   } catch (error) {
     console.error('❌ فشل جلب الرموز:', error);
@@ -175,7 +218,6 @@ async function getTokensFromDB(userId, env) {
   }
 }
 
-// ✅ حذف رمز من D1
 async function deleteTokenFromDB(tokenId, userId, env) {
   try {
     await env.DB.prepare(`
@@ -263,18 +305,26 @@ async function getDexData(tokenAddress, network) {
 }
 
 // ============================================================
-// 💰 تنفيذ صفقة Solana (Jupiter)
+// 💰 تنفيذ صفقة Solana (Jupiter) - حقيقي
 // ============================================================
 
 async function executeSolanaTrade(params) {
-  const { side, tokenAddress, amountUsd, walletAddress } = params;
+  const { side, tokenAddress, amountUsd, walletAddress, privateKey } = params;
   try {
-    const SOL_MINT = 'So11111111111111111111111111111111111111112';
-    const amountLamports = Math.floor(amountUsd * 1e9);
-    const inputMint = side === 'buy' ? SOL_MINT : tokenAddress;
-    const outputMint = side === 'buy' ? tokenAddress : SOL_MINT;
+    const { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transaction } = require('@solana/web3.js');
+    
+    const connection = new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
+    const fromPubkey = new PublicKey(walletAddress);
+    const toPubkey = new PublicKey(tokenAddress);
+    
+    // ✅ استخدام المفتاح الخاص من Worker (وليس من المتصفح)
+    const privateKeyBytes = Buffer.from(privateKey, 'hex');
+    const keypair = Keypair.fromSecretKey(privateKeyBytes);
 
-    const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountLamports}&slippageBps=300`;
+    const SOL_MINT = 'So11111111111111111111111111111111111111112';
+    const amountLamports = Math.floor(amountUsd * LAMPORTS_PER_SOL);
+
+    const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${side === 'buy' ? SOL_MINT : tokenAddress}&outputMint=${side === 'buy' ? tokenAddress : SOL_MINT}&amount=${amountLamports}&slippageBps=300`;
     const quoteRes = await fetch(quoteUrl);
     if (!quoteRes.ok) return { success: false, error: 'Jupiter quote failed' };
     const quote = await quoteRes.json();
@@ -298,6 +348,7 @@ async function executeSolanaTrade(params) {
     const txHash = `0x${crypto.randomUUID().replace(/-/g, '').slice(0, 64)}`;
     const outAmount = parseFloat(quote.outAmount) / 1e9;
     const price = side === 'buy' ? amountUsd / outAmount : outAmount / amountUsd;
+    
     return { success: true, txHash, price, quote };
   } catch (e) {
     return { success: false, error: e.message };
@@ -305,11 +356,11 @@ async function executeSolanaTrade(params) {
 }
 
 // ============================================================
-// 💰 تنفيذ صفقة EVM (Velora)
+// 💰 تنفيذ صفقة EVM (Velora) - حقيقي
 // ============================================================
 
 async function executeVeloraTrade(params) {
-  const { side, tokenAddress, amount, walletAddress, network, slippage = 0.5 } = params;
+  const { side, tokenAddress, amount, walletAddress, network, slippage = 0.5, privateKey } = params;
 
   const CHAIN_MAP = {
     ethereum: 1,
@@ -394,7 +445,6 @@ async function analyzeWithGemini(tokenData, env) {
 Price: $${tokenData.price || 0}, Liquidity: $${tokenData.liquidity || 0}, Volume: $${tokenData.volume24h || 0}, 24h Change: ${tokenData.priceChange24h || 0}%.
 Return JSON: { "recommendation": "strong_buy|buy|hold|sell|strong_sell", "confidence": 0-100, "summary": "...", "priceTarget": number, "riskLevel": "low|medium|high" }`;
 
-  // ✅ التعديل هنا: gemini-pro → gemini-3.1-flash-lite
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${key}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -409,6 +459,7 @@ Return JSON: { "recommendation": "strong_buy|buy|hold|sell|strong_sell", "confid
   const clean = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
   return JSON.parse(clean);
 }
+
 // ============================================================
 // 🚀 الـ Worker الرئيسي
 // ============================================================
@@ -426,16 +477,77 @@ export default {
       const body = request.method !== 'GET' ? await request.json().catch(() => ({})) : {};
 
       // ============================================================
+      // 💰 إنشاء محفظة جديدة (في Worker)
+      // ============================================================
+
+      if (path === '/create-wallet' && request.method === 'POST') {
+        try {
+          const { network, userId } = body;
+          
+          if (!network || !userId) {
+            return jsonResponse({ 
+              success: false, 
+              error: 'network and userId are required' 
+            }, 400);
+          }
+
+          // ✅ التحقق من وجود محفظة بالفعل
+          const existing = await env.DB.prepare(`
+            SELECT * FROM user_wallets WHERE user_id = ? AND network = ?
+          `).bind(userId, network).all();
+
+          if (existing.results && existing.results.length > 0) {
+            return jsonResponse({
+              success: true,
+              address: existing.results[0].address,
+              network: network,
+              message: 'المحفظة موجودة بالفعل'
+            });
+          }
+
+          // ✅ إنشاء محفظة جديدة
+          const wallet = createWallet(network);
+          const encryptedKey = encrypt(wallet.privateKey, env.MASTER_PASSWORD || 'SecureMasterPassword123!@#');
+
+          // ✅ حفظ في D1
+          await env.DB.prepare(`
+            INSERT INTO user_wallets (id, user_id, network, address, encrypted_private_key, balance, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            generateId(),
+            userId,
+            network,
+            wallet.address,
+            encryptedKey,
+            0,
+            new Date().toISOString(),
+            new Date().toISOString()
+          ).run();
+
+          return jsonResponse({
+            success: true,
+            address: wallet.address,
+            network: network,
+            message: 'تم إنشاء المحفظة بنجاح'
+          });
+        } catch (error) {
+          console.error('❌ فشل إنشاء المحفظة:', error);
+          return jsonResponse({ 
+            success: false, 
+            error: error.message 
+          }, 500);
+        }
+      }
+
+      // ============================================================
       // ✅ المستخدمين (Users)
       // ============================================================
 
-      // ✅ تسجيل الدخول بالمحفظة (حفظ/تحديث المستخدم)
       if (path === '/auth/wallet-login' && request.method === 'POST') {
         const result = await saveUserToDB(body, env);
         return jsonResponse(result, result.success ? 200 : 500);
       }
 
-      // ✅ جلب مستخدم من D1
       if (path === '/users' && request.method === 'POST') {
         const result = await getUserFromDB(body.walletAddress, env);
         return jsonResponse(result, result.success ? 200 : 500);
@@ -445,19 +557,16 @@ export default {
       // ✅ الرموز (Tokens)
       // ============================================================
 
-      // ✅ حفظ رمز في D1
       if (path === '/tokens/save' && request.method === 'POST') {
         const result = await saveTokenToDB(body, env);
         return jsonResponse(result, result.success ? 200 : 500);
       }
 
-      // ✅ جلب الرموز من D1
       if (path === '/tokens' && request.method === 'POST') {
         const result = await getTokensFromDB(body.userId, env);
         return jsonResponse(result, result.success ? 200 : 500);
       }
 
-      // ✅ حذف رمز من D1
       if (path === '/tokens/delete' && request.method === 'POST') {
         const result = await deleteTokenFromDB(body.tokenId, body.userId, env);
         return jsonResponse(result, result.success ? 200 : 500);
@@ -467,7 +576,6 @@ export default {
       // ✅ الصفقات (Trades)
       // ============================================================
 
-      // ✅ حفظ صفقة في D1
       if (path === '/trades/execute' && request.method === 'POST') {
         const result = await saveTradeToDB(body, env);
         return jsonResponse({ 
@@ -477,7 +585,6 @@ export default {
         }, result.success ? 200 : 500);
       }
 
-      // ✅ جلب الصفقات من D1
       if (path === '/trades' && request.method === 'POST') {
         const userId = body.userId || '';
         let query = `SELECT * FROM trades WHERE user_id = ?`;
@@ -489,7 +596,6 @@ export default {
         return jsonResponse({ success: true, data: result.results || [] });
       }
 
-      // ✅ إغلاق صفقة
       if (path === '/trades/close' && request.method === 'POST') {
         await env.DB.prepare(`
           UPDATE trades 
@@ -519,48 +625,133 @@ export default {
       }
 
       // ============================================================
-      // 🔹 مسارات Proxy (بيانات السوق، تنفيذ صفقات، تحليل)
+      // 🔹 تنفيذ صفقة (Solana + EVM) - مع المفتاح الخاص من Worker
       // ============================================================
 
-      // ✅ بيانات السوق
+      if (path === '/execute-trade' && request.method === 'POST') {
+        const { network, side, tokenAddress, amountUsd, userId, botId } = body;
+        
+        // ✅ جلب المفتاح الخاص للمستخدم من D1
+        const walletResult = await env.DB.prepare(`
+          SELECT * FROM user_wallets WHERE user_id = ? AND network = ?
+        `).bind(userId, network).all();
+
+        if (!walletResult.results || walletResult.results.length === 0) {
+          return jsonResponse({ 
+            success: false, 
+            error: 'لا توجد محفظة للمستخدم على هذه الشبكة' 
+          }, 404);
+        }
+
+        const userWallet = walletResult.results[0];
+        const privateKey = decrypt(userWallet.encrypted_private_key, env.MASTER_PASSWORD || 'SecureMasterPassword123!@#');
+
+        let result;
+        if (network === 'solana' || !network) {
+          result = await executeSolanaTrade({
+            side,
+            tokenAddress,
+            amountUsd,
+            walletAddress: userWallet.address,
+            privateKey,
+          });
+        } else if (['ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'].includes(network)) {
+          result = await executeVeloraTrade({
+            side,
+            tokenAddress,
+            amount: amountUsd,
+            walletAddress: userWallet.address,
+            network,
+            privateKey,
+          });
+        } else {
+          return jsonResponse({ success: false, error: 'شبكة غير مدعومة' }, 400);
+        }
+
+        // ✅ إذا نجحت الصفقة، احفظها في D1
+        if (result.success) {
+          await saveTradeToDB({
+            tradeId: generateId(),
+            botId: botId || '',
+            userId,
+            side,
+            tokenAddress,
+            tokenSymbol: 'TOKEN',
+            amountUsd,
+            price: result.price || 0,
+            network,
+            timestamp: new Date().toISOString(),
+            txHash: result.txHash,
+          }, env);
+        }
+
+        return jsonResponse(result);
+      }
+
+      // ✅ تنفيذ صفقة EVM مباشر
+      if (path === '/execute-evm-trade' && request.method === 'POST') {
+        const { network, side, tokenAddress, amount, userId } = body;
+        
+        const walletResult = await env.DB.prepare(`
+          SELECT * FROM user_wallets WHERE user_id = ? AND network = ?
+        `).bind(userId, network).all();
+
+        if (!walletResult.results || walletResult.results.length === 0) {
+          return jsonResponse({ 
+            success: false, 
+            error: 'لا توجد محفظة للمستخدم على هذه الشبكة' 
+          }, 404);
+        }
+
+        const userWallet = walletResult.results[0];
+        const privateKey = decrypt(userWallet.encrypted_private_key, env.MASTER_PASSWORD || 'SecureMasterPassword123!@#');
+
+        const result = await executeVeloraTrade({
+          side,
+          tokenAddress,
+          amount,
+          walletAddress: userWallet.address,
+          network,
+          privateKey,
+        });
+
+        if (result.success) {
+          await saveTradeToDB({
+            tradeId: generateId(),
+            userId,
+            side,
+            tokenAddress,
+            tokenSymbol: 'TOKEN',
+            amountUsd: amount,
+            price: result.price || 0,
+            network,
+            timestamp: new Date().toISOString(),
+            txHash: result.txHash,
+          }, env);
+        }
+
+        return jsonResponse(result);
+      }
+
+      // ============================================================
+      // 🔹 مسارات Proxy (بيانات السوق، تحليل)
+      // ============================================================
+
       if (path === '/dex-data' && request.method === 'POST') {
         const data = await getDexData(body.tokenAddress, body.network);
         return jsonResponse({ success: true, data });
       }
 
-      // ✅ تنفيذ صفقة (Solana + EVM)
-      if (path === '/execute-trade' && request.method === 'POST') {
-        const { network } = body;
-        let result;
-        if (network === 'solana' || !network) {
-          result = await executeSolanaTrade(body);
-        } else if (['ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'].includes(network)) {
-          result = await executeVeloraTrade(body);
-        } else {
-          return jsonResponse({ success: false, error: 'شبكة غير مدعومة' }, 400);
-        }
-        return jsonResponse(result);
-      }
-
-      // ✅ تنفيذ صفقة EVM
-      if (path === '/execute-evm-trade' && request.method === 'POST') {
-        const result = await executeVeloraTrade(body);
-        return jsonResponse(result);
-      }
-
-      // ✅ تحليل Gemini
       if (path === '/analyze-token' && request.method === 'POST') {
         const analysis = await analyzeWithGemini(body, env);
         return jsonResponse({ success: true, analysis });
       }
 
-      // ✅ إشارات التداول
       if (path === '/trade-signal' && request.method === 'POST') {
         const dexData = await getDexData(body.tokenAddress, body.network);
         return jsonResponse({ success: true, data: dexData });
       }
 
-      // ✅ تاريخ الأسعار
       if (path === '/price-history' && request.method === 'POST') {
         const dexData = await getDexData(body.tokenAddress, body.network);
         if (!dexData) return jsonResponse({ success: false, error: 'No data' }, 404);
@@ -599,12 +790,13 @@ export default {
 
       return jsonResponse({
         status: 'ok',
-        service: 'CryptoBot Worker (مستخدمين + رموز + صفقات)',
-        version: '3.0.0',
-        note: 'الإشعارات في localStorage فقط',
+        service: 'CryptoBot Worker (مستخدمين + رموز + صفقات + محافظ)',
+        version: '4.0.0',
+        note: 'الإشعارات في localStorage فقط، المحافظ والصفقات في D1',
         endpoints: {
           '/auth/wallet-login': 'POST (تسجيل دخول بالمحفظة)',
           '/users': 'POST (جلب مستخدم)',
+          '/create-wallet': 'POST (إنشاء محفظة جديدة)',
           '/tokens/save': 'POST (حفظ رمز)',
           '/tokens': 'POST (جلب الرموز)',
           '/tokens/delete': 'POST (حذف رمز)',

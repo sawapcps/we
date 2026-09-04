@@ -3,7 +3,6 @@
 // سياق التطبيق الرئيسي - يدعم 4 بوتات + محافظ متعددة (داخلية وخارجية) + المحافظ الذكية + بوت الأخبار
 // ============================================================
 import { TradingBot } from '../lib/botEngine';
-import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/accounts';
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
 import {
   madarRead,
