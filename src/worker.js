@@ -394,7 +394,8 @@ async function analyzeWithGemini(tokenData, env) {
 Price: $${tokenData.price || 0}, Liquidity: $${tokenData.liquidity || 0}, Volume: $${tokenData.volume24h || 0}, 24h Change: ${tokenData.priceChange24h || 0}%.
 Return JSON: { "recommendation": "strong_buy|buy|hold|sell|strong_sell", "confidence": 0-100, "summary": "...", "priceTarget": number, "riskLevel": "low|medium|high" }`;
 
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${key}`, {
+  // ✅ التعديل هنا: gemini-pro → gemini-3.1-flash-lite
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${key}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -408,7 +409,6 @@ Return JSON: { "recommendation": "strong_buy|buy|hold|sell|strong_sell", "confid
   const clean = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
   return JSON.parse(clean);
 }
-
 // ============================================================
 // 🚀 الـ Worker الرئيسي
 // ============================================================
