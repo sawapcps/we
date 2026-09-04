@@ -499,68 +499,13 @@ export async function updateBotConfigRemote(
   }
 }
 
-// ============================================================
-// 💰 دوال محافظ البوت (محلية فقط)
-// ============================================================
-
+// ✅ ابق على هذه النسخة
 export async function createBotWallet(
   botId: string,
   userId: string,
   network: string,
-  userAddress: string,
-  encryptedPrivateKey: string
-): Promise<{ success: boolean; error?: string; data?: BotWalletData }> {
-  try {
-    const walletData: BotWalletData = {
-      id: generateId(),
-      bot_id: botId,
-      network: network,
-      address: userAddress,
-      encrypted_private_key: encryptedPrivateKey,
-      balance: 0,
-      created_at: getTimestamp(),
-      updated_at: getTimestamp(),
-    };
-    await madarCreate('bot_wallet', walletData);
-    return { success: true, data: walletData };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-export async function getBotWallet(
-  botId: string,
-  userId: string
-): Promise<BotWalletData | null> {
-  try {
-    const result = await madarRead<BotWalletData>('bot_wallet', {
-      where: { bot_id: botId }
-    });
-    if (result.success && result.data) {
-      const data = Array.isArray(result.data) ? result.data[0] : result.data;
-      return data as BotWalletData;
-    }
-    return null;
-  } catch (error) {
-    console.error('❌ getBotWallet Error:', error);
-    return null;
-  }
-}
-
-// ============================================================
-// 🔥 دوال المحافظ الذكية (محاكاة)
-// ============================================================
-// ============================================================
-// 💰 دوال محافظ البوت (محلية فقط)
-// ============================================================
-
-
-export async function createBotWallet(
-  botId: string,
-  userId: string,
-  network: string,
-  userAddress?: string,        // ✅ اجعلها اختيارية
-  encryptedPrivateKey?: string // ✅ اجعلها اختيارية
+  userAddress?: string,        // ✅ اختيارية
+  encryptedPrivateKey?: string // ✅ اختيارية
 ): Promise<{ success: boolean; error?: string; data?: BotWalletData }> {
   try {
     let address = userAddress;
@@ -614,6 +559,7 @@ export async function getBotWallet(
     return null;
   }
 }
+
 // ============================================================
 // 💰 تنفيذ صفقة (تُرسل إلى Worker للحفظ الدائم)
 // ============================================================
@@ -834,6 +780,84 @@ export async function clearNotifications(): Promise<void> {
 // ============================================================
 // 📤 تصدير جميع الدوال
 // ============================================================
+// ============================================================
+// 🔥 دوال المحافظ الذكية (محاكاة)
+// ============================================================
+
+export async function scanSmartWallets(
+  tokenAddress: string,
+  network: string,
+  minCount: number = 3
+): Promise<{
+  success: boolean;
+  wallets?: SmartWalletData[];
+  totalProfit?: number;
+  avgWinRate?: number;
+  error?: string;
+}> {
+  console.warn('⚠️ scanSmartWallets تعمل في وضع المحاكاة (لا توجد بيانات حقيقية)');
+  return {
+    success: true,
+    wallets: [],
+    totalProfit: 0,
+    avgWinRate: 0,
+  };
+}
+
+export async function getSmartWalletsFromDB(
+  network?: string,
+  limit?: number,
+  minWinRate?: number
+): Promise<{ success: boolean; data?: SmartWalletData[]; error?: string }> {
+  try {
+    const where: Record<string, any> = {};
+    if (network) where.network = network;
+    const result = await madarRead<SmartWalletData>('smart_wallets', {
+      where: Object.keys(where).length > 0 ? where : undefined,
+      orderBy: { totalProfit: 'desc' },
+      limit: limit || 100,
+    });
+    if (result.success && result.data) {
+      const data = Array.isArray(result.data) ? result.data : [result.data];
+      return { success: true, data: data as SmartWalletData[] };
+    }
+    return { success: true, data: [] };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+export async function analyzeTokenWithAI(params: {
+  tokenAddress: string;
+  network: string;
+  symbol: string;
+  name?: string;
+  price?: number;
+  liquidity?: number;
+  volume24h?: number;
+  priceChange24h?: number;
+}): Promise<{
+  success: boolean;
+  analysis?: AnalysisData;
+  error?: string;
+}> {
+  console.warn('⚠️ analyzeTokenWithAI تعمل في وضع المحاكاة');
+  const analysis: AnalysisData = {
+    id: generateId(),
+    tokenAddress: params.tokenAddress,
+    tokenSymbol: params.symbol,
+    network: params.network,
+    recommendation: 'hold',
+    confidence: 50,
+    summary: 'تحليل محاكي (لا يوجد اتصال بـ Gemini)',
+    signals: '[]',
+    priceTarget: params.price || 0,
+    riskLevel: 'medium',
+    timestamp: getTimestamp(),
+  };
+  await saveAnalysis(analysis);
+  return { success: true, analysis };
+}
 
 export default {
   madarCreate,
