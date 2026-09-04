@@ -1,14 +1,22 @@
 // src/lib/madarTech.ts
 // ============================================================
-// 📦 مكتبة MadarTech - نسخة التخزين المحلي (localStorage)
+// 📦 مكتبة MadarTech - تخزين محلي فقط (localStorage)
+// ✅ جميع البيانات في localStorage (متصفح المستخدم)
 // ✅ لا تعتمد على Worker أو D1
-// ✅ جميع العمليات محلية في المتصفح
-// ✅ لا حدود للقراءة أو الكتابة
+// ✅ الصفقات فقط تُرسل إلى Worker للحفظ الدائم
+// ✅ الإشعارات محلية فقط (لا تذهب إلى Worker)
 // ============================================================
+
+// ============================================================
+// 🔗 Worker URL (للصفقات فقط)
+// ============================================================
+
+const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
 
 // ============================================================
 // 📦 أنواع البيانات الأساسية
 // ============================================================
+
 export interface MadarTechResponse<T = any> {
   success: boolean;
   data?: T | T[];
@@ -152,6 +160,7 @@ export interface DiscoveredTokenData {
 // ============================================================
 // 🛠️ دوال مساعدة
 // ============================================================
+
 export function generateId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
 }
@@ -276,7 +285,6 @@ export async function madarRead<T>(
   try {
     let data = getLocalData<T>(table);
 
-    // تصفية (WHERE)
     if (options?.where) {
       const keys = Object.keys(options.where);
       data = data.filter(item => {
@@ -284,7 +292,6 @@ export async function madarRead<T>(
       });
     }
 
-    // ترتيب (ORDER BY)
     if (options?.orderBy) {
       const [key, direction] = Object.entries(options.orderBy)[0];
       data = data.sort((a, b) => {
@@ -295,12 +302,10 @@ export async function madarRead<T>(
       });
     }
 
-    // حد (LIMIT)
     if (options?.limit) {
       data = data.slice(0, options.limit);
     }
 
-    // إزاحة (OFFSET)
     if (options?.offset) {
       data = data.slice(options.offset);
     }
@@ -349,12 +354,7 @@ export async function madarDelete(
 }
 
 // ============================================================
-// 🤖 دوال البوتات (4 أنواع) - محلية فقط
-// ============================================================
-// src/lib/madarTech.ts
-
-// ============================================================
-// 🤖 دوال البوتات (معدلة)
+// 🤖 دوال البوتات (محلية فقط - localStorage)
 // ============================================================
 
 export async function createBotInstance(
@@ -369,7 +369,6 @@ export async function createBotInstance(
     const botId = generateId();
     const now = getTimestamp();
 
-    // ✅ تأكد من أن networks JSON صحيح
     let networksJson = JSON.stringify(['solana']);
     if (networks && Array.isArray(networks) && networks.length > 0) {
       networksJson = JSON.stringify(networks.map(n => String(n)));
@@ -383,7 +382,7 @@ export async function createBotInstance(
       description: description || '',
       status: 'stopped',
       mode: 'auto',
-      networks: networksJson, // ✅ JSON صحيح
+      networks: networksJson,
       paper_trading: 1,
       max_position_size: tradingAmount,
       take_profit: 30,
@@ -413,7 +412,6 @@ export async function createBotInstance(
   }
 }
 
-// ✅✅✅ الدالة المعدلة - إصلاح networks عند القراءة
 export async function getUserBots(userId: string): Promise<BotInstanceData[]> {
   try {
     const result = await madarRead<BotInstanceData>('bot_instances', {
@@ -424,35 +422,14 @@ export async function getUserBots(userId: string): Promise<BotInstanceData[]> {
     if (result.success && result.data) {
       const bots = Array.isArray(result.data) ? result.data : [result.data];
       
-      // ✅✅✅ إصلاح networks عند القراءة
       return bots.map(bot => {
         if (bot.networks && typeof bot.networks === 'string') {
-          // ✅ إذا كانت "solana" (بدون أقواس)، حوّلها إلى JSON
           if (!bot.networks.startsWith('[')) {
             bot.networks = JSON.stringify([bot.networks]);
-            console.log(`🔧 تم إصلاح networks للبوت ${bot.id}: "${bot.networks}"`);
-            
-            // ✅ حفظ الإصلاح في localStorage
             try {
               localStorage.setItem(`madartech_bot_instances_${bot.id}`, JSON.stringify(bot));
             } catch (e) {
               console.warn('⚠️ فشل حفظ الإصلاح:', e);
-            }
-          } else {
-            // ✅ التحقق من صحة JSON
-            try {
-              const parsed = JSON.parse(bot.networks);
-              if (!Array.isArray(parsed)) {
-                // ❌ JSON ولكن ليس مصفوفة
-                bot.networks = JSON.stringify([bot.networks.replace(/[\[\]"]/g, '')]);
-                localStorage.setItem(`madartech_bot_instances_${bot.id}`, JSON.stringify(bot));
-                console.log(`🔧 تم إصلاح networks (غير مصفوفة) للبوت ${bot.id}`);
-              }
-            } catch {
-              // ❌ JSON تالف
-              bot.networks = JSON.stringify([bot.networks.replace(/[\[\]"]/g, '')]);
-              localStorage.setItem(`madartech_bot_instances_${bot.id}`, JSON.stringify(bot));
-              console.log(`🔧 تم إصلاح JSON التالف للبوت ${bot.id}`);
             }
           }
         }
@@ -508,7 +485,6 @@ export async function updateBotConfigRemote(
   data: any
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // ✅ إذا كان networks موجوداً، تأكد من أنه JSON
     if (data.networks) {
       if (Array.isArray(data.networks)) {
         data.networks = JSON.stringify(data.networks);
@@ -516,15 +492,15 @@ export async function updateBotConfigRemote(
         data.networks = JSON.stringify([data.networks]);
       }
     }
-    
     await madarUpdate('bot_instances', botId, data);
     return { success: true };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
+
 // ============================================================
-// 💰 دوال محافظ البوت (محلية)
+// 💰 دوال محافظ البوت (محلية فقط)
 // ============================================================
 
 export async function createBotWallet(
@@ -586,7 +562,7 @@ export async function scanSmartWallets(
   avgWinRate?: number;
   error?: string;
 }> {
-  console.warn('⚠️ scanSmartWallets تعمل في وضع المحاكاة (لا توجد بيانات حقيقية)');
+  console.warn('⚠️ scanSmartWallets تعمل في وضع المحاكاة');
   return {
     success: true,
     wallets: [],
@@ -651,7 +627,7 @@ export async function analyzeTokenWithAI(params: {
 }
 
 // ============================================================
-// 💰 تنفيذ صفقة باستخدام محفظة البوت (محاكاة)
+// 💰 تنفيذ صفقة (تُرسل إلى Worker للحفظ الدائم)
 // ============================================================
 
 export async function executeTradeWithBotWallet(params: {
@@ -664,7 +640,7 @@ export async function executeTradeWithBotWallet(params: {
   network: string;
 }): Promise<{ success: boolean; tradeId?: string; txHash?: string; error?: string }> {
   try {
-    console.log('📊 executeTradeWithBotWallet - محاكاة تنفيذ صفقة:', params);
+    console.log('📊 executeTradeWithBotWallet:', params);
 
     const tradeId = generateId();
     const txHash = `0x${generateId()}`;
@@ -685,7 +661,30 @@ export async function executeTradeWithBotWallet(params: {
       txHash: txHash,
     };
 
+    // ✅ حفظ في localStorage (كاش)
     await saveTrade(tradeData);
+
+    // ✅ إرسال إلى Worker (للحفظ الدائم في قاعدة البيانات)
+    try {
+      const response = await fetch(`${WORKER_URL}/trades/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...params,
+          tradeId,
+          txHash,
+          timestamp: getTimestamp(),
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        console.log(`✅ تم حفظ الصفقة ${tradeId} في قاعدة البيانات`);
+      } else {
+        console.warn('⚠️ فشل حفظ الصفقة في Worker:', result.error);
+      }
+    } catch (error) {
+      console.warn('⚠️ فشل الاتصال بـ Worker:', error);
+    }
 
     return {
       success: true,
@@ -699,9 +698,10 @@ export async function executeTradeWithBotWallet(params: {
 }
 
 // ============================================================
-// 📦 دوال البيانات الأساسية (محلية)
+// 📦 دوال البيانات الأساسية (محلية فقط - localStorage)
 // ============================================================
 
+// ✅ محافظ المستخدم
 export async function saveWallet(wallet: WalletData): Promise<void> {
   await madarCreate('wallets', wallet);
 }
@@ -710,6 +710,7 @@ export async function getWallet(address: string): Promise<MadarTechResponse<Wall
   return madarRead<WalletData>('wallets', { where: { address } });
 }
 
+// ✅ إعدادات البوت
 export async function saveBotConfig(config: BotConfigData): Promise<void> {
   const cleanConfig = {
     ...config,
@@ -722,6 +723,7 @@ export async function getBotConfig(): Promise<MadarTechResponse<BotConfigData>> 
   return madarRead<BotConfigData>('bot_configs', { orderBy: { created_at: 'desc' }, limit: 1 });
 }
 
+// ✅ السجلات - فقط localStorage (لا تذهب إلى Worker)
 export async function saveLog(log: LogData): Promise<void> {
   const numericId = Date.now() + Math.floor(Math.random() * 1000);
   await madarCreate('logs', {
@@ -731,6 +733,7 @@ export async function saveLog(log: LogData): Promise<void> {
     created_at: log.timestamp || getTimestamp(),
     context: log.context ? safeStringify(log.context) : '',
   });
+  // ❌ لا ترسل إلى Worker
 }
 
 export async function getLogs(filters?: Record<string, any>): Promise<MadarTechResponse<LogData>> {
@@ -741,11 +744,33 @@ export async function getLogs(filters?: Record<string, any>): Promise<MadarTechR
   });
 }
 
+// ✅ الصفقات - localStorage + Worker
 export async function saveTrade(trade: TradeData): Promise<void> {
   await madarCreate('trades', trade);
 }
 
 export async function getTrades(filters?: Record<string, any>): Promise<MadarTechResponse<TradeData>> {
+  // ✅ حاول الجلب من Worker أولاً (للحصول على أحدث البيانات)
+  try {
+    const response = await fetch(`${WORKER_URL}/trades`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(filters || {}),
+    });
+    const result = await response.json();
+    if (result.success && result.data) {
+      // ✅ تحديث localStorage ككاش
+      const data = Array.isArray(result.data) ? result.data : [result.data];
+      for (const trade of data) {
+        setLocalItem('trades', trade.id, trade);
+      }
+      return { success: true, data: data };
+    }
+  } catch (error) {
+    console.warn('⚠️ فشل جلب الصفقات من Worker:', error);
+  }
+  
+  // ❌ ارجع إلى localStorage
   return madarRead<TradeData>('trades', {
     where: filters,
     orderBy: { created_at: 'desc' },
@@ -753,6 +778,7 @@ export async function getTrades(filters?: Record<string, any>): Promise<MadarTec
   });
 }
 
+// ✅ التحليلات - فقط localStorage
 export async function saveAnalysis(analysis: AnalysisData): Promise<void> {
   const cleanAnalysis = {
     ...analysis,
@@ -771,6 +797,7 @@ export async function getAnalyses(filters?: Record<string, any>): Promise<MadarT
   });
 }
 
+// ✅ العملات المكتشفة - فقط localStorage
 export async function saveDiscoveredToken(token: DiscoveredTokenData): Promise<void> {
   await madarCreate('discovered_tokens', token);
 }
@@ -783,9 +810,43 @@ export async function getDiscoveredTokens(filters?: Record<string, any>): Promis
   });
 }
 
+// ✅ الإشعارات - فقط localStorage
+export async function saveNotification(notification: {
+  id: string;
+  type: 'success' | 'error' | 'warning' | 'info';
+  message: string;
+  timestamp: string;
+}): Promise<void> {
+  try {
+    const existing = localStorage.getItem('notifications');
+    const notifications = existing ? JSON.parse(existing) : [];
+    notifications.push(notification);
+    if (notifications.length > 50) {
+      notifications.splice(0, notifications.length - 50);
+    }
+    localStorage.setItem('notifications', JSON.stringify(notifications));
+  } catch (error) {
+    console.warn('⚠️ فشل حفظ الإشعار:', error);
+  }
+}
+
+export async function getNotifications(): Promise<any[]> {
+  try {
+    const existing = localStorage.getItem('notifications');
+    return existing ? JSON.parse(existing) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function clearNotifications(): Promise<void> {
+  localStorage.removeItem('notifications');
+}
+
 // ============================================================
 // 📤 تصدير جميع الدوال
 // ============================================================
+
 export default {
   madarCreate,
   madarRead,
@@ -805,7 +866,7 @@ export default {
   scanSmartWallets,
   getSmartWalletsFromDB,
   analyzeTokenWithAI,
-  executeTradeWithBotWallet, // ✅ تمت إضافتها هنا
+  executeTradeWithBotWallet,
   saveWallet,
   getWallet,
   saveBotConfig,
@@ -818,4 +879,7 @@ export default {
   getAnalyses,
   saveDiscoveredToken,
   getDiscoveredTokens,
+  saveNotification,
+  getNotifications,
+  clearNotifications,
 };

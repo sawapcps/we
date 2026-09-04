@@ -1,10 +1,9 @@
 // src/worker.js
 // ============================================================
-// 🚀 CryptoBot Worker - الإصدار النهائي (بدون D1 + Velora)
-// ✅ لا يخزن أي شيء في قاعدة البيانات
-// ✅ يعمل كـ Proxy للتنفيذ والتحليل
-// ✅ يدعم Solana (Jupiter) و EVM (Velora - مجاني بدون مفتاح)
-// ✅ يحتفظ بجميع المفاتيح المهمة (env)
+// 🚀 CryptoBot Worker - النسخة النهائية
+// ✅ يحفظ الصفقات والمستخدمين والرموز في قاعدة البيانات (D1)
+// ✅ يدعم Solana (Jupiter) و EVM (Velora)
+// ✅ تسجيل الدخول بالمحفظة مع حفظ المستخدم والرموز في D1
 // ============================================================
 
 const corsHeaders = {
@@ -21,9 +20,213 @@ function jsonResponse(data, status = 200) {
   });
 }
 
+function generateId() {
+  return crypto.randomUUID ? crypto.randomUUID() : 
+    Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
+}
+
+// ============================================================
+// 💾 حفظ المستخدمين في D1
+// ============================================================
+
+async function saveUserToDB(userData, env) {
+  try {
+    // ✅ التحقق إذا كان المستخدم موجوداً مسبقاً
+    const existing = await env.DB.prepare(`
+      SELECT * FROM users WHERE wallet_address = ?
+    `).bind(userData.walletAddress).all();
+
+    if (existing.results && existing.results.length > 0) {
+      // ✅ تحديث آخر تسجيل دخول
+      await env.DB.prepare(`
+        UPDATE users 
+        SET last_login = ?, updated_at = ?
+        WHERE wallet_address = ?
+      `).bind(
+        new Date().toISOString(),
+        new Date().toISOString(),
+        userData.walletAddress
+      ).run();
+      return { success: true, message: 'تم تحديث المستخدم', isNew: false };
+    }
+
+    // ✅ إنشاء مستخدم جديد
+    await env.DB.prepare(`
+      INSERT INTO users (
+        id, wallet_address, username, email, is_admin, 
+        balance, status, created_at, updated_at, last_login
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      userData.id || generateId(),
+      userData.walletAddress,
+      userData.username || `Wallet ${userData.walletAddress.slice(0, 6)}`,
+      userData.email || `${userData.walletAddress.slice(0, 8)}...@wallet`,
+      userData.isAdmin ? 1 : 0,
+      userData.balance || 0,
+      userData.status || 'active',
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString()
+    ).run();
+
+    return { success: true, message: 'تم إنشاء المستخدم', isNew: true };
+  } catch (error) {
+    console.error('❌ فشل حفظ المستخدم في D1:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ✅ جلب مستخدم من D1
+async function getUserFromDB(walletAddress, env) {
+  try {
+    const result = await env.DB.prepare(`
+      SELECT * FROM users WHERE wallet_address = ?
+    `).bind(walletAddress).all();
+    
+    return { 
+      success: true, 
+      data: result.results?.[0] || null 
+    };
+  } catch (error) {
+    console.error('❌ فشل جلب المستخدم:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================
+// 💾 حفظ الرموز (Tokens) في D1
+// ============================================================
+
+async function saveTokenToDB(tokenData, env) {
+  try {
+    // ✅ التحقق إذا كان الرمز موجوداً مسبقاً
+    const existing = await env.DB.prepare(`
+      SELECT * FROM tokens WHERE token_address = ? AND user_id = ?
+    `).bind(tokenData.tokenAddress, tokenData.userId).all();
+
+    if (existing.results && existing.results.length > 0) {
+      // ✅ تحديث الرمز
+      await env.DB.prepare(`
+        UPDATE tokens 
+        SET price = ?, volume = ?, liquidity = ?, market_cap = ?,
+            price_change_24h = ?, last_checked = ?, updated_at = ?
+        WHERE token_address = ? AND user_id = ?
+      `).bind(
+        tokenData.price || 0,
+        tokenData.volume || 0,
+        tokenData.liquidity || 0,
+        tokenData.marketCap || 0,
+        tokenData.priceChange24h || 0,
+        new Date().toISOString(),
+        new Date().toISOString(),
+        tokenData.tokenAddress,
+        tokenData.userId
+      ).run();
+      return { success: true, message: 'تم تحديث الرمز', isNew: false };
+    }
+
+    // ✅ إنشاء رمز جديد
+    await env.DB.prepare(`
+      INSERT INTO tokens (
+        id, user_id, token_address, token_symbol, token_name,
+        price, volume, liquidity, market_cap,
+        price_change_24h, network, status,
+        created_at, updated_at, last_checked
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      generateId(),
+      tokenData.userId,
+      tokenData.tokenAddress,
+      tokenData.tokenSymbol || 'UNKNOWN',
+      tokenData.tokenName || '',
+      tokenData.price || 0,
+      tokenData.volume || 0,
+      tokenData.liquidity || 0,
+      tokenData.marketCap || 0,
+      tokenData.priceChange24h || 0,
+      tokenData.network || 'solana',
+      tokenData.status || 'active',
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString()
+    ).run();
+
+    return { success: true, message: 'تم إنشاء الرمز', isNew: true };
+  } catch (error) {
+    console.error('❌ فشل حفظ الرمز في D1:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ✅ جلب الرموز من D1
+async function getTokensFromDB(userId, env) {
+  try {
+    const result = await env.DB.prepare(`
+      SELECT * FROM tokens 
+      WHERE user_id = ? 
+      ORDER BY created_at DESC 
+      LIMIT 100
+    `).bind(userId).all();
+
+    return { success: true, data: result.results || [] };
+  } catch (error) {
+    console.error('❌ فشل جلب الرموز:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ✅ حذف رمز من D1
+async function deleteTokenFromDB(tokenId, userId, env) {
+  try {
+    await env.DB.prepare(`
+      DELETE FROM tokens WHERE id = ? AND user_id = ?
+    `).bind(tokenId, userId).run();
+    return { success: true, message: 'تم حذف الرمز' };
+  } catch (error) {
+    console.error('❌ فشل حذف الرمز:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================
+// 💾 حفظ الصفقات في D1
+// ============================================================
+
+async function saveTradeToDB(tradeData, env) {
+  try {
+    await env.DB.prepare(`
+      INSERT INTO trades (
+        id, bot_id, user_id, side, token_address, 
+        token_symbol, amount, price, total, network, 
+        status, opened_at, tx_hash, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      tradeData.tradeId || generateId(),
+      tradeData.botId || '',
+      tradeData.userId || '',
+      tradeData.side || 'buy',
+      tradeData.tokenAddress || '',
+      tradeData.tokenSymbol || 'UNKNOWN',
+      tradeData.amountUsd || 0,
+      tradeData.price || 0,
+      tradeData.amountUsd || 0,
+      tradeData.network || 'solana',
+      'pending',
+      tradeData.timestamp || new Date().toISOString(),
+      tradeData.txHash || '',
+      tradeData.timestamp || new Date().toISOString()
+    ).run();
+    return { success: true };
+  } catch (error) {
+    console.error('❌ فشل حفظ الصفقة في D1:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // ============================================================
 // 📡 جلب بيانات السوق من DexScreener
 // ============================================================
+
 async function getDexData(tokenAddress, network) {
   const net = typeof network === 'string' ? network : 'solana';
   try {
@@ -62,6 +265,7 @@ async function getDexData(tokenAddress, network) {
 // ============================================================
 // 💰 تنفيذ صفقة Solana (Jupiter)
 // ============================================================
+
 async function executeSolanaTrade(params) {
   const { side, tokenAddress, amountUsd, walletAddress } = params;
   try {
@@ -101,8 +305,9 @@ async function executeSolanaTrade(params) {
 }
 
 // ============================================================
-// 💰 تنفيذ صفقة EVM (Velora - مجاني بدون مفتاح)
+// 💰 تنفيذ صفقة EVM (Velora)
 // ============================================================
+
 async function executeVeloraTrade(params) {
   const { side, tokenAddress, amount, walletAddress, network, slippage = 0.5 } = params;
 
@@ -128,7 +333,6 @@ async function executeVeloraTrade(params) {
   const amountWei = Math.floor(amount * 1e18).toString();
 
   try {
-    // 1️⃣ جلب السعر من Velora (ParaSwap)
     const quoteUrl = `https://api.paraswap.io/prices?srcToken=${srcToken}&destToken=${destToken}&amount=${amountWei}&side=${side === 'buy' ? 'SELL' : 'BUY'}&network=${chainId}`;
     const quoteRes = await fetch(quoteUrl);
     if (!quoteRes.ok) {
@@ -140,7 +344,6 @@ async function executeVeloraTrade(params) {
       return { success: false, error: 'No price route from Velora' };
     }
 
-    // 2️⃣ بناء المعاملة
     const buildUrl = `https://api.paraswap.io/transactions/${chainId}`;
     const buildRes = await fetch(buildUrl, {
       method: 'POST',
@@ -160,7 +363,6 @@ async function executeVeloraTrade(params) {
     }
     const buildData = await buildRes.json();
 
-    // 3️⃣ حساب السعر الفعلي
     const destAmount = parseFloat(quote.destAmount || 0);
     const srcAmount = parseFloat(quote.srcAmount || 1);
     const price = destAmount / srcAmount;
@@ -181,8 +383,9 @@ async function executeVeloraTrade(params) {
 }
 
 // ============================================================
-// 🧠 تحليل Gemini (بدون تخزين)
+// 🧠 تحليل Gemini
 // ============================================================
+
 async function analyzeWithGemini(tokenData, env) {
   const key = env?.GEMINI_API_KEY || '';
   if (!key) throw new Error('GEMINI_API_KEY missing');
@@ -207,74 +410,9 @@ Return JSON: { "recommendation": "strong_buy|buy|hold|sell|strong_sell", "confid
 }
 
 // ============================================================
-// 📊 دوال مساعدة إضافية (للقراءة فقط، بدون تخزين)
-// ============================================================
-async function getWhaleData(tokenAddress, network, env) {
-  if (network !== 'solana') return { whaleCount: 0, totalWhaleBalance: 0, topWhalePercentage: 0, accounts: [] };
-  try {
-    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${env?.HELIUS_KEY || ''}`;
-    const body = {
-      jsonrpc: '2.0', id: 1, method: 'getProgramAccounts',
-      params: ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', {
-        encoding: 'jsonParsed',
-        filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: tokenAddress } }]
-      }]
-    };
-    const res = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const data = await res.json();
-    if (!data.result) return { whaleCount: 0, totalWhaleBalance: 0, topWhalePercentage: 0, accounts: [] };
-    const accounts = data.result.map(a => ({ owner: a.account.data.parsed.info.owner, balance: a.account.data.parsed.info.tokenAmount.uiAmount }));
-    const total = accounts.reduce((s, a) => s + a.balance, 0);
-    const sorted = accounts.sort((a,b) => b.balance - a.balance);
-    return {
-      whaleCount: sorted.filter(a => a.balance > 1000).length,
-      totalWhaleBalance: sorted.filter(a => a.balance > 1000).reduce((s,a) => s + a.balance, 0),
-      topWhalePercentage: total > 0 ? (sorted[0]?.balance / total) * 100 : 0,
-      accounts: sorted.slice(0, 20),
-    };
-  } catch { return { whaleCount: 0, totalWhaleBalance: 0, topWhalePercentage: 0, accounts: [] }; }
-}
-
-async function getLargeTransactions(tokenAddress, network, env) {
-  if (network !== 'solana') return { largeBuyCount: 0, largeSellCount: 0, whaleActivity: 0 };
-  try {
-    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${env?.HELIUS_KEY || ''}`;
-    const res = await fetch(rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getSignaturesForAddress', params: [tokenAddress, { limit: 20 }] })
-    });
-    const data = await res.json();
-    const sigs = data.result || [];
-    let buys = 0, sells = 0;
-    for (const sig of sigs.slice(0, 10)) {
-      try {
-        const txRes = await fetch(rpcUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getTransaction', params: [sig.signature, { encoding: 'json', maxSupportedTransactionVersion: 0 }] })
-        });
-        const txData = await txRes.json();
-        const tx = txData.result;
-        if (!tx) continue;
-        const pre = tx.meta?.preBalances || [];
-        const post = tx.meta?.postBalances || [];
-        const keys = tx.transaction?.message?.accountKeys || [];
-        for (let i = 0; i < keys.length; i++) {
-          const change = (post[i] || 0) - (pre[i] || 0);
-          if (Math.abs(change) > 1e9) {
-            if (change > 0) buys++; else sells++;
-          }
-        }
-      } catch {}
-    }
-    return { largeBuyCount: buys, largeSellCount: sells, whaleActivity: sigs.length ? (buys + sells) / sigs.length * 100 : 0 };
-  } catch { return { largeBuyCount: 0, largeSellCount: 0, whaleActivity: 0 }; }
-}
-
-// ============================================================
 // 🚀 الـ Worker الرئيسي
 // ============================================================
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -284,101 +422,146 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    // 🔹 مسار بيانات السوق
-    if (path === '/dex-data' && request.method === 'POST') {
-      try {
-        const body = await request.json();
+    try {
+      const body = request.method !== 'GET' ? await request.json().catch(() => ({})) : {};
+
+      // ============================================================
+      // ✅ المستخدمين (Users)
+      // ============================================================
+
+      // ✅ تسجيل الدخول بالمحفظة (حفظ/تحديث المستخدم)
+      if (path === '/auth/wallet-login' && request.method === 'POST') {
+        const result = await saveUserToDB(body, env);
+        return jsonResponse(result, result.success ? 200 : 500);
+      }
+
+      // ✅ جلب مستخدم من D1
+      if (path === '/users' && request.method === 'POST') {
+        const result = await getUserFromDB(body.walletAddress, env);
+        return jsonResponse(result, result.success ? 200 : 500);
+      }
+
+      // ============================================================
+      // ✅ الرموز (Tokens)
+      // ============================================================
+
+      // ✅ حفظ رمز في D1
+      if (path === '/tokens/save' && request.method === 'POST') {
+        const result = await saveTokenToDB(body, env);
+        return jsonResponse(result, result.success ? 200 : 500);
+      }
+
+      // ✅ جلب الرموز من D1
+      if (path === '/tokens' && request.method === 'POST') {
+        const result = await getTokensFromDB(body.userId, env);
+        return jsonResponse(result, result.success ? 200 : 500);
+      }
+
+      // ✅ حذف رمز من D1
+      if (path === '/tokens/delete' && request.method === 'POST') {
+        const result = await deleteTokenFromDB(body.tokenId, body.userId, env);
+        return jsonResponse(result, result.success ? 200 : 500);
+      }
+
+      // ============================================================
+      // ✅ الصفقات (Trades)
+      // ============================================================
+
+      // ✅ حفظ صفقة في D1
+      if (path === '/trades/execute' && request.method === 'POST') {
+        const result = await saveTradeToDB(body, env);
+        return jsonResponse({ 
+          success: result.success, 
+          tradeId: body.tradeId,
+          error: result.error 
+        }, result.success ? 200 : 500);
+      }
+
+      // ✅ جلب الصفقات من D1
+      if (path === '/trades' && request.method === 'POST') {
+        const userId = body.userId || '';
+        let query = `SELECT * FROM trades WHERE user_id = ?`;
+        const params = [userId];
+        if (body.status) { query += ` AND status = ?`; params.push(body.status); }
+        if (body.botId) { query += ` AND bot_id = ?`; params.push(body.botId); }
+        query += ` ORDER BY created_at DESC LIMIT 100`;
+        const result = await env.DB.prepare(query).bind(...params).all();
+        return jsonResponse({ success: true, data: result.results || [] });
+      }
+
+      // ✅ إغلاق صفقة
+      if (path === '/trades/close' && request.method === 'POST') {
+        await env.DB.prepare(`
+          UPDATE trades 
+          SET status = ?, closed_at = ?, profit = ?, profit_percent = ?
+          WHERE id = ? AND user_id = ?
+        `).bind(
+          'closed',
+          body.closedAt || new Date().toISOString(),
+          body.profit || 0,
+          body.profitPercent || 0,
+          body.tradeId,
+          body.userId
+        ).run();
+        return jsonResponse({ success: true, message: 'تم إغلاق الصفقة' });
+      }
+
+      // ============================================================
+      // ❌ الإشعارات - معطلة (كل شيء في localStorage)
+      // ============================================================
+
+      if (path === '/notifications' || path === '/notifications/clear') {
+        return jsonResponse({ 
+          success: true, 
+          message: 'الإشعارات مخزنة محلياً في localStorage فقط',
+          note: 'لا توجد إشعارات في قاعدة البيانات'
+        });
+      }
+
+      // ============================================================
+      // 🔹 مسارات Proxy (بيانات السوق، تنفيذ صفقات، تحليل)
+      // ============================================================
+
+      // ✅ بيانات السوق
+      if (path === '/dex-data' && request.method === 'POST') {
         const data = await getDexData(body.tokenAddress, body.network);
         return jsonResponse({ success: true, data });
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
       }
-    }
 
-    // 🔹 مسار تنفيذ صفقة (يدعم Solana + EVM)
-    if (path === '/execute-trade' && request.method === 'POST') {
-      try {
-        const body = await request.json();
+      // ✅ تنفيذ صفقة (Solana + EVM)
+      if (path === '/execute-trade' && request.method === 'POST') {
         const { network } = body;
-
         let result;
-        // ✅ Solana → Jupiter
         if (network === 'solana' || !network) {
           result = await executeSolanaTrade(body);
-        }
-        // ✅ EVM → Velora (بدون مفتاح)
-        else if (['ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'].includes(network)) {
+        } else if (['ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'].includes(network)) {
           result = await executeVeloraTrade(body);
-        }
-        else {
+        } else {
           return jsonResponse({ success: false, error: 'شبكة غير مدعومة' }, 400);
         }
-
         return jsonResponse(result);
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
       }
-    }
 
-    // 🔹 مسار تنفيذ صفقة EVM (مباشر)
-    if (path === '/execute-evm-trade' && request.method === 'POST') {
-      try {
-        const body = await request.json();
+      // ✅ تنفيذ صفقة EVM
+      if (path === '/execute-evm-trade' && request.method === 'POST') {
         const result = await executeVeloraTrade(body);
         return jsonResponse(result);
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
       }
-    }
 
-    // 🔹 مسار تحليل Gemini
-    if (path === '/analyze-token' && request.method === 'POST') {
-      try {
-        const body = await request.json();
+      // ✅ تحليل Gemini
+      if (path === '/analyze-token' && request.method === 'POST') {
         const analysis = await analyzeWithGemini(body, env);
         return jsonResponse({ success: true, analysis });
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
       }
-    }
 
-    // 🔹 مسار إشارات التداول
-    if (path === '/trade-signal' && request.method === 'POST') {
-      try {
-        const body = await request.json();
+      // ✅ إشارات التداول
+      if (path === '/trade-signal' && request.method === 'POST') {
         const dexData = await getDexData(body.tokenAddress, body.network);
         return jsonResponse({ success: true, data: dexData });
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
       }
-    }
 
-    // 🔹 مسار بيانات الحيتان
-    if (path === '/whale-data' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const data = await getWhaleData(body.tokenAddress, body.network, env);
-        return jsonResponse({ success: true, data });
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
-      }
-    }
-
-    // 🔹 مسار المعاملات الكبيرة
-    if (path === '/large-transactions' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const data = await getLargeTransactions(body.tokenAddress, body.network, env);
-        return jsonResponse({ success: true, data });
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
-      }
-    }
-
-    // 🔹 مسار تاريخ الأسعار
-    if (path === '/price-history' && request.method === 'POST') {
-      try {
-        const body = await request.json();
+      // ✅ تاريخ الأسعار
+      if (path === '/price-history' && request.method === 'POST') {
         const dexData = await getDexData(body.tokenAddress, body.network);
         if (!dexData) return jsonResponse({ success: false, error: 'No data' }, 404);
         const prices = [];
@@ -386,56 +569,60 @@ export default {
           prices.push(dexData.price * (1 + (Math.random() - 0.5) * 0.02));
         }
         return jsonResponse({ success: true, prices });
-      } catch (e) {
-        return jsonResponse({ success: false, error: e.message }, 500);
       }
-    }
 
-    // 🔹 وكيل RPC
-    const networks = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
-    const pathParts = path.replace(/^\//, '').split('/');
-    const network = pathParts[0]?.toLowerCase();
-    if (networks.includes(network)) {
-      try {
-        const rpcUrl = `https://rpc.ankr.com/${network}/${env.ANKR_KEY || ''}`;
-        const rpcRes = await fetch(rpcUrl, {
-          method: request.method,
-          headers: { 'Content-Type': 'application/json' },
-          body: request.body,
-        });
-        const data = await rpcRes.json();
-        return jsonResponse(data);
-      } catch (e) {
-        return jsonResponse({ error: e.message }, 500);
+      // ============================================================
+      // 🔹 وكيل RPC
+      // ============================================================
+
+      const networks = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism', 'robinhood'];
+      const pathParts = path.replace(/^\//, '').split('/');
+      const network = pathParts[0]?.toLowerCase();
+      if (networks.includes(network)) {
+        try {
+          const rpcUrl = `https://rpc.ankr.com/${network}/${env.ANKR_KEY || ''}`;
+          const rpcRes = await fetch(rpcUrl, {
+            method: request.method,
+            headers: { 'Content-Type': 'application/json' },
+            body: request.body,
+          });
+          const data = await rpcRes.json();
+          return jsonResponse(data);
+        } catch (e) {
+          return jsonResponse({ error: e.message }, 500);
+        }
       }
-    }
 
-    // 🏠 الصفحة الرئيسية
-    return jsonResponse({
-      status: 'ok',
-      service: 'CryptoBot Worker (بدون D1 + Velora)',
-      version: '1.0.0',
-      keys: {
-        ankr: !!env?.ANKR_KEY,
-        helius: !!env?.HELIUS_KEY,
-        jupiter: !!env?.JUPITER_API_KEY,
-        gemini: !!env?.GEMINI_API_KEY,
-      },
-      endpoints: {
-        '/dex-data': 'POST',
-        '/execute-trade': 'POST (Solana + EVM)',
-        '/execute-evm-trade': 'POST (EVM)',
-        '/analyze-token': 'POST',
-        '/trade-signal': 'POST',
-        '/whale-data': 'POST',
-        '/large-transactions': 'POST',
-        '/price-history': 'POST',
-        '/:network': 'POST (RPC Proxy)',
-      },
-    });
+      // ============================================================
+      // 🏠 الصفحة الرئيسية
+      // ============================================================
+
+      return jsonResponse({
+        status: 'ok',
+        service: 'CryptoBot Worker (مستخدمين + رموز + صفقات)',
+        version: '3.0.0',
+        note: 'الإشعارات في localStorage فقط',
+        endpoints: {
+          '/auth/wallet-login': 'POST (تسجيل دخول بالمحفظة)',
+          '/users': 'POST (جلب مستخدم)',
+          '/tokens/save': 'POST (حفظ رمز)',
+          '/tokens': 'POST (جلب الرموز)',
+          '/tokens/delete': 'POST (حذف رمز)',
+          '/dex-data': 'POST (بيانات السوق)',
+          '/execute-trade': 'POST (تنفيذ صفقة)',
+          '/trades/execute': 'POST (حفظ صفقة في D1)',
+          '/trades': 'POST (جلب الصفقات من D1)',
+          '/trades/close': 'POST (إغلاق صفقة)',
+          '/analyze-token': 'POST (تحليل Gemini)',
+          '/:network': 'POST (RPC Proxy)',
+        },
+      });
+    } catch (error) {
+      console.error('❌ Worker Error:', error);
+      return jsonResponse({ success: false, error: error.message }, 500);
+    }
   },
 
-  // ⏰ المجدول (معطل)
   async scheduled(event, env, ctx) {
     console.log('⏸️ المسح التلقائي معطل (يدوي فقط)');
     return;
