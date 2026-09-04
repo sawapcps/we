@@ -3,7 +3,7 @@
 // سياق التطبيق الرئيسي - يدعم 4 بوتات + محافظ متعددة (داخلية وخارجية) + المحافظ الذكية + بوت الأخبار
 // ============================================================
 import { TradingBot } from '../lib/botEngine';
-
+import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/accounts';
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
 import {
   madarRead,
@@ -50,12 +50,34 @@ import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/acc
 // ============================================================
 // WORKER URL
 // ============================================================
+
+import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/accounts';
+
+// ============================================================
+// WORKER URL
+// ============================================================
 const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'https://multi-chain-rpc-proxy.sawapcps.workers.dev';
+
+// ============================================================
+// 🛠️ دالة مساعدة لتحليل الشبكات بأمان  <-- ✅ أضفها هنا
+// ============================================================
+function parseNetworks(networks: any): string[] {
+  if (!networks) return ['solana'];
+  if (Array.isArray(networks)) return networks;
+  if (typeof networks === 'string') {
+    try {
+      const parsed = JSON.parse(networks);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return [networks];
+    }
+  }
+  return ['solana'];
+}
 
 // ============================================================
 // 🔗 دعم محافظ متعددة (خارجية)
 // ============================================================
-
 export interface WalletProvider {
   id: string;
   name: string;
