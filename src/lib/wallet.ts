@@ -370,6 +370,9 @@ async function executeParaSwapTrade(params: {
 // ============================================================
 // 💰 إرسال الأموال (حقيقي)
 // ============================================================
+// ============================================================
+// 💰 إرسال الأموال (حقيقي)
+// ============================================================
 
 async function sendSolanaTransaction(params: {
   fromAddress: string;
@@ -378,10 +381,21 @@ async function sendSolanaTransaction(params: {
   privateKey: string;
 }): Promise<{ txHash: string; error: string | null }> {
   try {
+    // ✅ ✅ ✅ أضف التحقق هنا قبل أي شيء
+    if (!params.privateKey || params.privateKey.length < 64) {
+      return { txHash: '', error: '❌ المفتاح الخاص غير صحيح أو قصير جداً' };
+    }
+
     const connection = new Connection(getWorkingRpcUrl(), 'confirmed');
     const fromPubkey = new PublicKey(params.fromAddress);
     const toPubkey = new PublicKey(params.toAddress);
     const privateKeyBytes = Buffer.from(params.privateKey, 'hex');
+    
+    // ✅ ✅ ✅ تحقق من طول المفتاح
+    if (privateKeyBytes.length !== 64) {
+      return { txHash: '', error: '❌ المفتاح الخاص يجب أن يكون 64 بايت' };
+    }
+
     const keypair = Keypair.fromSecretKey(privateKeyBytes);
 
     const transaction = new Transaction().add(
