@@ -278,50 +278,71 @@ export function MyWalletPage() {
   // ============================================================
   // ✅ دالة حذف محفظة واحدة
   // ============================================================
-  
   const handleDeleteWallet = async (walletId: string, network: string) => {
-    if (!user) return;
+  if (!user) return;
+  
+  if (!window.confirm(`⚠️ هل أنت متأكد من حذف محفظة ${getNetworkName(network)}؟`)) {
+    return;
+  }
+
+  try {
+    // ✅ 1. حذف من localStorage (المفتاح الرئيسي)
+    const key = `madartech_wallets_${walletId}`;
+    localStorage.removeItem(key);
     
-    if (!window.confirm(`⚠️ هل أنت متأكد من حذف محفظة ${getNetworkName(network)}؟\nلا يمكن التراجع عن هذا الإجراء.`)) {
-      return;
-    }
-
-    try {
-      // ✅ حذف من localStorage
-      const key = `madartech_wallets_${walletId}`;
-      localStorage.removeItem(key);
-      
-      // ✅ حذف من قائمة userWallets في localStorage
-      const userWalletsStr = localStorage.getItem('userWallets');
-      if (userWalletsStr) {
-        try {
-          const userWalletsList = JSON.parse(userWalletsStr);
-          const filtered = userWalletsList.filter((w: any) => w.id !== walletId);
-          localStorage.setItem('userWallets', JSON.stringify(filtered));
-        } catch (e) {
-          console.warn('⚠️ فشل تحديث userWallets:', e);
-        }
+    // ✅ 2. حذف من قائمة userWallets في localStorage
+    const userWalletsStr = localStorage.getItem('userWallets');
+    if (userWalletsStr) {
+      try {
+        const userWalletsList = JSON.parse(userWalletsStr);
+        const filtered = userWalletsList.filter((w: any) => w.id !== walletId);
+        localStorage.setItem('userWallets', JSON.stringify(filtered));
+      } catch (e) {
+        console.warn('⚠️ فشل تحديث userWallets:', e);
       }
-      
-      // ✅ تحديث القائمة
-      await loadData(true);
-      setSuccess(`🗑️ تم حذف محفظة ${getNetworkName(network)} بنجاح`);
-      addLog("SUCCESS", `🗑️ تم حذف محفظة ${getNetworkName(network)}`);
-      
-      if (addNotification) {
-        addNotification('success', `🗑️ تم حذف محفظة ${getNetworkName(network)}`);
-      }
-    } catch (error) {
-      console.error('❌ فشل حذف المحفظة:', error);
-      setError('❌ فشل حذف المحفظة');
-      addLog("ERROR", `❌ فشل حذف المحفظة: ${error}`);
     }
-  };
-
+    
+    // ✅ 3. ✅✅✅ الأهم: حذف من جدول 'wallets' في localStorage
+    // هذا هو المكان الذي يخزن فيه AccountManager المحافظ!
+    const allKeys = Object.keys(localStorage);
+    const walletKeys = allKeys.filter(k => {
+      try {
+        const data = JSON.parse(localStorage.getItem(k) || '{}');
+        return data.id === walletId || data.address === walletId;
+      } catch {
+        return false;
+      }
+    });
+    walletKeys.forEach(k => localStorage.removeItem(k));
+    console.log(`🗑️ تم حذف ${walletKeys.length} مفتاح إضافي`);
+    
+    // ✅ 4. تحديث الحالة المحلية فوراً
+    setWallets(prev => prev.filter(w => w.id !== walletId));
+    
+    // ✅ 5. تحديث Total Balance
+    const walletToDelete = wallets.find(w => w.id === walletId);
+    if (walletToDelete) {
+      setTotalBalance(prev => prev - (walletToDelete.balance || 0));
+    }
+    
+    // ✅ 6. إعادة تحميل البيانات (ستكون الآن فارغة)
+    await loadData(true);
+    
+    setSuccess(`🗑️ تم حذف محفظة ${getNetworkName(network)} بنجاح`);
+    addLog("SUCCESS", `🗑️ تم حذف محفظة ${getNetworkName(network)}`);
+    
+    if (addNotification) {
+      addNotification('success', `🗑️ تم حذف محفظة ${getNetworkName(network)}`);
+    }
+  } catch (error) {
+    console.error('❌ فشل حذف المحفظة:', error);
+    setError('❌ فشل حذف المحفظة');
+    addLog("ERROR", `❌ فشل حذف المحفظة: ${error}`);
+  }
+};
   // ============================================================
   // ✅ دالة حذف جميع المحافظ
   // ============================================================
-  
   const handleDeleteAllWallets = async () => {
     if (!user) return;
     
@@ -338,8 +359,13 @@ export function MyWalletPage() {
       
       console.log(`🗑️ تم حذف ${keys.length} محفظة`);
       
-      // ✅ تحديث القائمة
+      // ✅ تحديث الحالة المحلية
+      setWallets([]);
+      setTotalBalance(0);
+      
+      // ✅ إعادة تحميل البيانات من السياق
       await loadData(true);
+      
       setSuccess(`🗑️ تم حذف ${keys.length} محفظة بنجاح`);
       addLog("SUCCESS", `🗑️ تم حذف ${keys.length} محفظة`);
       
@@ -763,7 +789,7 @@ ${address}
             const balance = wallet.balance || 0;
 
             return (
-              <GlassCard key={wallet.network} hover className="overflow-hidden">
+              <GlassCard key={wallet.id} hover className="overflow-hidden">
                 <div
                   className="p-4 flex items-center justify-between cursor-pointer hover:bg-[#1e1e2f]/50 transition-colors"
                   onClick={() => setExpandedWallet(isExpanded ? null : wallet.network)}
