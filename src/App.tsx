@@ -183,6 +183,7 @@ const BotsManager: React.FC = () => {
     deleteBot,
     createWalletForBot,
     addLog,
+    addNotification,
     user,
     updateBotConfig,
     runManualScan,
@@ -193,10 +194,9 @@ const BotsManager: React.FC = () => {
     botWallets,
     loadBotWallets,
     refreshBotBalance,
-    userWallets,        // ✅ قائمة محافظ المستخدم
-    loadUserWallets,    // ✅ دالة تحميل محافظ المستخدم
+    userWallets,
+    loadUserWallets,
   } = useApp();
-
   // ============================================================
   // ✅ دالة مساعدة لاستخراج الشبكات من البوت
   // ============================================================
@@ -453,32 +453,41 @@ const BotsManager: React.FC = () => {
   // ============================================================
   // تشغيل البوت
   // ============================================================
-  const handleStartBot = async (botId: string) => {
-    if (!user?.id) {
-      console.warn('⚠️ لا يوجد مستخدم');
-      return;
+ const handleStartBot = async (botId: string) => {
+  if (!user?.id) {
+    console.warn('⚠️ لا يوجد مستخدم');
+    return;
+  }
+  setIsStarting(true);
+  try {
+    console.log('▶️ جاري تشغيل البوت:', botId);
+    
+    // ✅ تنفيذ مع timeout لمنع التجميد
+    const result = await Promise.race([
+      startBot(botId, user.id),
+      new Promise<{ success: boolean; message?: string }>((_, reject) => 
+        setTimeout(() => reject(new Error('❌ انتهت مهلة تشغيل البوت (10 ثواني)')), 10000)
+      )
+    ]);
+    
+    console.log('📦 نتيجة startBot:', result);
+    
+    if (result.success) {
+      await loadBotInstances(user.id);
+      await addLog('SUCCESS', `▶️ تم تشغيل البوت`);
+      console.log('✅ تم تشغيل البوت بنجاح');
+    } else {
+      await addLog('ERROR', `❌ فشل تشغيل البوت: ${result.message || 'خطأ غير معروف'}`);
+      console.error('❌ فشل التشغيل:', result.message);
     }
-    setIsStarting(true);
-    try {
-      console.log('▶️ جاري تشغيل البوت:', botId);
-      const result = await startBot(botId, user.id);
-      console.log('📦 نتيجة startBot:', result);
-      
-      if (result.success) {
-        await loadBotInstances(user.id);
-        await addLog('SUCCESS', `▶️ تم تشغيل البوت`);
-        console.log('✅ تم تشغيل البوت بنجاح');
-      } else {
-        await addLog('ERROR', `❌ فشل تشغيل البوت: ${result.message || 'خطأ غير معروف'}`);
-        console.error('❌ فشل التشغيل:', result.message);
-      }
-    } catch (error) {
-      console.error('❌ فشل تشغيل البوت:', error);
-      await addLog('ERROR', `❌ فشل تشغيل البوت: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
-    } finally {
-      setIsStarting(false);
-    }
-  };
+  } catch (error: any) {
+    console.error('❌ فشل تشغيل البوت:', error);
+    await addLog('ERROR', `❌ فشل تشغيل البوت: ${error?.message || 'خطأ غير معروف'}`);
+  } finally {
+    // ✅ دائماً يعيد الحالة حتى لو فشل
+    setIsStarting(false);
+  }
+};
 
   // ============================================================
   // إيقاف البوت
@@ -833,18 +842,28 @@ const BotsManager: React.FC = () => {
   // ============================================================
   // ✅ دالة مساعدة لجلب عنوان المحفظة المختصر
   // ============================================================
-  const getWalletDisplay = (botId: string) => {
-    const wallet = botWallets?.find(w => w.bot_id === botId);
-    if (!wallet || !wallet.address) return null;
-    const addr = wallet.address;
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
+const getWalletDisplay = (botId: string) => {
+  let wallet = botWallets?.find(w => w.bot_id === botId || w.id === botId);
+  if (!wallet || !wallet.address || wallet.address === 'undefined') {
+    wallet = botWallets?.find(w => w.network === 'solana' && w.address && w.address !== 'undefined');
+  }
+  if (!wallet || !wallet.address || wallet.address === 'undefined') {
+    wallet = botWallets?.find(w => w.address && w.address !== 'undefined');
+  }
+  if (!wallet || !wallet.address) return null;
+  return `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`;
+};
 
-  const getWalletBalance = (botId: string) => {
-    const wallet = botWallets?.find(w => w.bot_id === botId);
-    return wallet?.balance?.toFixed(2) || '0.00';
-  };
-
+const getWalletBalance = (botId: string) => {
+  let wallet = botWallets?.find(w => w.bot_id === botId || w.id === botId);
+  if (!wallet) {
+    wallet = botWallets?.find(w => w.network === 'solana' && w.address);
+  }
+  if (!wallet) {
+    wallet = botWallets?.find(w => w.address);
+  }
+  return wallet?.balance?.toFixed(2) || '0.00';
+};
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -1038,17 +1057,35 @@ const BotsManager: React.FC = () => {
                   </Button>
 
                   <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min="1"
-                      max="60"
-                      value={intervalValue}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setScanIntervalInput(prev => ({ ...prev, [bot.id]: val }));
-                      }}
-                      className="w-12 bg-[#0a0a0f] border border-[#1e1e2f] rounded-lg px-1 py-1 text-white text-xs text-center"
-                    />
+             <input
+  type="number"
+  min="1"
+  max="60"
+  value={intervalValue}
+  onChange={(e) => {
+    const val = e.target.value;
+    setScanIntervalInput(prev => ({ ...prev, [bot.id]: val }));
+    
+    // ✅ إشعار فوري عند تغيير الرقم
+    const minutes = parseInt(val);
+    if (!isNaN(minutes) && minutes >= 1 && minutes <= 60) {
+      console.log(`⏱️ تم تغيير وقت المسح إلى ${minutes} دقيقة`);
+      
+      // ✅ إذا كان المسح التلقائي نشطاً، حدّث فوراً
+      if (autoStatus.active) {
+        setScanInterval(bot.id, minutes);
+      }
+    }
+  }}
+onBlur={(e) => {
+  const val = parseInt(e.target.value);
+  if (!isNaN(val) && val >= 1 && val <= 60) {
+    console.log(`⏱️ تم ضبط وقت المسح على ${val} دقيقة`);
+    // ✅ الإشعار يأتي من botEngine نفسه
+  }
+}}
+  className="w-12 bg-[#0a0a0f] border border-[#1e1e2f] rounded-lg px-1 py-1 text-white text-xs text-center"
+/>
                     <span className="text-[10px] text-[#64748b]">دقيقة</span>
                     <Button
                       size="sm"
@@ -1173,14 +1210,23 @@ const BotsManager: React.FC = () => {
                   className="w-full bg-[#0a0a0f] border border-[#1e1e2f] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-[#10b981] transition-colors"
                 >
                   <option value="">🔄 إنشاء محفظة جديدة تلقائياً</option>
-                  {userWallets
-                    .filter(w => w.network === selectedNetwork)
-                    .map(w => (
-                      <option key={w.id} value={w.id}>
-                        {w.address.slice(0, 8)}...{w.address.slice(-6)} (رصيد: {w.balance.toFixed(4)} {w.network})
-                      </option>
-                    ))
-                  }
+                  {[...userWallets, ...botWallets.map(w => ({
+  id: w.id || '',
+  userId: user?.id || '',
+  network: w.network,
+  address: w.address,
+  encryptedPrivateKey: w.encrypted_private_key,
+  balance: w.balance,
+  createdAt: w.created_at,
+  updatedAt: w.updated_at,
+}))]
+  .filter(w => w.network === selectedNetwork && w.address && w.address !== 'undefined')
+  .map(w => (
+    <option key={w.id} value={w.id}>
+      {w.address?.slice(0, 8)}...{w.address?.slice(-6)} (رصيد: {w.balance?.toFixed(4) || '0'} {w.network})
+    </option>
+  ))
+}
                 </select>
                 {userWallets.filter(w => w.network === selectedNetwork).length === 0 && (
                   <p className="text-xs text-amber-400 mt-1">⚠️ لا توجد محافظ على هذه الشبكة، سيتم إنشاء محفظة جديدة</p>

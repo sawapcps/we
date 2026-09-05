@@ -6,7 +6,7 @@
 // ✅ يدعم تحديث الشبكات والمسح التلقائي بالوقت المحدد
 // ✅ زر المسح التلقائي يعمل بشكل صحيح مع إشعارات
 // ============================================================
-
+import { fetchCandles, analyzeTechnical } from './technicalAnalysis';
 import type { BotConfig, Trade, ChainId, BotLogEntry, DiscoveredToken } from '@/types';
 import { discoverAllPairs } from '@/lib/discovery';
 import { runBotAnalysis, getTopRecommendations, type HunterFilters } from '@/lib/hunterEngine';
@@ -1320,6 +1320,25 @@ export class TradingBot {
         }
       }
 
+      // ✅ جلب الشموع والتحليل الفني
+const candles = await fetchCandles(token.tokenAddress, network);
+if (candles.length >= 20) {
+  const technical = analyzeTechnical(candles);
+  
+  this.onLog({
+    id: generateId(),
+    timestamp: Date.now(),
+    level: 'info',
+    message: `📊 ${token.symbol}: RSI=${technical.rsi.toFixed(1)} | Score=${technical.score} | ${technical.trend}`,
+  });
+  
+  if (technical.buySignal) {
+    await this.sendNotification('success', `🎯 ${token.symbol}: إشارة شراء فنية (${technical.score}/100)`);
+  }
+  
+  // ✅ استخدم النقاط الفنية
+  finalScore = (technical.score * 0.5) + (finalScore * 0.5);
+}
       const technicalScore = calculateTechnicalScore(token);
       const finalScore = (technicalScore * 0.60) + (aiConfidence * 0.40);
 
@@ -1422,18 +1441,27 @@ export class TradingBot {
       await this.sendNotification('success', `✅ ${token.symbol}: ${verification.reason}`);
       await this.sendNotification('info', `💰 حجم الصفقة: $${amountUsd.toFixed(2)} | النقاط: ${finalScore.toFixed(0)}/100`);
 
+           // ✅ فحص الرصيد بعد اختيار العملة
       const balance = await this.wallet.refreshBalance(network);
-      await this.sendNotification('info', `💰 رصيد ${getNetworkName(network)}: $${balance.toFixed(2)}`);
+      const requiredAmount = amountUsd;
 
-      if (balance < amountUsd) {
-        const msg = `⚠️ ${token.symbol}: الرصيد غير كافٍ ($${balance.toFixed(2)} < $${amountUsd.toFixed(2)})`;
+      if (balance < requiredAmount) {
+        // ✅ إشعار واضح: اخترت عملة لكن لا يوجد رصيد
+        const msg = `🎯 اخترت ${token.symbol} لكن لا يوجد رصيد!\n` +
+          `💰 الرصيد: $${balance.toFixed(2)}\n` +
+          `💵 المطلوب: $${requiredAmount.toFixed(2)}\n` +
+          `📊 النقاط: ${finalScore.toFixed(0)}/100`;
+        
+        await this.sendNotification('warning', msg);
+        
         this.onLog({
           id: generateId(),
           timestamp: Date.now(),
           level: 'warning',
-          message: msg,
+          message: `🎯 ${token.symbol} مختارة لكن الرصيد غير كافٍ: $${balance.toFixed(2)} < $${requiredAmount.toFixed(2)}`,
         });
-        await this.sendNotification('warning', msg);
+        
+        // ✅ استمر لفحص العملات الأخرى
         continue;
       }
 

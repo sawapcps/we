@@ -44,11 +44,6 @@ import {
   type SmartWalletData,
 } from '../lib/madarTech';
 import { BotWalletManager, BotWalletData } from '../lib/wallet';
-import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/accounts';
-
-// ============================================================
-// WORKER URL
-// ============================================================
 
 import { AccountManager, UserAccount, UserWallet, Transaction } from '../lib/accounts';
 
@@ -940,13 +935,37 @@ const createBot = async (
       const botId = result.botId!;
       
       // ✅ إذا كان هناك walletId محدد، اربطه بالبوت
-      if (walletId) {
-        const wallet = userWallets.find(w => w.id === walletId);
-        if (wallet) {
-          await createBotWallet(botId, uid, wallet.network, wallet.address, wallet.encryptedPrivateKey);
-          await addLog('SUCCESS', `🔗 تم ربط المحفظة ${wallet.address.slice(0, 8)}... بالبوت`);
-        }
-      } else {
+    if (walletId) {
+  // ✅ ابحث في محافظ المستخدم أولاً
+  let wallet = userWallets.find(w => w.id === walletId);
+  
+  // ✅ إذا لم توجد، ابحث في محافظ البوت
+  if (!wallet) {
+    const botWallet = botWallets.find(w => w.id === walletId);
+    if (botWallet) {
+      wallet = {
+        id: botWallet.id || '',
+        userId: uid,
+        network: botWallet.network,
+        address: botWallet.address,
+        encryptedPrivateKey: botWallet.encrypted_private_key,
+        balance: botWallet.balance,
+        createdAt: botWallet.created_at,
+        updatedAt: botWallet.updated_at,
+      };
+    }
+  }
+  
+  if (wallet) {
+    await createBotWallet(botId, uid, wallet.network, wallet.address, wallet.encryptedPrivateKey);
+    await addLog('SUCCESS', `🔗 تم ربط المحفظة ${wallet.address.slice(0, 8)}... بالبوت`);
+    addNotification('success', `🔗 تم ربط المحفظة بنجاح`);
+  } else {
+    console.warn('⚠️ المحفظة غير موجودة في أي قائمة');
+    await autoLinkUserWalletsToBot(botId, uid);
+  }
+}
+      else {
         // ✅ السلوك القديم: ربط محافظ المستخدم تلقائياً
         await autoLinkUserWalletsToBot(botId, uid);
       }
@@ -1208,19 +1227,41 @@ networks: parseNetworks(botData.networks),
     }
   };
 
-  const startAutoScan = (botId: string) => {
+   const startAutoScan = (botId: string) => {
     const bot = botInstancesRef.current.get(botId);
-    if (bot) bot.startAutoScan();
+    if (bot) {
+      bot.startAutoScan();
+      // ✅ إشعار فوري
+      addNotification('success', `▶️ بدأ المسح التلقائي للبوت`);
+      // ✅ سجل
+      addLog('SUCCESS', `▶️ بدأ المسح التلقائي للبوت`);
+    } else {
+      // ✅ البوت غير نشط
+      addNotification('warning', `⚠️ البوت غير نشط - شغّل البوت أولاً`);
+      addLog('WARNING', `⚠️ البوت غير نشط - لا يمكن بدء المسح`);
+    }
   };
 
   const stopAutoScan = (botId: string) => {
     const bot = botInstancesRef.current.get(botId);
-    if (bot) bot.stopAutoScan();
+    if (bot) {
+      bot.stopAutoScan();
+      // ✅ إشعار فوري
+      addNotification('warning', `⏹️ تم إيقاف المسح التلقائي`);
+      // ✅ سجل
+      addLog('INFO', `⏹️ تم إيقاف المسح التلقائي`);
+    }
   };
 
   const setScanInterval = (botId: string, minutes: number) => {
     const bot = botInstancesRef.current.get(botId);
-    if (bot) bot.setScanInterval(minutes);
+    if (bot) {
+      bot.setScanInterval(minutes);
+      // ✅ إشعار
+      addNotification('info', `⏱️ تم تغيير وقت المسح إلى ${minutes} دقيقة`);
+      // ✅ سجل
+      addLog('INFO', `⏱️ تم تغيير وقت المسح إلى ${minutes} دقيقة`);
+    }
   };
 
   const getAutoScanStatus = (botId: string) => {
@@ -1230,7 +1271,6 @@ networks: parseNetworks(botData.networks),
     }
     return { active: false, interval: 5 };
   };
-
   // ============================================================
   // ✅ دوال التحويل بين المحافظ (جديدة)
   // ============================================================
