@@ -3,11 +3,13 @@
 // 👤 نظام إدارة الحسابات والمستخدمين (محلي بالكامل)
 // ✅ يعتمد على localStorage عبر دوال madar...
 // ✅ يدعم إنشاء محافظ صالحة (Solana / EVM)
+// ✅ إصلاح مشكلة العنوان undefined
 // ============================================================
 
 import { generateId, getTimestamp, madarCreate, madarRead, madarUpdate, madarDelete } from './madarTech';
 import { encrypt, decrypt } from './encryption';
-import { createWallet } from './wallet'; // ✅ استيراد createWallet
+import { Keypair } from '@solana/web3.js';
+import { ethers } from 'ethers';
 
 // ============================================================
 // 📊 الأنواع
@@ -16,7 +18,7 @@ import { createWallet } from './wallet'; // ✅ استيراد createWallet
 export interface UserAccount {
   id: string;
   email: string;
-  password: string; // مشفرة
+  password: string;
   username: string;
   isAdmin: boolean;
   balance: number;
@@ -49,10 +51,11 @@ export interface Transaction {
 }
 
 // ============================================================
-// 🔐 دوال التشفير (لكلمة المرور)
+// 🔐 دوال التشفير
 // ============================================================
 
 const SALT = 'madartech_account_salt_2024';
+const WALLET_KEY_SALT = 'user_wallet_key_salt_2024';
 
 function hashPassword(password: string): string {
   return encrypt(password, SALT);
@@ -64,6 +67,43 @@ function verifyPassword(plain: string, hashed: string): boolean {
     return decrypted === plain;
   } catch {
     return false;
+  }
+}
+
+// ============================================================
+// 🔑 إنشاء محفظة مباشرة (بدون استيراد دائري)
+// ============================================================
+
+function createWalletDirect(network: string): { address: string; privateKey: string } {
+  console.log(`🔑 إنشاء محفظة مباشرة لـ ${network}...`);
+  
+  if (network === 'solana') {
+    try {
+      const keypair = Keypair.generate();
+      const address = keypair.publicKey.toBase58();
+      const privateKey = Buffer.from(keypair.secretKey).toString('hex');
+      
+      console.log('✅ عنوان Solana:', address);
+      console.log('✅ طول المفتاح:', privateKey.length);
+      
+      if (!address || address === 'undefined' || address === 'null') {
+        throw new Error('العنوان غير صالح');
+      }
+      
+      return { address, privateKey };
+    } catch (error) {
+      console.error('❌ فشل إنشاء محفظة Solana:', error);
+      throw error;
+    }
+  } else {
+    try {
+      const wallet = ethers.Wallet.createRandom();
+      console.log('✅ عنوان EVM:', wallet.address);
+      return { address: wallet.address, privateKey: wallet.privateKey };
+    } catch (error) {
+      console.error(`❌ فشل إنشاء محفظة ${network}:`, error);
+      throw error;
+    }
   }
 }
 
@@ -190,7 +230,7 @@ export class AccountManager {
     };
   }
 
-  // ✅ إحصائيات النظام (للوحة التحكم)
+  // ✅ إحصائيات النظام
   static async getSystemStats(): Promise<{
     totalUsers: number;
     totalTrades: number;
@@ -222,46 +262,58 @@ export class AccountManager {
   }
 
   // ============================================================
-  // 💰 دوال المحافظ (للمستخدمين) - معدلة
+  // 💰 دوال المحافظ للمستخدمين
   // ============================================================
 
-  // ✅ إنشاء محفظة للمستخدم (مع عنوان صالح)
+  // ✅ إنشاء محفظة للمستخدم
   static async createUserWallet(
     userId: string,
     network: string,
     address?: string,
     encryptedPrivateKey?: string
   ): Promise<UserWallet> {
+    console.log(`💳 بدء إنشاء محفظة ${network} للمستخدم ${userId}...`);
+    
     // التحقق من وجود محفظة بنفس الشبكة
     const existing = await this.getUserWallet(userId, network);
     if (existing) {
+      console.log(`⚠️ المحفظة موجودة مسبقاً: ${existing.address}`);
       return existing;
     }
 
-    // ✅ إنشاء عنوان صالح للشبكة المطلوبة
     let walletAddress = address;
     let privKey = encryptedPrivateKey;
 
-    if (!walletAddress) {
-      // ✅ استخدام createWallet لإنشاء عنوان صالح
-      const newWallet = createWallet(network);
+    if (!walletAddress || walletAddress === 'undefined' || walletAddress === 'null') {
+      // ✅ إنشاء محفظة جديدة مباشرة
+      const newWallet = createWalletDirect(network);
       walletAddress = newWallet.address;
       privKey = newWallet.privateKey;
-      console.log(`🆕 تم إنشاء عنوان ${network} صالح: ${walletAddress}`);
+      console.log(`✅ تم إنشاء عنوان ${network}:`, walletAddress);
     }
+
+    // التحقق النهائي من العنوان
+    if (!walletAddress || walletAddress === 'undefined' || walletAddress === 'null') {
+      console.error('❌ العنوان فارغ بعد الإنشاء');
+      throw new Error('فشل إنشاء عنوان المحفظة');
+    }
+
+    // تشفير المفتاح الخاص
+    const encryptedKey = privKey ? encrypt(privKey, WALLET_KEY_SALT) : '';
 
     const wallet: UserWallet = {
       id: generateId(),
       userId,
       network,
-      address: walletAddress, // ✅ عنوان صالح
-      encryptedPrivateKey: privKey || `encrypted_${generateId()}`,
+      address: walletAddress,
+      encryptedPrivateKey: encryptedKey,
       balance: 0,
       createdAt: getTimestamp(),
       updatedAt: getTimestamp(),
     };
 
     await madarCreate('user_wallets', wallet);
+    console.log(`✅ تم إنشاء محفظة ${network} بنجاح:`, walletAddress);
     return wallet;
   }
 
@@ -302,7 +354,7 @@ export class AccountManager {
     });
   }
 
-  // ✅ جلب رصيد المستخدم على شبكة معينة
+  // ✅ جلب رصيد المستخدم
   static async getUserWalletBalance(
     userId: string,
     network: string,
@@ -321,10 +373,8 @@ export class AccountManager {
         return { success: false, error: `لا توجد محفظة على ${network}` };
       }
 
-      // حذف من جدول user_wallets
       await madarDelete('user_wallets', wallet.id);
 
-      // حذف من localStorage مباشرة (للتأكد)
       const key = `madartech_user_wallets_${wallet.id}`;
       localStorage.removeItem(key);
 
@@ -383,17 +433,15 @@ export class AccountManager {
   }
 
   // ============================================================
-  // 📊 دوال إضافية (للتوافق مع الكود القديم)
+  // 📊 دوال إضافية
   // ============================================================
 
-  // ✅ هل يمكن للمستخدم التداول؟
   static async canUserTrade(userId: string): Promise<boolean> {
     const user = await this.getUserById(userId);
     if (!user) return false;
     return user.status === 'active';
   }
 
-  // ✅ عدد الصفقات المتبقية (محاكاة)
   static async getRemainingTrades(userId: string): Promise<number> {
     const tradesResult = await madarRead<any>('trades', {
       where: { userId },
@@ -407,12 +455,10 @@ export class AccountManager {
     return Math.max(0, maxTrades - todayTrades.length);
   }
 
-  // ✅ زيادة عدد صفقات المستخدم
   static async incrementUserTrades(userId: string): Promise<void> {
-    // لا نحتاج إلى تخزين منفصل، يمكن حسابه من الصفقات
+    // لا نحتاج إلى تخزين منفصل
   }
 
-  // ✅ إضافة ربح للمستخدم
   static async addProfit(
     userId: string,
     profit: number,
