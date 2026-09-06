@@ -65,11 +65,13 @@ function createWallet(network) {
       const { Keypair } = require('@solana/web3.js');
       const keypair = Keypair.generate();
       const address = keypair.publicKey.toBase58();
-      const privateKey = Buffer.from(keypair.secretKey).toString('hex');
+      // ✅ استخدام Uint8Array بدلاً من Buffer
+      const privateKey = Array.from(keypair.secretKey)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
       
       console.log('✅ عنوان Solana (toBase58):', address);
       
-      // ✅ تحقق صارم: إذا بدأ بـ 0x، ارفض
       if (address.startsWith('0x')) {
         throw new Error('تم إنشاء عنوان Solana خاطئ (يبدأ بـ 0x)');
       }
@@ -77,12 +79,10 @@ function createWallet(network) {
       return { address, privateKey };
     } catch (error) {
       console.error('❌ فشل إنشاء Solana في Worker:', error);
-      // ❌ لا نستخدم EVM كبديل، نرمي الخطأ مباشرة
       throw new Error('فشل إنشاء محفظة Solana: ' + error.message);
     }
   }
   
-  // ✅ EVM (Ethereum, BSC, Polygon...)
   try {
     const { ethers } = require('ethers');
     const wallet = ethers.Wallet.createRandom();
