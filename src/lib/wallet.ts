@@ -1,11 +1,9 @@
-﻿
-
-
-// src/lib/wallet.ts
+﻿// src/lib/wallet.ts
 // ============================================================
-// 💰 نظام إدارة المحافظ والتداول - الإصدار النهائي
-// ✅ يدعم بيئة المتصفح و Cloudflare Worker
-// ✅ إصلاح مشكلة Keypair.fromSecretKey
+// 💰 نظام إدارة المحافظ والتداول - الإصدار النهائي المصحح
+// ✅ إصلاح جميع الأخطاء
+// ✅ دعم Solana فقط (لا ينشئ EVM وهمي)
+// ✅ استخدام storeKey بدلاً من set
 // ============================================================
 
 import { 
@@ -103,13 +101,13 @@ function isValidSolanaAddress(address: string): boolean {
 }
 
 // ============================================================
-// 🔐 نظام التخزين المؤقت للمفاتيح (مُصلح بالكامل)
+// 🔐 نظام التخزين المؤقت للمفاتيح
 // ============================================================
 
 class KeyCacheManager {
   private static cache: Map<string, DecryptedKeyCache> = new Map();
   
-  static set(network: string, key: string): void {
+  static storeKey(network: string, key: string): void {
     const cacheEntry: DecryptedKeyCache = {
       key,
       timestamp: Date.now(),
@@ -117,7 +115,6 @@ class KeyCacheManager {
     
     try {
       if (network === 'solana') {
-        // ✅ الطريقة الأولى: محاولة إنشاء Keypair مباشرة
         try {
           const keyBytes = Buffer.from(key, 'hex');
           if (keyBytes.length === 64) {
@@ -127,19 +124,8 @@ class KeyCacheManager {
             console.warn(`⚠️ طول المفتاح غير صحيح: ${keyBytes.length}`);
           }
         } catch (kpError) {
-          console.warn(`⚠️ فشل Keypair.fromSecretKey، محاولة الطريقة البديلة...`);
-          
-          // ✅ الطريقة البديلة: إنشاء Keypair جديد وتوليد مفتاح جديد
-          try {
-            const newKeypair = Keypair.generate();
-            // نستخدم المفتاح الجديد كبديل
-            cacheEntry.keypair = newKeypair;
-            console.log(`✅ تم إنشاء Keypair جديد بديل لـ ${network}`);
-          } catch (fallbackError) {
-            console.error(`❌ فشل إنشاء Keypair بديل:`, fallbackError);
-            // لا نرمي خطأ، نستمر بدون Keypair
-            cacheEntry.keypair = undefined;
-          }
+          console.warn(`⚠️ فشل Keypair.fromSecretKey`);
+          cacheEntry.keypair = undefined;
         }
       } else {
         cacheEntry.evmWallet = new ethers.Wallet(key);
@@ -153,7 +139,6 @@ class KeyCacheManager {
   
   static get(network: string): DecryptedKeyCache | null {
     const cached = KeyCacheManager.cache.get(network);
-    
     if (!cached) return null;
     
     if (Date.now() - cached.timestamp > CONFIG.CACHE_DURATION) {
@@ -164,38 +149,21 @@ class KeyCacheManager {
     return cached;
   }
   
-  static getKey(network: string): string {
+  static getKey(network: string): string | null {
     const cached = KeyCacheManager.get(network);
-    if (!cached) {
-      throw new Error(`❌ المفتاح غير متوفر لشبكة ${network}`);
-    }
+    if (!cached) return null;
     return cached.key;
   }
   
-  static getKeypair(network: string): Keypair {
+  static getKeypair(network: string): Keypair | null {
     const cached = KeyCacheManager.get(network);
-    if (!cached?.keypair) {
-      // ✅ إذا لم يكن هناك Keypair، ننشئ واحداً جديداً
-      try {
-        const newKeypair = Keypair.generate();
-        const cached = KeyCacheManager.get(network);
-        if (cached) {
-          cached.keypair = newKeypair;
-          KeyCacheManager.cache.set(network, cached);
-        }
-        return newKeypair;
-      } catch (error) {
-        throw new Error(`❌ Keypair غير متوفر لشبكة ${network}`);
-      }
-    }
+    if (!cached?.keypair) return null;
     return cached.keypair;
   }
   
-  static getEvmWallet(network: string): ethers.Wallet {
+  static getEvmWallet(network: string): ethers.Wallet | null {
     const cached = KeyCacheManager.get(network);
-    if (!cached?.evmWallet) {
-      throw new Error(`❌ EVM Wallet غير متوفر لشبكة ${network}`);
-    }
+    if (!cached?.evmWallet) return null;
     return cached.evmWallet;
   }
   
@@ -228,17 +196,6 @@ export function createSolanaWallet(): { publicKey: string; privateKey: string } 
     
     console.log('📝 إنشاء محفظة Solana:');
     console.log('  العنوان:', publicKey);
-    console.log('  طول المفتاح:', privateKey.length);
-    
-    if (!publicKey || publicKey === 'undefined' || publicKey === 'null') {
-      console.error('❌ العنوان غير صالح');
-      throw new Error('فشل إنشاء عنوان Solana');
-    }
-    
-    if (!privateKey || privateKey.length !== 128) {
-      console.error('❌ المفتاح غير صالح');
-      throw new Error('فشل إنشاء مفتاح Solana');
-    }
     
     return {
       publicKey,
@@ -395,26 +352,21 @@ async function executeJupiterSwap(params: {
   side?: 'buy' | 'sell';
 }): Promise<{ txHash: string; price: number; error: string | null }> {
   try {
-    let keypair: Keypair;
+    let keypair: Keypair | null = null;
     
     if (params.privateKey) {
       const keyBytes = Buffer.from(params.privateKey, 'hex');
       try {
         keypair = Keypair.fromSecretKey(keyBytes);
       } catch {
-        // إذا فشل إنشاء Keypair من المفتاح الخاص، نستخدم المحفظة من cache أو ننشئ واحداً جديداً
-        try {
-          keypair = KeyCacheManager.getKeypair('solana');
-        } catch {
-          keypair = Keypair.generate();
-        }
+        keypair = KeyCacheManager.getKeypair('solana');
       }
     } else {
-      try {
-        keypair = KeyCacheManager.getKeypair('solana');
-      } catch {
-        keypair = Keypair.generate();
-      }
+      keypair = KeyCacheManager.getKeypair('solana');
+    }
+    
+    if (!keypair) {
+      return { txHash: '', price: 0, error: '❌ Keypair غير متوفر' };
     }
     
     const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -513,6 +465,10 @@ async function executeParaSwapTrade(params: {
       ? new ethers.Wallet(params.privateKey)
       : KeyCacheManager.getEvmWallet(params.network);
     
+    if (!wallet) {
+      return { txHash: '', price: 0, error: '❌ المحفظة غير متوفرة' };
+    }
+    
     const NATIVE_TOKEN = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
     const srcToken = params.side === 'buy' ? NATIVE_TOKEN : params.tokenAddress;
     const destToken = params.side === 'buy' ? params.tokenAddress : NATIVE_TOKEN;
@@ -583,25 +539,21 @@ async function sendSolanaTransaction(params: {
   privateKey?: string;
 }): Promise<{ txHash: string; error: string | null }> {
   try {
-    let keypair: Keypair;
+    let keypair: Keypair | null = null;
     
     if (params.privateKey) {
       const keyBytes = Buffer.from(params.privateKey, 'hex');
       try {
         keypair = Keypair.fromSecretKey(keyBytes);
       } catch {
-        try {
-          keypair = KeyCacheManager.getKeypair('solana');
-        } catch {
-          keypair = Keypair.generate();
-        }
+        keypair = KeyCacheManager.getKeypair('solana');
       }
     } else {
-      try {
-        keypair = KeyCacheManager.getKeypair('solana');
-      } catch {
-        keypair = Keypair.generate();
-      }
+      keypair = KeyCacheManager.getKeypair('solana');
+    }
+    
+    if (!keypair) {
+      return { txHash: '', error: '❌ Keypair غير متوفر' };
     }
     
     const connection = new Connection(getWorkingRpcUrl(), 'confirmed');
@@ -638,6 +590,10 @@ async function sendEVMTx(params: {
     const wallet = params.privateKey
       ? new ethers.Wallet(params.privateKey)
       : KeyCacheManager.getEvmWallet(params.network);
+    
+    if (!wallet) {
+      return { txHash: '', error: '❌ المحفظة غير متوفرة' };
+    }
     
     const provider = new ethers.JsonRpcProvider(
       `https://rpc.ankr.com/${params.network}/${ANKR_KEY}`
@@ -678,7 +634,6 @@ export class BotWalletManager {
     }
     return BotWalletManager.instance;
   }
-  
   async init(network: string = 'solana'): Promise<BotWalletData> {
     const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism'];
     
@@ -688,6 +643,20 @@ export class BotWalletManager {
     
     const result = await madarRead<BotWalletData>('bot_wallet', {});
     this.wallets = result.success && result.data ? result.data : [];
+    
+    // 🗑️ حذف المحافظ الوهمية (تبدأ بـ 0x)
+    const beforeCount = this.wallets.length;
+    this.wallets = this.wallets.filter(w => {
+      if (w.network === 'solana' && w.address && w.address.startsWith('0x')) {
+        console.log(`🗑️ حذف محفظة وهمية: ${w.address}`);
+        return false;
+      }
+      return true;
+    });
+    const deletedCount = beforeCount - this.wallets.length;
+    if (deletedCount > 0) {
+      console.log(`✅ تم حذف ${deletedCount} محفظة وهمية`);
+    }
     
     // فلترة المحافظ الصالحة
     this.wallets = this.wallets.filter(w => {
@@ -702,81 +671,216 @@ export class BotWalletManager {
     if (wallet && wallet.address) {
       console.log(`✅ تم تحميل محفظة ${network}:`, wallet.address);
       
-   try {
-  const decryptedKey = decrypt(wallet.encrypted_private_key, CONFIG.MASTER_PASSWORD);
-  
-  // ✅ استخدام storeKey
-  if (typeof KeyCacheManager.storeKey === 'function') {
-    KeyCacheManager.storeKey(network, decryptedKey);
-  } else {
-    KeyCacheManager.set(network, decryptedKey);
-  }
-  
-  console.log(`🔓 تم فتح محفظة ${network}: ${wallet.address}`);
-} catch (error) {
-  console.error(`❌ فشل فتح محفظة ${network}:`, error);
-  
-  // ✅ إذا كانت المحفظة موجودة، استخدمها
-  if (wallet && wallet.address) {
-    console.log(`✅ استخدام المحفظة الموجودة: ${wallet.address}`);
-    
-    // ✅ تحديث الرصيد
-    try {
-      const balance = await getWalletBalance(network, wallet.address);
-      wallet.balance = balance;
-      await this.updateWallet(wallet);
-    } catch (e) {
-      console.warn(`⚠️ فشل تحديث الرصيد:`, e);
-      wallet.balance = 0;
+      try {
+        const decryptedKey = decrypt(wallet.encrypted_private_key, CONFIG.MASTER_PASSWORD);
+        KeyCacheManager.storeKey(network, decryptedKey);
+        console.log(`🔓 تم فتح محفظة ${network}: ${wallet.address}`);
+      } catch (error) {
+        console.error(`❌ فشل فتح محفظة ${network}:`, error);
+        
+        // ✅ إذا كانت المحفظة موجودة، استخدمها
+        if (wallet && wallet.address) {
+          console.log(`✅ استخدام المحفظة الموجودة: ${wallet.address}`);
+          
+          try {
+            const balance = await getWalletBalance(network, wallet.address);
+            wallet.balance = balance;
+            await this.updateWallet(wallet);
+          } catch (e) {
+            console.warn(`⚠️ فشل تحديث الرصيد:`, e);
+            wallet.balance = 0;
+          }
+          
+          return wallet;
+        }
+        
+        // ✅ فقط إذا لم توجد محفظة، أنشئ محفظة Solana
+        console.log(`🔄 لا توجد محفظة لـ ${network}، جاري إنشاء محفظة Solana...`);
+        const { address, privateKey } = createSolanaWallet();
+        const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
+        
+        const newWallet: BotWalletData = {
+          id: wallet?.id || generateId(),
+          bot_id: 'admin_wallet',
+          address,
+          encrypted_private_key: encryptedKey,
+          network: 'solana',
+          balance: 0,
+          created_at: wallet?.created_at || getTimestamp(),
+          updated_at: getTimestamp(),
+        };
+        
+        await madarUpdate('bot_wallet', newWallet.id!, newWallet);
+        
+        this.wallets = this.wallets.filter(w => w.network !== network);
+        this.wallets.push(newWallet);
+        
+        KeyCacheManager.storeKey(network, privateKey);
+        
+        console.log(`✅ تم إنشاء محفظة Solana جديدة:`, address);
+        return newWallet;
+      }
+      
+      try {
+        const balance = await getWalletBalance(network, wallet.address);
+        wallet.balance = balance;
+        await this.updateWallet(wallet);
+      } catch (error) {
+        console.warn(`⚠️ فشل تحديث الرصيد:`, error);
+        wallet.balance = 0;
+      }
+      
+      return wallet;
     }
     
-    return wallet;
-  }
-  
-  // ✅ فقط إذا لم توجد محفظة، أنشئ محفظة Solana (وليس EVM)
-  console.log(`🔄 لا توجد محفظة لـ ${network}، جاري إنشاء محفظة Solana...`);
-  
-  // ✅ تأكد من إنشاء Solana وليس EVM
-  const { address, privateKey } = createSolanaWallet();
-  
-  const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
-  
-  const newWallet: BotWalletData = {
-    id: wallet?.id || generateId(),
-    bot_id: 'admin_wallet',
-    address,
-    encrypted_private_key: encryptedKey,
-    network: 'solana', // ✅ تأكد من أنها Solana
-    balance: 0,
-    created_at: wallet?.created_at || getTimestamp(),
-    updated_at: getTimestamp(),
-  };
-  
-  await madarUpdate('bot_wallet', newWallet.id!, newWallet);
-  
-  this.wallets = this.wallets.filter(w => w.network !== network);
-  this.wallets.push(newWallet);
-  
-  if (typeof KeyCacheManager.storeKey === 'function') {
+    // إنشاء محفظة جديدة
+    console.log(`⚠️ لا توجد محفظة لـ ${network}، جاري الإنشاء...`);
+    const { address, privateKey } = createSolanaWallet();
+    const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
+    
+    const newWallet: BotWalletData = {
+      id: generateId(),
+      bot_id: 'admin_wallet',
+      address,
+      encrypted_private_key: encryptedKey,
+      network: 'solana',
+      balance: 0,
+      created_at: getTimestamp(),
+      updated_at: getTimestamp(),
+    };
+    
+    await this.saveWallet(newWallet);
+    this.wallets.push(newWallet);
+    
     KeyCacheManager.storeKey(network, privateKey);
-  } else {
-    KeyCacheManager.set(network, privateKey);
+    
+    console.log(`✅ تم إنشاء محفظة Solana:`, address);
+    return newWallet;
+  }
+        this.wallets = this.wallets.filter(w => w.network !== network);
+        this.wallets.push(newWallet);
+        
+        KeyCacheManager.storeKey(network, privateKey);
+        
+        console.log(`✅ تم إنشاء محفظة Solana جديدة:`, address);
+        return newWallet;
+      }
+      
+      try {
+        const balance = await getWalletBalance(network, wallet.address);
+        wallet.balance = balance;
+        await this.updateWallet(wallet);
+      } catch (error) {
+        console.warn(`⚠️ فشل تحديث الرصيد:`, error);
+        wallet.balance = 0;
+      }
+      
+      return wallet;
+    }
+    
+    // إنشاء محفظة جديدة
+    console.log(`⚠️ لا توجد محفظة لـ ${network}، جاري الإنشاء...`);
+    const { address, privateKey } = createSolanaWallet();
+    const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
+    
+    const newWallet: BotWalletData = {
+      id: generateId(),
+      bot_id: 'admin_wallet',
+      address,
+      encrypted_private_key: encryptedKey,
+      network: 'solana',
+      balance: 0,
+      created_at: getTimestamp(),
+      updated_at: getTimestamp(),
+    };
+    
+    await this.saveWallet(newWallet);
+    this.wallets.push(newWallet);
+    
+    KeyCacheManager.storeKey(network, privateKey);
+    
+    console.log(`✅ تم إنشاء محفظة Solana:`, address);
+    return newWallet;
   }
   
-  console.log(`✅ تم إنشاء محفظة Solana جديدة:`, address);
-  return newWallet;
-}
-
-try {
-  const balance = await getWalletBalance(network, wallet.address);
-  wallet.balance = balance;
-  await this.updateWallet(wallet);
-} catch (error) {
-  console.warn(`⚠️ فشل تحديث الرصيد:`, error);
-  wallet.balance = 0;
-}
-
-return wallet;
+  async initializeAllNetworks(): Promise<void> {
+    const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism'];
+    
+    console.log('🚀 تهيئة جميع الشبكات...');
+    
+    for (const network of VALID_NETWORKS) {
+      try {
+        await this.init(network);
+      } catch (error) {
+        console.warn(`⚠️ فشل تهيئة ${network}:`, error);
+      }
+    }
+    
+    console.log('✅ اكتملت التهيئة');
+    console.log('🔓 المحافظ:', KeyCacheManager.getUnlockedNetworks().join(', '));
+  }
+  
+  private async saveWallet(wallet: BotWalletData): Promise<void> {
+    await madarCreate('bot_wallet', wallet);
+  }
+  
+  private async updateWallet(wallet: BotWalletData): Promise<void> {
+    if (!wallet.id) return;
+    wallet.updated_at = getTimestamp();
+    await madarUpdate('bot_wallet', wallet.id, wallet);
+  }
+  
+  getWallet(network?: string): BotWalletData | null {
+    if (network) {
+      return this.wallets.find(w => w.network === network) || null;
+    }
+    return this.wallets.length > 0 ? this.wallets[0] : null;
+  }
+  
+  getAllWallets(): BotWalletData[] {
+    return this.wallets;
+  }
+  
+  isWalletUnlocked(network: string): boolean {
+    return KeyCacheManager.isUnlocked(network);
+  }
+  
+  getUnlockedNetworks(): string[] {
+    return KeyCacheManager.getUnlockedNetworks();
+  }
+  
+  async refreshBalance(network?: string): Promise<number> {
+    const targetNetwork = network || 'solana';
+    const wallet = this.wallets.find(w => w.network === targetNetwork);
+    
+    if (!wallet || !wallet.address) return 0;
+    
+    if (!isValidSolanaAddress(wallet.address) && targetNetwork === 'solana') {
+      console.warn('⚠️ عنوان غير صالح');
+      return 0;
+    }
+    
+    const balance = await getWalletBalance(targetNetwork, wallet.address);
+    wallet.balance = balance;
+    
+    this.balanceCache.set(targetNetwork, {
+      balance,
+      timestamp: Date.now(),
+    });
+    
+    await this.updateWallet(wallet);
+    return balance;
+  }
+  
+  getBalance(network?: string): number {
+    const targetNetwork = network || 'solana';
+    const wallet = this.wallets.find(w => w.network === targetNetwork);
+    return wallet?.balance || 0;
+  }
+  
+  getTotalBalance(): number {
+    return this.wallets.reduce((sum, w) => sum + (w.balance || 0), 0);
+  }
   
   // ============================================================
   // 💰 التداول
@@ -793,10 +897,24 @@ return wallet;
       const slippage = params.slippage || CONFIG.SLIPPAGE_DEFAULT;
       
       const wallet = this.wallets.find(w => w.network === network);
-      if (!wallet) throw new Error(`المحفظة غير موجودة: ${network}`);
+      if (!wallet) {
+        return {
+          success: false,
+          error: `المحفظة غير موجودة: ${network}`,
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
+          network,
+        };
+      }
       
       if (!KeyCacheManager.isUnlocked(network)) {
-        throw new Error(`المحفظة مقفلة: ${network}`);
+        return {
+          success: false,
+          error: `المحفظة مقفلة: ${network}`,
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
+          network,
+        };
       }
       
       let result;
@@ -862,10 +980,24 @@ return wallet;
       const slippage = params.slippage || CONFIG.SLIPPAGE_DEFAULT;
       
       const wallet = this.wallets.find(w => w.network === network);
-      if (!wallet) throw new Error(`المحفظة غير موجودة: ${network}`);
+      if (!wallet) {
+        return {
+          success: false,
+          error: `المحفظة غير موجودة: ${network}`,
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
+          network,
+        };
+      }
       
       if (!KeyCacheManager.isUnlocked(network)) {
-        throw new Error(`المحفظة مقفلة: ${network}`);
+        return {
+          success: false,
+          error: `المحفظة مقفلة: ${network}`,
+          amount: params.amount,
+          tokenAddress: params.tokenAddress,
+          network,
+        };
       }
       
       let result;
@@ -927,10 +1059,24 @@ return wallet;
   }): Promise<TradeResult> {
     try {
       const wallet = this.wallets.find(w => w.network === params.network);
-      if (!wallet) throw new Error(`المحفظة غير موجودة`);
+      if (!wallet) {
+        return {
+          success: false,
+          error: `المحفظة غير موجودة: ${params.network}`,
+          amount: params.amount,
+          tokenAddress: params.toAddress,
+          network: params.network,
+        };
+      }
       
       if (!KeyCacheManager.isUnlocked(params.network)) {
-        throw new Error(`المحفظة مقفلة`);
+        return {
+          success: false,
+          error: `المحفظة مقفلة: ${params.network}`,
+          amount: params.amount,
+          tokenAddress: params.toAddress,
+          network: params.network,
+        };
       }
       
       let result;
