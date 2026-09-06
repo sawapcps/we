@@ -757,51 +757,6 @@ export class BotWalletManager {
     console.log(`✅ تم إنشاء محفظة Solana:`, address);
     return newWallet;
   }
-        this.wallets = this.wallets.filter(w => w.network !== network);
-        this.wallets.push(newWallet);
-        
-        KeyCacheManager.storeKey(network, privateKey);
-        
-        console.log(`✅ تم إنشاء محفظة Solana جديدة:`, address);
-        return newWallet;
-      }
-      
-      try {
-        const balance = await getWalletBalance(network, wallet.address);
-        wallet.balance = balance;
-        await this.updateWallet(wallet);
-      } catch (error) {
-        console.warn(`⚠️ فشل تحديث الرصيد:`, error);
-        wallet.balance = 0;
-      }
-      
-      return wallet;
-    }
-    
-    // إنشاء محفظة جديدة
-    console.log(`⚠️ لا توجد محفظة لـ ${network}، جاري الإنشاء...`);
-    const { address, privateKey } = createSolanaWallet();
-    const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
-    
-    const newWallet: BotWalletData = {
-      id: generateId(),
-      bot_id: 'admin_wallet',
-      address,
-      encrypted_private_key: encryptedKey,
-      network: 'solana',
-      balance: 0,
-      created_at: getTimestamp(),
-      updated_at: getTimestamp(),
-    };
-    
-    await this.saveWallet(newWallet);
-    this.wallets.push(newWallet);
-    
-    KeyCacheManager.storeKey(network, privateKey);
-    
-    console.log(`✅ تم إنشاء محفظة Solana:`, address);
-    return newWallet;
-  }
   
   async initializeAllNetworks(): Promise<void> {
     const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism'];

@@ -498,23 +498,41 @@ export async function updateBotConfigRemote(
     return { success: false, error: String(error) };
   }
 }
-
-// ✅ ابق على هذه النسخة
 export async function createBotWallet(
   botId: string,
   userId: string,
   network: string,
-  userAddress?: string,        // ✅ اختيارية
-  encryptedPrivateKey?: string // ✅ اختيارية
+  userAddress?: string,
+  encryptedPrivateKey?: string
 ): Promise<{ success: boolean; error?: string; data?: BotWalletData }> {
   try {
     let address = userAddress;
     let privKey = encryptedPrivateKey;
 
-    // ✅ التحقق: إذا لم يكن هناك عنوان صالح، أنشئ واحداً
-    const isValidAddress = address && !address.includes('-') && address.length > 20;
-    
-    if (!isValidAddress) {
+    // ✅ دوال التحقق من صحة العناوين
+    const isValidSolana = (addr: string) => {
+      if (!addr) return false;
+      // ❌ رفض العناوين التي تبدأ بـ 0x (EVM)
+      if (addr.startsWith('0x')) return false;
+      // ✅ قبول عناوين Solana (تبدأ بحروف، طول 32-44)
+      return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+    };
+
+    const isValidEvm = (addr: string) => {
+      if (!addr) return false;
+      return /^0x[a-fA-F0-9]{40}$/.test(addr);
+    };
+
+    // ✅ التحقق من صحة العنوان حسب الشبكة
+    let isValid = false;
+    if (network === 'solana') {
+      isValid = isValidSolana(address || '');
+    } else {
+      isValid = isValidEvm(address || '');
+    }
+
+    // ✅ إذا كان العنوان غير صالح أو غير موجود، أنشئ عنواناً جديداً
+    if (!isValid || !address) {
       console.log(`🆕 إنشاء عنوان ${network} جديد (لأن العنوان الحالي غير صالح)...`);
       const newWallet = createWallet(network);
       address = newWallet.address;
