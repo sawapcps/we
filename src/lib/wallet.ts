@@ -1,4 +1,7 @@
-﻿// src/lib/wallet.ts
+﻿
+
+
+// src/lib/wallet.ts
 // ============================================================
 // 💰 نظام إدارة المحافظ والتداول - الإصدار النهائي
 // ✅ يدعم بيئة المتصفح و Cloudflare Worker
@@ -699,132 +702,78 @@ export class BotWalletManager {
     if (wallet && wallet.address) {
       console.log(`✅ تم تحميل محفظة ${network}:`, wallet.address);
       
-      try {
-        const decryptedKey = decrypt(wallet.encrypted_private_key, CONFIG.MASTER_PASSWORD);
-        KeyCacheManager.set(network, decryptedKey);
-        console.log(`🔓 تم فتح محفظة ${network}`);
-      } catch (error) {
-        console.error(`❌ فشل فتح محفظة ${network}:`, error);
-        
-        // إنشاء محفظة جديدة
-        console.log(`🔄 إنشاء محفظة جديدة لـ ${network}...`);
-        const { address, privateKey } = createWallet(network);
-        const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
-        
-        const newWallet: BotWalletData = {
-          id: wallet.id || generateId(),
-          bot_id: 'admin_wallet',
-          address,
-          encrypted_private_key: encryptedKey,
-          network,
-          balance: 0,
-          created_at: wallet.created_at || getTimestamp(),
-          updated_at: getTimestamp(),
-        };
-        
-        await madarUpdate('bot_wallet', newWallet.id!, newWallet);
-        
-        this.wallets = this.wallets.filter(w => w.network !== network);
-        this.wallets.push(newWallet);
-        
-        KeyCacheManager.set(network, privateKey);
-        
-        console.log(`✅ تم إنشاء محفظة جديدة:`, address);
-        return newWallet;
+     try {
+  const decryptedKey = decrypt(wallet.encrypted_private_key, CONFIG.MASTER_PASSWORD);
+  KeyCacheManager.storeKey(network, decryptedKey);
+  console.log(`🔓 تم فتح محفظة ${network}`);
+} catch (error) {
+  console.error(`❌ فشل فتح محفظة ${network}:`, error);
+  
+  // ✅ لا تنشئ محفظة جديدة، استخدم المحفظة الموجودة
+  if (wallet && wallet.address) {
+    console.log(`✅ استخدام المحفظة الموجودة: ${wallet.address}`);
+    // حاول فتحها بالمفتاح المخزن مؤقتاً
+    try {
+      // إذا كان المفتاح موجوداً في cache
+      const cachedKey = KeyCacheManager.getKey(network);
+      if (cachedKey) {
+        console.log(`✅ تم استعادة المفتاح من cache`);
+        return wallet;
       }
-      
-      try {
-        const balance = await getWalletBalance(network, wallet.address);
-        wallet.balance = balance;
-        await this.updateWallet(wallet);
-      } catch (error) {
-        console.warn(`⚠️ فشل تحديث الرصيد:`, error);
-        wallet.balance = 0;
-      }
-      
-      return wallet;
+    } catch (e) {
+      console.warn(`⚠️ لا يمكن استعادة المفتاح من cache`);
     }
     
-    // إنشاء محفظة جديدة
-    console.log(`⚠️ لا توجد محفظة لـ ${network}، جاري الإنشاء...`);
-    
-    const { address, privateKey } = createWallet(network);
-    
-    console.log('📝 العنوان المُنشأ:', address);
-    console.log('📝 طول المفتاح:', privateKey.length);
-    
-    if (!address || address === 'undefined' || address === 'null') {
-      console.error('❌ العنوان فارغ!');
-      throw new Error('فشل إنشاء عنوان');
+    // إذا لم يكن هناك رصيد، حاول تحديثه
+    try {
+      const balance = await getWalletBalance(network, wallet.address);
+      wallet.balance = balance;
+      await this.updateWallet(wallet);
+    } catch (e) {
+      console.warn(`⚠️ فشل تحديث الرصيد:`, e);
+      wallet.balance = 0;
     }
     
-    const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
-    
-    const newWallet: BotWalletData = {
-      id: generateId(),
-      bot_id: 'admin_wallet',
-      address,
-      encrypted_private_key: encryptedKey,
-      network,
-      balance: 0,
-      created_at: getTimestamp(),
-      updated_at: getTimestamp(),
-    };
-    
-    await this.saveWallet(newWallet);
-    this.wallets.push(newWallet);
-    
-    KeyCacheManager.set(network, privateKey);
-    
-    console.log(`✅ تم إنشاء محفظة ${network}:`, address);
-    return newWallet;
+    return wallet;
   }
   
-  async initializeAllNetworks(): Promise<void> {
-    const VALID_NETWORKS = ['solana', 'ethereum', 'bsc', 'polygon', 'arbitrum', 'base', 'avalanche', 'optimism'];
-    
-    console.log('🚀 تهيئة جميع الشبكات...');
-    
-    for (const network of VALID_NETWORKS) {
-      try {
-        await this.init(network);
-      } catch (error) {
-        console.warn(`⚠️ فشل تهيئة ${network}:`, error);
-      }
-    }
-    
-    console.log('✅ اكتملت التهيئة');
-    console.log('🔓 المحافظ:', KeyCacheManager.getUnlockedNetworks().join(', '));
-  }
+  // فقط إذا لم توجد محفظة على الإطلاق، أنشئ واحدة جديدة
+  console.log(`🔄 لا توجد محفظة لـ ${network}، جاري الإنشاء...`);
+  const { address, privateKey } = createWallet(network);
+  const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
   
-  private async saveWallet(wallet: BotWalletData): Promise<void> {
-    await madarCreate('bot_wallet', wallet);
-  }
+  const newWallet: BotWalletData = {
+    id: wallet?.id || generateId(),
+    bot_id: 'admin_wallet',
+    address,
+    encrypted_private_key: encryptedKey,
+    network,
+    balance: 0,
+    created_at: wallet?.created_at || getTimestamp(),
+    updated_at: getTimestamp(),
+  };
   
-  private async updateWallet(wallet: BotWalletData): Promise<void> {
-    if (!wallet.id) return;
-    wallet.updated_at = getTimestamp();
-    await madarUpdate('bot_wallet', wallet.id, wallet);
-  }
+  await madarUpdate('bot_wallet', newWallet.id!, newWallet);
   
-  getWallet(network?: string): BotWalletData | null {
-    if (network) {
-      return this.wallets.find(w => w.network === network) || null;
-    }
-    return this.wallets.length > 0 ? this.wallets[0] : null;
-  }
+  this.wallets = this.wallets.filter(w => w.network !== network);
+  this.wallets.push(newWallet);
   
-  getAllWallets(): BotWalletData[] {
-    return this.wallets;
-  }
+  KeyCacheManager.storeKey(network, privateKey);
   
-  isWalletUnlocked(network: string): boolean {
-    return KeyCacheManager.isUnlocked(network);
-  }
-  
-  getUnlockedNetworks(): string[] {
-    return KeyCacheManager.getUnlockedNetworks();
-  }
+  console.log(`✅ تم إنشاء محفظة جديدة:`, address);
+  return newWallet;
+}
+
+try {
+  const balance = await getWalletBalance(network, wallet.address);
+  wallet.balance = balance;
+  await this.updateWallet(wallet);
+} catch (error) {
+  console.warn(`⚠️ فشل تحديث الرصيد:`, error);
+  wallet.balance = 0;
+}
+
+return wallet;
   
   async refreshBalance(network?: string): Promise<number> {
     const targetNetwork = network || 'solana';
