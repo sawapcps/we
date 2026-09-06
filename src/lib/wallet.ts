@@ -702,29 +702,25 @@ export class BotWalletManager {
     if (wallet && wallet.address) {
       console.log(`✅ تم تحميل محفظة ${network}:`, wallet.address);
       
-     try {
+   try {
   const decryptedKey = decrypt(wallet.encrypted_private_key, CONFIG.MASTER_PASSWORD);
-  KeyCacheManager.storeKey(network, decryptedKey);
-  console.log(`🔓 تم فتح محفظة ${network}`);
+  
+  // ✅ استخدام storeKey
+  if (typeof KeyCacheManager.storeKey === 'function') {
+    KeyCacheManager.storeKey(network, decryptedKey);
+  } else {
+    KeyCacheManager.set(network, decryptedKey);
+  }
+  
+  console.log(`🔓 تم فتح محفظة ${network}: ${wallet.address}`);
 } catch (error) {
   console.error(`❌ فشل فتح محفظة ${network}:`, error);
   
-  // ✅ لا تنشئ محفظة جديدة، استخدم المحفظة الموجودة
+  // ✅ إذا كانت المحفظة موجودة، استخدمها
   if (wallet && wallet.address) {
     console.log(`✅ استخدام المحفظة الموجودة: ${wallet.address}`);
-    // حاول فتحها بالمفتاح المخزن مؤقتاً
-    try {
-      // إذا كان المفتاح موجوداً في cache
-      const cachedKey = KeyCacheManager.getKey(network);
-      if (cachedKey) {
-        console.log(`✅ تم استعادة المفتاح من cache`);
-        return wallet;
-      }
-    } catch (e) {
-      console.warn(`⚠️ لا يمكن استعادة المفتاح من cache`);
-    }
     
-    // إذا لم يكن هناك رصيد، حاول تحديثه
+    // ✅ تحديث الرصيد
     try {
       const balance = await getWalletBalance(network, wallet.address);
       wallet.balance = balance;
@@ -737,9 +733,12 @@ export class BotWalletManager {
     return wallet;
   }
   
-  // فقط إذا لم توجد محفظة على الإطلاق، أنشئ واحدة جديدة
-  console.log(`🔄 لا توجد محفظة لـ ${network}، جاري الإنشاء...`);
-  const { address, privateKey } = createWallet(network);
+  // ✅ فقط إذا لم توجد محفظة، أنشئ محفظة Solana (وليس EVM)
+  console.log(`🔄 لا توجد محفظة لـ ${network}، جاري إنشاء محفظة Solana...`);
+  
+  // ✅ تأكد من إنشاء Solana وليس EVM
+  const { address, privateKey } = createSolanaWallet();
+  
   const encryptedKey = encrypt(privateKey, CONFIG.MASTER_PASSWORD);
   
   const newWallet: BotWalletData = {
@@ -747,7 +746,7 @@ export class BotWalletManager {
     bot_id: 'admin_wallet',
     address,
     encrypted_private_key: encryptedKey,
-    network,
+    network: 'solana', // ✅ تأكد من أنها Solana
     balance: 0,
     created_at: wallet?.created_at || getTimestamp(),
     updated_at: getTimestamp(),
@@ -758,9 +757,13 @@ export class BotWalletManager {
   this.wallets = this.wallets.filter(w => w.network !== network);
   this.wallets.push(newWallet);
   
-  KeyCacheManager.storeKey(network, privateKey);
+  if (typeof KeyCacheManager.storeKey === 'function') {
+    KeyCacheManager.storeKey(network, privateKey);
+  } else {
+    KeyCacheManager.set(network, privateKey);
+  }
   
-  console.log(`✅ تم إنشاء محفظة جديدة:`, address);
+  console.log(`✅ تم إنشاء محفظة Solana جديدة:`, address);
   return newWallet;
 }
 
@@ -774,29 +777,6 @@ try {
 }
 
 return wallet;
-  
-  async refreshBalance(network?: string): Promise<number> {
-    const targetNetwork = network || 'solana';
-    const wallet = this.wallets.find(w => w.network === targetNetwork);
-    
-    if (!wallet || !wallet.address) return 0;
-    
-    if (!isValidSolanaAddress(wallet.address) && targetNetwork === 'solana') {
-      console.warn('⚠️ عنوان غير صالح');
-      return 0;
-    }
-    
-    const balance = await getWalletBalance(targetNetwork, wallet.address);
-    wallet.balance = balance;
-    
-    this.balanceCache.set(targetNetwork, {
-      balance,
-      timestamp: Date.now(),
-    });
-    
-    await this.updateWallet(wallet);
-    return balance;
-  }
   
   // ============================================================
   // 💰 التداول
